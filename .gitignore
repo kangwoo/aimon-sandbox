@@ -1,0 +1,65 @@
+# Gradle
+.gradle/
+build/
+out/
+bin/
+*.class
+*.jar
+!gradle/wrapper/gradle-wrapper.jar
+
+# Java
+*.log
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+*.iml
+*.ipr
+*.iws
+.vscode/
+.settings/
+.project
+.classpath
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Local config
+**/default-config-local.yaml
+
+# AIMON local cache
+.aimon/
+
+# Build outputs
+target/
+dist/
+
+# Test outputs
+*.log
+*.tmp
+test-results/
+coverage/
+
+# Code quality reports
+**/build/reports/checkstyle/
+**/build/reports/spotbugs/
+
+# Specs and planning (keep these)
+!specs/
+!.specify/
+!.claude/
+.claude/worktrees/
+.claude/scheduled_tasks.lock
+
+# MkDocs build output
+/site/
+
+# Python bytecode -- MkDocs imports scripts/mkdocs_github_links.py as a hook
+__pycache__/
+*.pyc

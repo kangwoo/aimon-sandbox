@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+<!DOCTYPE suppressions PUBLIC
+    "-//Checkstyle//DTD SuppressionFilter Configuration 1.2//EN"
+    "https://checkstyle.org/dtds/suppressions_1_2.dtd">
+
+<!--
+  Checkstyle baseline (issue #15) — now EMPTY.
+
+  Every pre-existing violation has been burned down (Javadoc requirement removed as a policy match,
+  ParameterNumber refactored/inline-suppressed, and the remaining structural violations fixed or, where
+  refactoring was genuinely inappropriate, replaced with a justified inline @SuppressWarnings at the source).
+  Checkstyle (severity=error) therefore now fully ratchets: any new violation fails the build.
+
+  Do NOT add entries here to silence new violations — fix the code, or (only for a genuinely unrefactorable
+  case) add a narrow @SuppressWarnings("checkstyle:<Check>") with a one-line justification on the exact member.
+-->
+<suppressions>
+</suppressions>
