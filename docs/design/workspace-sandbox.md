@@ -4,8 +4,9 @@
 > 설계(도구 4개 · `SandboxBackend` · Docker/K8s 백엔드)를 **대체한다.** 하위 호환은 목표가 아니다 —
 > 옛 도구·타입·모듈을 남겨 두지 않고, 이행 경로 대신 대응표(§17)를 둔다.
 >
-> 입력: aimon-core `temp/` 의 두 초안 — *OpenSandbox 기반 Multi-Agent Sandbox Platform 설계* (v0.2),
-> *AIMON Core + OpenSandbox 기반 Multi-Agent Sandbox 설계* (v0.3). 두 초안의 방향(Workspace 1:N Sandbox,
+> 입력: 공개하지 않은 두 초안 — *OpenSandbox 기반 Multi-Agent Sandbox Platform 설계* (v0.2),
+> *AIMON Core + OpenSandbox 기반 Multi-Agent Sandbox 설계* (v0.3). 초안은 보존하지 않는다 — 채택한 것은 본문에,
+> 버린 것은 이유와 함께 §19 에, 미룬 것은 §20 에 옮겼다. 본문의 "초안" 은 이 둘을 가리킨다. 두 초안의 방향(Workspace 1:N Sandbox,
 > Hybrid 스토리지, LLM 에게 sandbox id 를 보이지 않음, OpenSandbox 를 인프라로 씀)은 유지했다. 그 밖에
 > AIMON 이 라이브러리로 임베드된다는 사실과 코어의 기존 SPI 에 맞춰 줄이거나 바꾼 결정이 여럿이다. 그
 > 차이는 §19 에 모았다.
@@ -390,8 +391,8 @@ SDK 의 `SandboxPool`(warm pool)은 SPI 에 올리지 않는다. 풀은 `create`
 
 코어의 파일 stamp 검사(읽은 뒤 바뀐 파일에 쓰기 거부)는 샌드박스에서 특히 중요하다. 같은 슬롯을 여러 실행이
 공유할 때 다른 실행이 파일 도구로 바꾼 경우와 **셸이 바꾼 경우를 모두 잡는다.** 실제 파일 상태와 비교하기
-때문이다. 초안의 `expectedRevision` 은 파일 도구 경로만 추적하고 셸 경로는 놓친다(초안 v0.3 §71이 스스로
-인정한 한계다 — 초안 "71. Shell에서 변경된 파일 문제"). 프로바이더 `files().stat()` 은 그래서 mtime 을
+때문이다. 초안의 `expectedRevision` 은 파일 도구 경로만 추적하고 셸 경로는 놓친다(초안 v0.3 이 스스로
+인정한 한계다). 프로바이더 `files().stat()` 은 그래서 mtime 을
 밀리초 이상 해상도로 주거나 etag 를 줘야 한다. `/shared` 가 NFS 계열 RWX 볼륨이면 속성 캐시 때문에 mtime 이
 늦게 보일 수 있으므로, `SandboxFileSystem` 은 `/shared` 아래 경로에 대해 **항상 etag(내용 해시)** 를 준다.
 stamp 검사는 확인과 쓰기 사이에 틈이 있는 최선 노력 장치다 — 원자적 비교-후-쓰기가 아니다.
@@ -726,6 +727,7 @@ artifact 는 샌드박스보다 오래 살아야 한다. 샌드박스 파일을 
 | 프로파일: egress 허용 목록 | 데이터 유출, 메타데이터 엔드포인트 | OpenSandbox network policy. **기본 전부 차단** |
 | 프로파일: 자격 증명 바인딩 | 토큰 탈취 | OpenSandbox credential vault — 샌드박스에는 가짜 값만, egress 에서 실제 값 주입 |
 | 프로파일: 자원 | 자원 고갈 | cpu · memory · disk · pids |
+| 프로바이더 기본값: 비루트 · 권한 상승 금지 · capability 제거 · 서비스 계정 토큰 미마운트 | 권한 상승, K8s API 접근 | OpenSandbox 가 만드는 파드의 SecurityContext(구현 시 확인). 확인되지 않으면 프로파일이 요구할 수 없다(§6.4) |
 | 프로파일: `sharedAccess` | `/shared` 를 거친 슬롯 간 영향(bare 저장소 훅·ref, 공유 문서) | 볼륨 마운트 모드(§11.3). **기본 `ro`** |
 | 쿼터 | 워크스페이스가 샌드박스를 무한히 만들기 | `WorkspaceQuota` + `SandboxAdmission` |
 
@@ -743,8 +745,9 @@ artifact 는 샌드박스보다 오래 살아야 한다. 샌드박스 파일을 
 샌드박스 모드에서 호스트로 샌다. 코어 PR 은 이 경로도 `resolve()` 를 거치게 해야 하며, 이 모듈의 통합 테스트가
 슬래시 커맨드 경로를 덮는다(§16).
 
-**선언적 훅의 셸 액션**(`ShellActionExecutor`)은 호스트에서 돈다. 운영자가 설정한 코드이기 때문이다. 스킬
-작성자가 서드파티일 때 이 경계가 맞는지는 열린 질문이다(§20).
+**스킬 선언 훅의 셸 액션**(`ShellActionExecutor`)은 지금 호스트에서 돈다. 운영자 설정이 아니라 **스킬 파일이
+선언한** 코드다(코어 실행 환경 설계 §14). 그래서 샌드박스를 써도 같은 스킬의 스크립트가 `Bash` 로는 샌드박스에서,
+훅으로는 호스트에서 돌고, 스킬 작성자에게 호스트 셸을 주는 통로가 된다. 어디서 돌릴지는 열린 질문이다(§20).
 
 ### 12.2 쿼터
 
@@ -763,7 +766,7 @@ artifact 는 샌드박스보다 오래 살아야 한다. 샌드박스 파일을 
 |------|----------|
 | `name` | `standard` |
 | `image` | `ghcr.io/kangwoo/aimon-sandbox-runtime:1` |
-| `cpu` · `memory` · `disk` | `2` · `4Gi` · `20Gi` |
+| `cpu` · `memory` · `disk` · `pids` | `2` · `4Gi` · `20Gi` · `512` |
 | `runtimeClass` | `gvisor` |
 | `egress` | `[]` (전부 차단) |
 | `credentials` | 자격 증명 바인딩 이름 목록 — vault 쪽 정의를 가리킨다 |
@@ -796,6 +799,7 @@ aimon:
         image: ghcr.io/kangwoo/aimon-sandbox-runtime:1
         cpu: 2
         memory: 4Gi
+        pids: 512
         runtime-class: gvisor
         egress: [github.com, repo.maven.apache.org]
         credentials: [github-rw]
@@ -842,6 +846,8 @@ span 속성: `aimon.sandbox.workspace` · `aimon.sandbox.slot` · `aimon.sandbox
 감사는 별도 서브시스템을 만들지 않는다. 명령·파일 쓰기의 감사는 코어의 도구 훅(PostToolUse)과 tracing 이
 이미 남기며, 거기에 위 속성이 붙는다. 샌드박스 수명 이벤트(provisioned · paused · terminated · lost ·
 orphan-destroyed)는 `SandboxEventListener` 로 내보낸다. 애플리케이션은 그것을 자기 감사 로그로 보낸다.
+이벤트는 `workspaceId` · `slot` · `generation` · `owner` · `profile` · 원인을 담는다. 테넌트별 감사는 `owner` 로
+가른다.
 
 ---
 
@@ -883,7 +889,7 @@ read/write/stat/list/move · `list(labels)` · capability 가 광고한 기능�
 **통합 테스트**(`@Tag("docker")`) — Testcontainers 로 OpenSandbox 서버(Docker 런타임)를 띄워
 `OpenSandboxProvider` 에 계약 스위트를 돌린다. K8s 런타임 검증은 별도 프로파일로 뺀다.
 
-**반드시 있어야 하는 시나리오** (초안 v0.3 의 "82. Multi-Agent Integration Test" ~ "85. 보안 Test" 에서
+**반드시 있어야 하는 시나리오** (초안 v0.3 의 멀티 에이전트·멀티 샌드박스·장애 복구·보안 테스트에서
 가져오고, 이 설계가 더한 것을 붙였다):
 
 | 시나리오 | 기대 |
@@ -909,6 +915,9 @@ read/write/stat/list/move · `list(labels)` · capability 가 광고한 기능�
 | 다른 테넌트 principal 로 같은 workspaceId | 거부 |
 | principal 없는 실행 + `require-principal` | 거부 |
 | 슬래시 커맨드(`/skill`)로 부른 스킬의 `Bash` | 샌드박스에서 돈다 (호스트 아님) |
+| pause 된 슬롯에서 다음 `Bash` | resume 후 실행된다. 셸 세션을 잃었으면 notice |
+| 명령 사이에 샌드박스 소실(LOST) → 다음 호출 | generation+1 로 재생성, notice, 스킬 스테이징을 다시 복사 |
+| 자원 한도 | pids 폭주·메모리 초과가 그 샌드박스 안에서 끝나고 다른 슬롯에 번지지 않음 |
 | 보안 | 호스트 파일·Docker 소켓·K8s API·클라우드 메타데이터 접근 불가, 실제 자격 증명 조회 불가 |
 
 ---
@@ -981,6 +990,12 @@ read/write/stat/list/move · `list(labels)` · capability 가 광고한 기능�
 | 도는 명령 수를 레코드의 카운터로 | §5.3 — 노드가 죽으면 카운터가 내려가지 않아 슬롯이 영원히 활동 중이 된다. heartbeat 는 노드와 함께 멈춘다 |
 | 모든 슬롯에 `/shared` 를 rw 로 | §11.3 — bare 저장소 훅으로 신뢰가 낮은 슬롯이 개발 슬롯에서 코드를 실행할 수 있다 |
 | 파일 도구의 상대 경로를 셸 cwd 에 맞춤 | §11.1 — 같은 `Read` 가 직전 `cd` 에 따라 다른 파일을 읽는다 |
+| 한 실행이 여러 슬롯에서 명령 실행 (에이전트↔샌드박스 N:M) | 실행마다 환경은 하나다(코어 §5.1). 파일 도구와 셸이 같은 것을 본다는 불변식이 실행 단위로 성립한다. 다른 슬롯의 일은 그 슬롯에 바인딩된 서브에이전트 포크에 맡긴다 |
+| 슬롯을 만들 수 없을 때 `primary` 로 대체 | 다른 프로파일·신뢰 도메인에서 조용히 도는 것이다. egress 나 자격 증명이 다른 곳으로 옮겨 가는 열린 쪽 실패다. 쿼터 초과는 에러로 알린다(§15) |
+| 워크스페이스 통합 이벤트 스트림 (명령·파일 변경·커밋) | 명령·파일 쓰기는 도구 훅과 tracing 이 이미 남긴다(§14). 에이전트 사이의 조율은 `/shared` 와 git 이 맡는다. 스트림을 두면 저장소가 하나 더 생기고 순서·보존 정책을 새로 정해야 한다. 수명 이벤트만 `SandboxEventListener` 로 내보낸다 |
+| 워크스페이스 저장 모드 enum (`SHARED`/`ISOLATED`/`HYBRID`) | Hybrid 하나만 둔다. SHARED(모든 샌드박스가 한 볼륨을 작업 트리로 씀)는 `.git` 동시 변경과 신뢰 경계 약화를 부른다(§11.3). ISOLATED 는 `sharedAccess: none` 으로 표현된다 |
+| 워크스페이스 단위 pause/resume | idle 은 슬롯마다 다르다(§10.2). 워크스페이스를 끝내는 경로는 close 하나로 충분하다. 필요하면 애플리케이션이 슬롯마다 멈춘다 |
+| 샌드박스 자원 사용량을 이 모듈이 수집 (`METRICS` capability) | OpenSandbox 와 K8s 가 이미 낸다. §6.3 의 라벨로 이어 붙이면 된다. capability 로 올리면 SDK 의 메트릭 API 에 SPI 가 묶인다 |
 
 ---
 
@@ -989,8 +1004,22 @@ read/write/stat/list/move · `list(labels)` · capability 가 광고한 기능�
 - **동적 슬롯 배정** — 오케스트레이터가 실행 중에 `exp-a/b/c` 를 만들고 서브에이전트를 각 슬롯에 붙이는
   경로. 워크플로 스크립트(`agent(prompt, { sandbox: 'exp-a' })`)는 설계 가능하지만, `Task` 도구 인자로 여는
   것은 모델에게 슬롯 선택권을 주는 일이다. 허용 목록으로 좁혀 열지, 워크플로에만 둘지 정해야 한다
-- **선언적 훅의 실행 위치** — 서드파티 스킬의 셸 훅을 호스트에서 돌리는 것이 맞는가, 바인딩된 샌드박스에서
-  돌려야 하는가
+- **스킬 선언 훅의 실행 위치** — 스킬 파일이 선언한 셸 훅을 호스트에서 돌리는 것이 맞는가, 바인딩된 샌드박스에서
+  돌려야 하는가(§12.1, 코어 §14)
+- **워크스페이스 단위 seed 매개변수** — `seed`(원격 · ref · 자격 증명 이름)는 지금 프로파일에만 있다. 그래서 저장소나
+  브랜치가 티켓마다 다르면 프로파일을 저장소 수만큼 만들어야 하고, 테넌트마다 다른 자격 증명을 쓸 방법이 없다.
+  병렬 해법 탐색(§18-7)도 모든 실험 슬롯이 같은 기준 커밋에서 출발해야 하는데 `SandboxStart` 에는 ref 인자가
+  없다. 방법은 둘이다 — `SandboxWorkspace` 에 `createIfAbsent` 시점의 seed 매개변수를 두고 바인딩 정책이 채우거나,
+  프로파일의 `seed` 를 템플릿으로 두고 워크스페이스가 값만 채운다. 어느 쪽이든 모델이 원격이나 자격 증명을 고르는
+  경로는 열지 않는다
+- **오래 도는 백그라운드 명령** — heartbeat(§5.3)는 명령이 도는 동안 idle 판정을 막는다. 코어의 백그라운드 명령은
+  상한이 24시간이고 모델이 그것을 끝낼 도구가 없다. 그래서 개발 서버 하나가 슬롯을 하루 동안 깨워 둔다. 셋 중
+  무엇을 둘지 정해야 한다 — 백그라운드 명령을 끝내는 도구(코어), 프로파일의 백그라운드 명령 상한, 워크스페이스의
+  절대 수명(`maxLifetime`, 활동과 무관). 마지막 것은 프로바이더 타임아웃(§10.3)이 활동마다 갱신되므로 그것으로는
+  대신할 수 없다
+- **워크스페이스 체크포인트** — §18-7 의 스냅숏은 슬롯 단위다. 슬롯 여럿과 `/shared`(bare 저장소 ref 포함)를 한
+  시점으로 묶는 체크포인트가 필요한지는 `SNAPSHOT` 을 확인한 뒤 정한다. 따로 뜬 슬롯 스냅숏을 함께 복원하면 bare
+  저장소의 ref 와 각 슬롯의 작업 트리가 서로 다른 시점을 가리킨다
 - **백그라운드 명령의 노드 이동** — `BackgroundBashManager` 는 노드 로컬이다. 노드가 죽으면 샌드박스 안의
   명령은 계속 돌지만 결과를 받을 쪽이 없다. 프로바이더 쪽 명령 id 를 레코드에 남겨 다른 노드가 다시 붙게
   할지는 5단계(영속 저장소) 이후에 판단한다. 그때까지는 heartbeat 가 노드와 함께 멈추므로, 결과를 받을 쪽이
@@ -998,7 +1027,8 @@ read/write/stat/list/move · `list(labels)` · capability 가 광고한 기능�
 - **스트리밍 도구 출력** — SPI 는 `OutputSink` 로 준비되어 있지만 코어 `BashTool` 이 부분 출력을 이벤트로
   내보내는 경로가 없다
 - **§6.4 의 확인 칸** — 특히 K8s 런타임에서 RWX 공유 볼륨과 샌드박스별 읽기 전용 마운트, credential vault 의
-  egress 주입 범위, 셸 세션의 pause/resume 생존 여부, 세션 안의 명령만 골라 죽일 수 있는지(§9)
+  egress 주입 범위, 셸 세션의 pause/resume 생존 여부, 세션 안의 명령만 골라 죽일 수 있는지(§9), 파드
+  SecurityContext 기본값(§12.1)
 
 ---
 
