@@ -18,6 +18,7 @@ import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import at.aimon.core.base.Principal;
 import at.aimon.sandbox.provider.ProviderSandboxRef;
 import at.aimon.sandbox.workspace.CloseCause;
 import at.aimon.sandbox.workspace.ProvisioningClaim;
@@ -71,7 +72,7 @@ public abstract class SandboxWorkspaceStoreContract {
      */
     protected static SandboxWorkspace workspace(String id, String tenant) {
         return SandboxWorkspace.builder().id(SandboxWorkspaceId.of(id))
-                .owner(WorkspaceOwner.of(TenantId.of(tenant), "user-" + id)).state(WorkspaceState.OPEN)
+                .owner(WorkspaceOwner.of(TenantId.of(tenant), Principal.user("user-" + id))).state(WorkspaceState.OPEN)
                 .incarnation("abcd1234").stateSince(T0).createdAt(T0).lastActivityAt(T0).build();
     }
 

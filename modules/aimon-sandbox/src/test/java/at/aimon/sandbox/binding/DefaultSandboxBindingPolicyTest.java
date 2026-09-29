@@ -65,7 +65,7 @@ class DefaultSandboxBindingPolicyTest {
         assertThat(binding.slot()).isEqualTo("primary");
         assertThat(binding.root()).isEqualTo("/workspace/repo");
         assertThat(binding.requiredProfile()).isEmpty();
-        assertThat(binding.owner()).isEqualTo(WorkspaceOwner.of(TenantId.of("acme"), "alice"));
+        assertThat(binding.owner()).isEqualTo(WorkspaceOwner.of(TenantId.of("acme"), Principal.user("alice")));
         assertThat(binding.caller()).isEqualTo(binding.owner());
     }
 
@@ -132,8 +132,8 @@ class DefaultSandboxBindingPolicyTest {
         final SandboxBinding group = policy
                 .bind(request(SessionId.of("s"), null, Principal.group("team", "Team"), Map.of()));
 
-        assertThat(routine.owner().principalId()).isEqualTo("scheduler");
-        assertThat(group.caller().principalId()).isEqualTo("team");
+        assertThat(routine.owner().principal()).isEqualTo("SYSTEM:scheduler");
+        assertThat(group.caller().principal()).isEqualTo("GROUP:team");
     }
 
     @Test
@@ -143,8 +143,8 @@ class DefaultSandboxBindingPolicyTest {
 
         final SandboxBinding binding = policy.bind(request(SessionId.of("s"), null, Principal.user("guest"), Map.of()));
 
-        assertThat(binding.owner().principalId()).isEqualTo("owner");
-        assertThat(binding.caller().principalId()).isEqualTo("guest");
+        assertThat(binding.owner().principal()).isEqualTo("USER:owner");
+        assertThat(binding.caller().principal()).isEqualTo("USER:guest");
     }
 
     @Test
@@ -159,7 +159,7 @@ class DefaultSandboxBindingPolicyTest {
     void withoutRequirePrincipalAnAbsentPrincipalIsAnonymous() {
         final SandboxBinding binding = singleTenant().bind(request(SessionId.of("s"), null, null, Map.of()));
 
-        assertThat(binding.caller()).isEqualTo(WorkspaceOwner.of(TenantId.DEFAULT, CallerResolver.ANONYMOUS));
+        assertThat(binding.caller()).isEqualTo(WorkspaceOwner.anonymous(TenantId.DEFAULT));
     }
 
     @Test

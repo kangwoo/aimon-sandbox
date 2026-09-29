@@ -114,7 +114,7 @@ class SandboxJanitorTest {
         final SessionId session = SessionId.generate();
         harness.mainTurn(session, ALICE);
         harness.store.createIfAbsent(SandboxWorkspace.builder().id(SandboxWorkspaceId.of("ws:" + session.value()))
-                .owner(WorkspaceOwner.of(TenantId.DEFAULT, "alice")).incarnation("abcdefgh")
+                .owner(WorkspaceOwner.of(TenantId.DEFAULT, ALICE)).incarnation("abcdefgh")
                 .stateSince(harness.clock.instant()).createdAt(harness.clock.instant())
                 .lastActivityAt(harness.clock.instant()).build());
 
@@ -257,7 +257,7 @@ class SandboxJanitorTest {
         final String hash = harness.sandbox.profiles().find("standard").orElseThrow().contentHash();
         return harness.store.createIfAbsent(
                 SandboxWorkspace.builder().id(SandboxWorkspaceId.of("ws:" + SessionId.generate().value()))
-                        .owner(WorkspaceOwner.of(TenantId.DEFAULT, "alice")).incarnation("stuck001").stateSince(now)
+                        .owner(WorkspaceOwner.of(TenantId.DEFAULT, ALICE)).incarnation("stuck001").stateSince(now)
                         .createdAt(now).lastActivityAt(now)
                         .slots(java.util.Map.of("primary",
                                 SandboxSlot.builder().name("primary").profile("standard").profileHash(hash)

@@ -97,7 +97,7 @@
 | **slot** | 워크스페이스 안에서 샌드박스를 가리키는 이름. `^[a-z][a-z0-9-]{0,30}$`. 기본 슬롯은 `primary` |
 | **SandboxProfile** | 샌드박스를 어떻게 만들지 정한 운영자 설정 — 이미지·자원·런타임 클래스·egress·자격 증명·idle 정책 |
 | **generation** | 슬롯의 샌드박스가 새로 만들어질 때마다 1씩 늘어나는 정수. 이전 셸 상태와 파일이 사라졌음을 알리는 신호다 |
-| **SandboxBinding** | 한 실행이 쓸 `(workspaceId, owner, slot, requiredProfile?, shellKey, root)` 와, 그 실행의 주체인 `caller`(`(tenantId, principalId)`). owner 검사(§8.3)가 `caller` 를 레코드의 owner 와 비교한다. 바인딩 정책이 만들되, `caller` 는 정책이 무엇을 넣었든 환경 provider 가 요청의 principal 로 덮어쓴다(루트·fork 모두, §8.3). principal 이 없는 fork 요청은 부모 바인딩의 `caller` 를 물려받는다(§8.2) |
+| **SandboxBinding** | 한 실행이 쓸 `(workspaceId, owner, slot, requiredProfile?, shellKey, root)` 와, 그 실행의 주체인 `caller`(`(tenantId, principal)`, §8.3). owner 검사(§8.3)가 `caller` 를 레코드의 owner 와 비교한다. 바인딩 정책이 만들되, `caller` 는 정책이 무엇을 넣었든 환경 provider 가 요청의 principal 로 덮어쓴다(루트·fork 모두, §8.3). principal 이 없는 fork 요청은 부모 바인딩의 `caller` 를 물려받는다(§8.2) |
 | **shellKey** | 지속 셸 상태를 가리키는 키. 같은 키로 들어온 명령들은 cwd·환경 변수를 공유한다 |
 | **provider** | 실제 샌드박스를 만드는 인프라. 이 설계에서는 OpenSandbox |
 
@@ -217,7 +217,7 @@ OpenSandboxProvider  ──>  OpenSandbox API (/command)  ──>  execd in sand
 | 필드 | 뜻 |
 |------|-----|
 | `id` | `SandboxWorkspaceId` — 불투명 문자열. 기본 정책은 루트 세션에서 결정론적으로 만든다(§8.2) |
-| `owner` | `WorkspaceOwner` — `(tenantId, principalId)`. 바인딩 정책이 정하고(§8.3) 레코드를 만들 때 고정된다. 호출한 실행의 주체가 아니라 **워크스페이스의 소유자**다 |
+| `owner` | `WorkspaceOwner` — `(tenantId, principal)`. principal 은 `TYPE:id`(예: `USER:alice`)로 기록한다(§8.3). 바인딩 정책이 정하고(§8.3) 레코드를 만들 때 고정된다. 호출한 실행의 주체가 아니라 **워크스페이스의 소유자**다 |
 | `state` | `OPEN` · `CLOSING` · `CLOSED` |
 | `incarnation` | 레코드를 만들 때와 `reopen` 할 때마다 새로 뽑는 짧은 무작위 id. 샌드박스 키와 공유 볼륨 이름에 들어가, 같은 워크스페이스 id 로 다시 만들어진 워크스페이스가 옛 자원과 섞이지 않게 한다(§6.3, §10.5) |
 | `sharedVolume` | `VolumeRef`? — 공유 볼륨 이름. 이름 규칙으로 정해지고(§6.3), 볼륨 자체는 첫 샌드박스 생성이 만든다(§6.1) |
@@ -607,7 +607,7 @@ shellKey 만 `exec:{executionId}` 로 바꾼다. `caller` 는 포크 요청의 p
 | 항목 | 규칙 |
 |------|-----|
 | workspaceId | 세션에서 결정론적으로 — `ws:{sessionId}`. 세션이 없고 실행 id 가 있는 실행(스케줄 루틴)은 `ws:{executionId}`. **둘 다 없는 요청은 사용 불가**다. 워크스페이스를 지어낼 근거가 없는 요청에 공유될 id 를 만들지 않는다 |
-| owner | `(tenantId, principalId)`. 메인 턴은 **세션의 소유자**(`SessionOwnerLookup`), 루틴은 요청의 주체. tenantId 는 `SandboxTenantResolver` 가 주체에서 구한다(§8.3) |
+| owner | `(tenantId, principal)` — principal 은 `TYPE:id`(§8.3). 메인 턴은 **세션의 소유자**(`SessionOwnerLookup`), 루틴은 요청의 주체. tenantId 는 `SandboxTenantResolver` 가 주체에서 구한다(§8.3) |
 | slot | `definitionAttributes()` 의 `sandbox.slot` 이 있으면 그것, 없으면 `primary` |
 | profile | `sandbox.profile` 이 있으면 그것이 **요구 프로파일**이다. 없으면 요구가 없고, 슬롯을 처음 만들 때만 설정의 기본 프로파일을 쓴다. 슬롯의 프로파일은 만들 때 고정된다(§8.3) |
 | shellKey | 메인 턴: `session:{sessionId}` — 턴을 넘어 cwd 가 유지된다. 루틴: `exec:{executionId}`. 포크는 위의 규칙대로 `exec:{executionId}` — 부모 셸을 오염시키지 않는다 |
@@ -630,7 +630,7 @@ workspaceId 를 결정론적으로 만들기 때문에 별도의 세션→워크
 다른 테넌트의 워크스페이스 id 를 돌려줘도 여기서 막힌다. 정책을 믿되 경계는 두 번 긋는다.
 
 - 테넌트가 같아야 한다(항상)
-- `workspace-access: principal`(기본)이면 principal 도 `owner.principalId` 와 같아야 한다. 같은 테넌트의 다른 사용자가
+- `workspace-access: principal`(기본)이면 principal 도 `owner.principal` 과 같아야 한다. 같은 테넌트의 다른 사용자가
   남의 세션 워크스페이스에 닿지 못하게 하려는 것이다. 팀이 한 워크스페이스를 같이 쓰는 애플리케이션은 `tenant` 로
   낮추고, 그 공유를 자기 정책(여러 세션에 걸치는 워크스페이스 id)으로 표현한다
 
@@ -652,6 +652,12 @@ owner 는 세션 소유자로 정해지고, 그 주체는 검사에서 막힌다
 등)에 샌드박스가 필요한 애플리케이션은 `allowed-system-principals` 에 그 주체 id 를 명시하고, `SandboxTenantResolver` 가
 그 주체의 테넌트를 돌려줘야 한다(돌려주지 못하면 거부). 끄고 쓰는 단일 테넌트
 배포에서는 주체 없는 실행을 `anonymous` 로 취급한다.
+
+**주체는 타입과 id 로 식별한다.** 코어의 `Principal` 은 타입 + id 로 같음을 판단한다(`Principal#equals`). owner 도
+principal 을 `TYPE:id`(`USER:alice`, `GROUP:eng`, `SYSTEM:system`)로 기록하고 그대로 비교한다. id 만 비교하면 같은
+테넌트에서 USER `eng` 가 GROUP `eng` 의 워크스페이스를, USER `system` 이 `allowed-system-principals` 에 올린 SYSTEM
+`system` 의 워크스페이스를 통과한다. 주체 없는 실행의 owner 는 타입 없는 `anonymous` 여서, 이름이 `anonymous` 인
+USER(`USER:anonymous`)와도 다르다. 저장소가 owner 를 영속하면 이 형태를 그대로 쓴다(`WorkspaceOwner.parse` 가 되읽는다).
 
 **슬롯의 프로파일은 호출 순서로 바뀌지 않는다.** 정의가 `sandbox.profile` 을 **명시한** 바인딩은 그 프로파일을
 요구하고, 이미 있는 슬롯의 프로파일이 다르면 `connect` 는 사용 불가로 답한다. 그렇지 않으면 오케스트레이터가

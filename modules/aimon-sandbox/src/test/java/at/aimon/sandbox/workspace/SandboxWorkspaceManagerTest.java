@@ -236,7 +236,7 @@ class SandboxWorkspaceManagerTest {
         assertThat(provisioned.slot()).contains("primary");
         assertThat(provisioned.generation()).contains(1L);
         assertThat(provisioned.profile()).contains("standard");
-        assertThat(provisioned.owner().principalId()).isEqualTo("alice");
+        assertThat(provisioned.owner().principal()).isEqualTo("USER:alice");
     }
 
     @Test
@@ -389,7 +389,7 @@ class SandboxWorkspaceManagerTest {
         final Instant now = harness.clock.instant();
         final String hash = harness.sandbox.profiles().find("standard").orElseThrow().contentHash();
         return SandboxWorkspace.builder().id(SandboxWorkspaceId.of("ws:" + session.value()))
-                .owner(WorkspaceOwner.of(TenantId.DEFAULT, "alice")).incarnation("stuck001").stateSince(now)
+                .owner(WorkspaceOwner.of(TenantId.DEFAULT, ALICE)).incarnation("stuck001").stateSince(now)
                 .createdAt(now).lastActivityAt(now)
                 .slots(Map.of("primary", SandboxSlot.builder().name("primary").profile("standard").profileHash(hash)
                         .state(SlotState.PROVISIONING).generation(1).provisioning(claim).lastActivityAt(now).build()))

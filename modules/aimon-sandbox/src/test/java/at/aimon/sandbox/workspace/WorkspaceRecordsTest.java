@@ -9,8 +9,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import at.aimon.core.base.Principal;
 import at.aimon.sandbox.provider.CreateSpec;
 import at.aimon.sandbox.provider.ExecOutcome;
 import at.aimon.sandbox.provider.FileStat;
@@ -38,8 +40,8 @@ class WorkspaceRecordsTest {
 
     private static SandboxWorkspace workspace() {
         return SandboxWorkspace.builder().id(SandboxWorkspaceId.of("ws:a"))
-                .owner(WorkspaceOwner.of(TenantId.of("t"), "u")).incarnation("inc").sharedVolume(VolumeRef.of("v"))
-                .stateSince(T0).closeCause(CloseCause.IDLE).retainVolumeUntil(T0)
+                .owner(WorkspaceOwner.of(TenantId.of("t"), Principal.user("u"))).incarnation("inc")
+                .sharedVolume(VolumeRef.of("v")).stateSince(T0).closeCause(CloseCause.IDLE).retainVolumeUntil(T0)
                 .retainedVolumes(List.of(RetainedVolume.of("old", VolumeRef.of("v0"), T0)))
                 .quota(WorkspaceQuota.of(4, 2, "8", "16Gi")).createdAt(T0).lastActivityAt(T0).build().withSlot(slot());
     }
@@ -85,8 +87,8 @@ class WorkspaceRecordsTest {
     void idsAndOwnersAreValues() {
         assertThat(SandboxWorkspaceId.of("a")).isEqualTo(SandboxWorkspaceId.of("a"))
                 .isLessThan(SandboxWorkspaceId.of("b"));
-        assertThat(WorkspaceOwner.of(TenantId.of("t"), "u")).isEqualTo(WorkspaceOwner.of(TenantId.of("t"), "u"))
-                .hasToString("t/u");
+        assertThat(WorkspaceOwner.of(TenantId.of("t"), Principal.user("u")))
+                .isEqualTo(WorkspaceOwner.parse(TenantId.of("t"), "USER:u")).hasToString("t/USER:u");
         assertThat(ProvisioningClaim.of(T0, "n")).isEqualTo(ProvisioningClaim.of(T0, "n")).hasToString("n@" + T0);
         assertThatThrownBy(() -> SandboxWorkspaceId.of(" ")).isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> TenantId.of("")).isInstanceOf(IllegalArgumentException.class);
@@ -132,5 +134,25 @@ class WorkspaceRecordsTest {
         assertThat(ExecOutcome.builder().exitCode(3).stdout(new byte[]{1}).build().toString()).contains("exitCode=3");
         assertThat(AdmissionDecision.rejected("full").rejection()).contains("full");
         assertThat(AdmissionDecision.admitted().isAdmitted()).isTrue();
+    }
+
+    @Test
+    @DisplayName("§8.3: an owner is tenant + principal type + id; a principal-less owner has no type")
+    void ownersCarryThePrincipalType() {
+        final TenantId t = TenantId.of("t");
+
+        assertThat(WorkspaceOwner.of(t, Principal.user("eng")))
+                .isNotEqualTo(WorkspaceOwner.of(t, Principal.group("eng", "Eng")));
+        assertThat(WorkspaceOwner.of(t, Principal.system()))
+                .isNotEqualTo(WorkspaceOwner.of(t, Principal.user("system")));
+        assertThat(WorkspaceOwner.anonymous(t))
+                .isNotEqualTo(WorkspaceOwner.of(t, Principal.user(WorkspaceOwner.ANONYMOUS)))
+                .isEqualTo(WorkspaceOwner.parse(t, WorkspaceOwner.ANONYMOUS));
+        assertThat(WorkspaceOwner.of(t, Principal.group("eng", "Eng")).principal()).isEqualTo("GROUP:eng");
+        assertThat(WorkspaceOwner.parse(t, "SERVICE:a:b").principal()).isEqualTo("SERVICE:a:b");
+        for (String bare : new String[]{"alice", ":alice", "USER:", "ROBOT:alice"}) {
+            assertThatThrownBy(() -> WorkspaceOwner.parse(t, bare)).as(bare)
+                    .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("TYPE:id");
+        }
     }
 }

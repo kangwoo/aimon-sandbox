@@ -736,7 +736,7 @@ public final class SandboxWorkspaceManager {
         final WorkspaceOwner owner = workspace.owner();
         final boolean permitted = owner.tenant().equals(caller.tenant())
                 && (settings.workspaceAccess() == SandboxSettings.WorkspaceAccess.TENANT
-                        || owner.principalId().equals(caller.principalId()));
+                        || owner.principal().equals(caller.principal()));
         if (!permitted) {
             throw new SandboxUnavailableException("this principal is not permitted to use the sandbox workspace");
         }

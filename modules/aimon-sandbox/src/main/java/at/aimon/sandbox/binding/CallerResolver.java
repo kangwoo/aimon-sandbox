@@ -16,12 +16,9 @@ import at.aimon.sandbox.workspace.WorkspaceOwner;
  * <p>
  * With {@code require-principal} only USER and GROUP principals pass, and SYSTEM/SERVICE principals listed in
  * {@code allowed-system-principals}; an absent principal is rejected. Without it an absent principal acts as
- * {@code anonymous} in {@link TenantId#DEFAULT}.
+ * {@link WorkspaceOwner#anonymous anonymous} in {@link TenantId#DEFAULT}.
  */
 public final class CallerResolver {
-
-    /** The principal id an absent principal acts as when {@code require-principal} is off. */
-    public static final String ANONYMOUS = "anonymous";
 
     private final SandboxSettings settings;
     private final SandboxTenantResolver tenantResolver;
@@ -50,7 +47,7 @@ public final class CallerResolver {
                 throw new BindingRejectedException("a sandbox needs a USER or GROUP principal, and this execution has "
                         + "none (require-principal is on)");
             }
-            return WorkspaceOwner.of(TenantId.DEFAULT, ANONYMOUS);
+            return WorkspaceOwner.anonymous(TenantId.DEFAULT);
         }
         final Principal p = principal.get();
         if (settings.requirePrincipal() && !p.isUser() && !p.isGroup()
@@ -66,7 +63,7 @@ public final class CallerResolver {
      *
      * @param principal
      *            the principal
-     * @return {@code (tenant, id)}
+     * @return {@code (tenant, TYPE:id)}
      * @throws BindingRejectedException
      *             when the tenant resolver has no tenant for it
      */
@@ -75,6 +72,6 @@ public final class CallerResolver {
         if (tenant == null) {
             throw new BindingRejectedException("no tenant is known for principal '" + principal.getId() + "'");
         }
-        return WorkspaceOwner.of(tenant, principal.getId());
+        return WorkspaceOwner.of(tenant, principal);
     }
 }

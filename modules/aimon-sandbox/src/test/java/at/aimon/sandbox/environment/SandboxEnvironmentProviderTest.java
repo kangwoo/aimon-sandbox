@@ -147,8 +147,9 @@ class SandboxEnvironmentProviderTest {
     void descriptorSummarisesEgress() {
         final SandboxBinding binding = SandboxBinding.builder()
                 .workspaceId(at.aimon.sandbox.workspace.SandboxWorkspaceId.of("ws:x"))
-                .owner(at.aimon.sandbox.workspace.WorkspaceOwner.of(at.aimon.sandbox.workspace.TenantId.DEFAULT, "a"))
-                .caller(at.aimon.sandbox.workspace.WorkspaceOwner.of(at.aimon.sandbox.workspace.TenantId.DEFAULT, "a"))
+                .owner(at.aimon.sandbox.workspace.WorkspaceOwner.of(at.aimon.sandbox.workspace.TenantId.DEFAULT, ALICE))
+                .caller(at.aimon.sandbox.workspace.WorkspaceOwner.of(at.aimon.sandbox.workspace.TenantId.DEFAULT,
+                        ALICE))
                 .shellKey(at.aimon.sandbox.binding.ShellKey.session(SessionId.of("s"))).build();
 
         assertThat(SandboxExecutionEnvironmentProvider
@@ -213,7 +214,7 @@ class SandboxEnvironmentProviderTest {
     void aForkInTheParentsSlotKeepsTheParentsRoot() throws Exception {
         try (SandboxHarness custom = SandboxHarness.builder().bindingPolicy(context -> {
             final at.aimon.sandbox.workspace.WorkspaceOwner owner = at.aimon.sandbox.workspace.WorkspaceOwner
-                    .of(at.aimon.sandbox.workspace.TenantId.DEFAULT, "alice");
+                    .of(at.aimon.sandbox.workspace.TenantId.DEFAULT, ALICE);
             return SandboxBinding.builder()
                     .workspaceId(at.aimon.sandbox.workspace.SandboxWorkspaceId
                             .of("ws:" + context.sessionId().orElseThrow().value()))
@@ -237,7 +238,7 @@ class SandboxEnvironmentProviderTest {
     @Test
     void aPolicyThatNamesTheOwnerAsCallerCannotLetAnotherPrincipalIn() throws Exception {
         final at.aimon.sandbox.workspace.WorkspaceOwner owner = at.aimon.sandbox.workspace.WorkspaceOwner
-                .of(at.aimon.sandbox.workspace.TenantId.DEFAULT, "alice");
+                .of(at.aimon.sandbox.workspace.TenantId.DEFAULT, ALICE);
         // A ticket policy: every session of the ticket shares alice's workspace, and it names her as the caller.
         try (SandboxHarness custom = SandboxHarness.builder()
                 .bindingPolicy(context -> SandboxBinding.builder()
@@ -250,7 +251,7 @@ class SandboxEnvironmentProviderTest {
                     at.aimon.core.base.Principal.user("bob"));
 
             assertThat(binding(bobs).caller()).isNotEqualTo(owner);
-            assertThat(binding(bobs).caller().principalId()).isEqualTo("bob");
+            assertThat(binding(bobs).caller().principal()).isEqualTo("USER:bob");
             assertThatThrownBy(() -> bash(bobs, "true")).hasMessageContaining("not permitted");
             assertThatThrownBy(() -> bobs.fileSystem().read("anything.txt")).hasMessageContaining("not permitted");
         }
@@ -260,7 +261,7 @@ class SandboxEnvironmentProviderTest {
     @DisplayName("§16: Principal.system() or no principal + require-principal is refused under a custom policy too")
     void requirePrincipalHoldsWhateverCallerACustomPolicyNames() throws Exception {
         final at.aimon.sandbox.workspace.WorkspaceOwner owner = at.aimon.sandbox.workspace.WorkspaceOwner
-                .of(at.aimon.sandbox.workspace.TenantId.of("acme"), "alice");
+                .of(at.aimon.sandbox.workspace.TenantId.of("acme"), ALICE);
         // A policy that hands out a valid owner and caller for every request, principal or not.
         try (SandboxHarness custom = SandboxHarness.builder().settings(s -> s.requirePrincipal(true))
                 .tenantResolver(principal -> at.aimon.sandbox.workspace.TenantId.of("acme"))
@@ -299,7 +300,7 @@ class SandboxEnvironmentProviderTest {
 
         assertThat(binding(anonymous).caller()).isEqualTo(binding(main).caller());
         assertThat(bash(anonymous, "echo fork").stdout()).isEqualTo("fork\n");
-        assertThat(binding(bobs).caller().principalId()).isEqualTo("bob");
+        assertThat(binding(bobs).caller().principal()).isEqualTo("USER:bob");
     }
 
     @Test

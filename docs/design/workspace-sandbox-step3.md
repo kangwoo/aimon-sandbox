@@ -204,7 +204,7 @@ paging. Javadoc says **single node only** (WS §5.3).
 ```java
 public final class SandboxBinding {
     SandboxWorkspaceId workspaceId(); WorkspaceOwner owner();
-    WorkspaceOwner caller();                 // D3: tenant + principal id of the executing principal
+    WorkspaceOwner caller();                 // D3: tenant + TYPE:id of the executing principal
     String slot(); Optional<String> requiredProfile(); ShellKey shellKey(); String root();
 }
 public interface SandboxBindingPolicy {
@@ -334,7 +334,7 @@ WorkspaceSandbox.markdownSkillParser();                 // MarkdownSkillParser w
    `ExecutionEnvironmentUnavailableException`; the core publishes `UnavailableExecutionEnvironment` (closed failure).
 
 Default `bind` (WS §8.2 table): principal gate (§8.3: `requirePrincipal` ⇒ USER/GROUP, or SYSTEM/SERVICE listed in
-`allowedSystemPrincipals`; off ⇒ absent principal becomes `anonymous`), `ws:{sessionId}` else `ws:{executionId}` else
+`allowedSystemPrincipals`; off ⇒ absent principal becomes the typeless `anonymous`), `ws:{sessionId}` else `ws:{executionId}` else
 reject, owner from `SessionOwnerLookup` for sessions (absent bean in single-tenant ⇒ caller; lookup empty ⇒ reject),
 routine owner = request principal, tenant via resolver, slot from `sandbox.slot` else `primary`, required profile from
 `sandbox.profile` (must exist), shellKey `session:`/`exec:`, root `/workspace/repo`.
@@ -1108,3 +1108,17 @@ document says. WS is updated in the same change; the section named in brackets i
     `symlink(2)` (which refuses an existing target) and then removed, as the old rename did
     (`LocalProcessSandboxProviderTest#aNoReplaceMoveOfASymbolicLinkMovesTheLinkItself`, links to a file and to a
     directory, plus refusal over an existing target).
+
+### Fixed after PR review 1
+
+51. **The owner records the principal's type** [WS §5.1, §8.3]. `WorkspaceOwner` was `(tenant, principal id)`, while
+    core's identity of a principal is type + id: under `workspace-access: principal` a USER `eng` passed the check of a
+    GROUP `eng` workspace (and the reverse), a USER `system` passed that of an allowed SYSTEM `system`, and with
+    `require-principal` off a USER `anonymous` was every principal-less execution. The owner is now
+    `(tenant, TYPE:id)` built with `WorkspaceOwner.of(TenantId, Principal)`; a principal-less execution is
+    `WorkspaceOwner.anonymous(tenant)`, recorded as the typeless `anonymous`. The string factory is now
+    `WorkspaceOwner.parse`, which refuses a bare id, so a custom policy that built `of(tenant, "alice")` fails to
+    compile instead of silently never matching. Done before the step-6 JDBC store persists owners, so no data
+    migration is needed (`OwnerCheckTest#aUserAndAGroupWithTheSameIdAreDifferentOwners`,
+    `#aUserNamedLikeASystemPrincipalIsNotThatPrincipal`, `#aUserNamedAnonymousIsNotAPrincipalLessExecution`,
+    `WorkspaceRecordsTest#ownersCarryThePrincipalType`).
