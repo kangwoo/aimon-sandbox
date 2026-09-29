@@ -1,0 +1,38 @@
+#!/usr/bin/perl
+# A minimal flock(1) for LocalProcessSandboxProvider on hosts without util-linux (macOS). It supports exactly the
+# two forms the workspace sandbox uses -- `flock -w SECONDS FD` and `flock -n FD` -- and nothing else. The lock is
+# taken on the open file description the caller's FD refers to, so it outlives this process, as flock(1)'s does.
+use strict;
+use warnings;
+use Fcntl qw(:flock);
+use Time::HiRes qw(sleep time);
+
+my ($wait, $nonblocking, $fd);
+while (@ARGV) {
+    my $arg = shift @ARGV;
+    if ($arg eq '-w') {
+        $wait = shift @ARGV;
+    } elsif ($arg eq '-n') {
+        $nonblocking = 1;
+    } elsif ($arg =~ /^\d+$/) {
+        $fd = $arg;
+    } else {
+        print STDERR "flock (LocalProcessSandboxProvider shim): unsupported argument '$arg'\n";
+        exit 64;
+    }
+}
+if (!defined $fd) {
+    print STDERR "flock (LocalProcessSandboxProvider shim): usage: flock [-n | -w SECONDS] FD\n";
+    exit 64;
+}
+open(my $fh, '>&=', $fd) or do {
+    print STDERR "flock (LocalProcessSandboxProvider shim): cannot use fd $fd: $!\n";
+    exit 64;
+};
+my $deadline = defined $wait ? time + $wait : undef;
+while (1) {
+    exit 0 if flock($fh, LOCK_EX | LOCK_NB);
+    exit 1 if $nonblocking;
+    exit 1 if defined $deadline && time >= $deadline;
+    sleep 0.05;
+}
