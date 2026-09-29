@@ -26,6 +26,7 @@ import at.aimon.sandbox.provider.ProviderSandboxRef;
 import at.aimon.sandbox.provider.SandboxConnection;
 import at.aimon.sandbox.provider.SandboxFiles;
 import at.aimon.sandbox.provider.SandboxNotFoundException;
+import at.aimon.sandbox.provider.SandboxProviderException;
 import at.aimon.sandbox.provider.WriteMode;
 
 /** What the local provider does beyond the contract: path translation, lazy expiry, host shims. */
@@ -159,17 +160,154 @@ class LocalProcessSandboxProviderTest {
         final LocalProcessSandboxProvider p = provider();
         final ProviderSandboxRef ref = create(p);
         final SandboxConnection connection = p.connect(ref);
-        final var holder = connection.run(ExecSpec.builder()
-                .command("exec 9>/workspace/lock; flock -w 5 9; : > /workspace/held; sleep 2").build(),
+        // The holder keeps the lock until the test lets it go: no timing window to lose on a slow host.
+        final var holder = connection.run(
+                ExecSpec.builder()
+                        .command("exec 9>/workspace/lock; flock -w 5 9; : > /workspace/held; "
+                                + "while [ ! -e /workspace/release ]; do sleep 0.05; done")
+                        .build(),
                 OutputSink.DISCARD);
-        final long deadline = System.nanoTime() + Duration.ofSeconds(10).toNanos();
-        while (!Files.exists(p.hostRoot(ref).resolve("workspace/held")) && System.nanoTime() < deadline) {
-            Thread.sleep(20);
-        }
+        awaitFile(p, ref, "workspace/held");
 
         assertThat(run(connection, "exec 9>/workspace/lock; flock -n 9 && echo got || echo busy")).isEqualTo("busy\n");
+        run(connection, ": > /workspace/release");
         holder.await(Duration.ofSeconds(10));
         assertThat(run(connection, "exec 9>/workspace/lock; flock -n 9 && echo got || echo busy")).isEqualTo("got\n");
+    }
+
+    @Test
+    void destroyEndsWhatCommandsLeftRunningInTheBackground() throws Exception {
+        final LocalProcessSandboxProvider p = provider();
+        final ProviderSandboxRef ref = create(p);
+        final SandboxConnection connection = p.connect(ref);
+        final long leftover = Long.parseLong(run(connection, "sleep 600 >/dev/null 2>&1 & echo $!").strip());
+        assertThat(ProcessHandle.of(leftover)).as("the leftover runs after its command ended").isPresent();
+
+        p.destroy(ref);
+
+        assertThat(awaitGone(leftover)).as("the leftover " + leftover + " outlived its sandbox").isTrue();
+    }
+
+    @Test
+    void closeEndsWhatCommandsLeftRunningInTheBackground() throws Exception {
+        final LocalProcessSandboxProvider p = provider();
+        final SandboxConnection connection = p.connect(create(p));
+        final long leftover = Long.parseLong(run(connection, "sleep 600 >/dev/null 2>&1 & echo $!").strip());
+
+        p.close();
+        provider = null;
+
+        assertThat(awaitGone(leftover)).as("the leftover " + leftover + " outlived the provider").isTrue();
+    }
+
+    @Test
+    void aKillRightAfterTheStartStillEndsTheCommandWithTerm() throws Exception {
+        final LocalProcessSandboxProvider p = provider();
+        final SandboxConnection connection = p.connect(create(p));
+        // Before perl's setpgrp there is no group to signal: the TERM must still arrive (143), not only the KILL
+        // after the grace (137).
+        for (int i = 0; i < 10; i++) {
+            final var command = connection.run(ExecSpec.builder().command("sleep 20").build(), OutputSink.DISCARD);
+            command.kill();
+            assertThat(command.await(Duration.ofSeconds(10)).exitCode()).as("attempt " + i).isEqualTo(143);
+        }
+    }
+
+    @Test
+    void aDestroyedSandboxIsNotFoundThroughAnOpenConnection() {
+        final LocalProcessSandboxProvider p = provider();
+        final ProviderSandboxRef ref = create(p);
+        final SandboxConnection connection = p.connect(ref);
+        final Path root = p.hostRoot(ref);
+        p.destroy(ref);
+
+        assertThatThrownBy(() -> connection.files().write("/workspace/x", new ByteArrayInputStream(new byte[1]), 1,
+                WriteMode.CREATE_OR_REPLACE)).isInstanceOf(SandboxNotFoundException.class);
+        // The write did not bring the deleted directory back.
+        assertThat(root).doesNotExist();
+    }
+
+    @Test
+    void aMissingWorkingDirectoryIsRefusedNotReplaced() {
+        final LocalProcessSandboxProvider p = provider();
+        final SandboxConnection connection = p.connect(create(p));
+
+        assertThatThrownBy(() -> connection
+                .run(ExecSpec.builder().command("pwd").workingDirectory("/workspace/gone").build(), OutputSink.DISCARD))
+                .isInstanceOf(SandboxProviderException.class).hasMessageContaining("/workspace/gone");
+    }
+
+    @Test
+    void noReplaceMovesAndWritesRefuseAnExistingTargetOfEitherKind() {
+        final LocalProcessSandboxProvider p = provider();
+        final SandboxFiles files = p.connect(create(p)).files();
+        files.write("/workspace/a.txt", new ByteArrayInputStream(new byte[]{1}), 1, WriteMode.CREATE_OR_REPLACE);
+        files.write("/workspace/b.txt", new ByteArrayInputStream(new byte[]{2}), 1, WriteMode.CREATE_OR_REPLACE);
+        files.createDirectories("/workspace/src/inner");
+        files.createDirectories("/workspace/empty");
+
+        assertThatThrownBy(() -> files.move("/workspace/a.txt", "/workspace/b.txt", false))
+                .isInstanceOf(FileAlreadyExistsException.class);
+        // rename(2) would silently replace an empty directory: a no-replace move must not.
+        assertThatThrownBy(() -> files.move("/workspace/src", "/workspace/empty", false))
+                .isInstanceOf(FileAlreadyExistsException.class);
+        assertThat(files.stat("/workspace/src/inner")).isPresent();
+        files.move("/workspace/src", "/workspace/moved", false);
+        assertThat(files.stat("/workspace/moved/inner")).isPresent();
+        assertThat(files.stat("/workspace/src")).isEmpty();
+        files.move("/workspace/a.txt", "/workspace/c.txt", false);
+        assertThat(files.stat("/workspace/a.txt")).isEmpty();
+        assertThat(files.stat("/workspace/c.txt")).hasValueSatisfying(stat -> assertThat(stat.size()).isEqualTo(1));
+    }
+
+    @Test
+    void aNoReplaceMoveOfASymbolicLinkMovesTheLinkItself() throws Exception {
+        final LocalProcessSandboxProvider p = provider();
+        final ProviderSandboxRef ref = create(p);
+        final SandboxConnection connection = p.connect(ref);
+        run(connection, "echo data > /workspace/target.txt; mkdir -p /workspace/dir/inner; "
+                + "ln -s target.txt /workspace/file-link; ln -s dir /workspace/dir-link; echo taken > /workspace/taken");
+        final SandboxFiles files = connection.files();
+        final Path root = p.hostRoot(ref).resolve("workspace");
+
+        files.move("/workspace/file-link", "/workspace/moved-file-link", false);
+        files.move("/workspace/dir-link", "/workspace/moved-dir-link", false);
+
+        // The links moved as links, pointing where they did — not turned into a hard link, not refused as a directory.
+        assertThat(Files.isSymbolicLink(root.resolve("moved-file-link"))).isTrue();
+        assertThat(Files.readSymbolicLink(root.resolve("moved-file-link"))).isEqualTo(Path.of("target.txt"));
+        assertThat(Files.isSymbolicLink(root.resolve("moved-dir-link"))).isTrue();
+        assertThat(Files.readSymbolicLink(root.resolve("moved-dir-link"))).isEqualTo(Path.of("dir"));
+        assertThat(Files.exists(root.resolve("file-link"), java.nio.file.LinkOption.NOFOLLOW_LINKS)).isFalse();
+        assertThat(Files.exists(root.resolve("dir-link"), java.nio.file.LinkOption.NOFOLLOW_LINKS)).isFalse();
+        assertThat(Files.readString(root.resolve("target.txt"))).isEqualTo("data\n");
+        assertThat(files.stat("/workspace/dir/inner")).isPresent();
+        // And a link is refused over an existing target, which stays as it was.
+        assertThatThrownBy(() -> files.move("/workspace/moved-file-link", "/workspace/taken", false))
+                .isInstanceOf(FileAlreadyExistsException.class);
+        assertThat(Files.readString(root.resolve("taken"))).isEqualTo("taken\n");
+        assertThat(Files.isSymbolicLink(root.resolve("moved-file-link"))).isTrue();
+    }
+
+    private static void awaitFile(LocalProcessSandboxProvider p, ProviderSandboxRef ref, String relative)
+            throws InterruptedException {
+        final long deadline = System.nanoTime() + Duration.ofSeconds(10).toNanos();
+        while (!Files.exists(p.hostRoot(ref).resolve(relative)) && System.nanoTime() < deadline) {
+            Thread.sleep(20);
+        }
+        assertThat(p.hostRoot(ref).resolve(relative)).exists();
+    }
+
+    private static boolean awaitGone(long pid) throws InterruptedException {
+        final long deadline = System.nanoTime() + Duration.ofSeconds(10).toNanos();
+        while (ProcessHandle.of(pid).map(ProcessHandle::isAlive).orElse(false)) {
+            if (System.nanoTime() > deadline) {
+                ProcessHandle.of(pid).ifPresent(ProcessHandle::destroyForcibly);
+                return false;
+            }
+            Thread.sleep(50);
+        }
+        return true;
     }
 
     @Test

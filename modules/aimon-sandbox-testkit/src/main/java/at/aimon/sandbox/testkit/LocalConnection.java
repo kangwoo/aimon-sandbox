@@ -40,6 +40,7 @@ final class LocalConnection implements SandboxConnection {
 
     /** A sandbox path as a host path under the sandbox directory. */
     Path toHost(String sandboxPath) {
+        sandbox.requireLive();
         if (sandboxPath == null || !sandboxPath.startsWith("/")) {
             throw new InvalidPathException(String.valueOf(sandboxPath), "sandbox paths must be absolute");
         }
@@ -81,9 +82,12 @@ final class LocalConnection implements SandboxConnection {
 
     @Override
     public RunningCommand run(ExecSpec spec, OutputSink sink) {
-        Path cwd = spec.workingDirectory().map(this::toHost).orElse(sandbox.dir.resolve("workspace"));
+        sandbox.requireLive();
+        final Path cwd = spec.workingDirectory().map(this::toHost).orElse(sandbox.dir.resolve("workspace"));
         if (!Files.isDirectory(cwd)) {
-            cwd = sandbox.dir.resolve("workspace");
+            // As a real exec server may: a command is not silently moved to another directory.
+            throw new SandboxProviderException(
+                    "cannot run in " + spec.workingDirectory().orElse("/workspace") + ": no such directory");
         }
         final ProcessBuilder builder = new ProcessBuilder(List.of("/usr/bin/perl", "-e",
                 "setpgrp(0,0); exec @ARGV or die \"exec: $!\"", "/bin/bash", "-c", translateCommand(spec.command())))
@@ -102,6 +106,7 @@ final class LocalConnection implements SandboxConnection {
         } catch (IOException e) {
             throw new SandboxProviderException("cannot start a local command: " + e.getMessage());
         }
+        sandbox.processGroups.put(process.pid(), process.info().startInstant());
         final LocalRunningCommand command = new LocalRunningCommand(process, spec, sink, this, sandbox.running);
         sandbox.running.add(command);
         return command;

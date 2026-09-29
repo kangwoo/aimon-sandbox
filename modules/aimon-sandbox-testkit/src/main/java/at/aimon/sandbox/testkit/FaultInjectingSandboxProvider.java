@@ -33,6 +33,11 @@ import at.aimon.sandbox.provider.WriteMode;
  * Wraps any provider and injects faults per {@link Operation} and call number (docs/design/workspace-sandbox.md §16):
  * a delay, a transient or permanent failure, a timeout, "not found", a success whose response is lost, or a
  * simulated node crash. Counts every call, so a test can assert how many copies a staging made.
+ *
+ * <p>
+ * When several rules match a call, a one-shot rule ({@link #injectOnce}, {@link #injectAt}) wins over a standing one
+ * ({@link #inject}), and among rules of one kind the one added first wins — so a test can add a single fault on top
+ * of a standing delay.
  */
 public final class FaultInjectingSandboxProvider implements SandboxProvider {
 
@@ -114,12 +119,14 @@ public final class FaultInjectingSandboxProvider implements SandboxProvider {
         private final int call;
         private final Fault fault;
         private final AtomicInteger remaining;
+        private final boolean oneShot;
 
         private Rule(Operation operation, int call, Fault fault, int times) {
             this.operation = operation;
             this.call = call;
             this.fault = fault;
             this.remaining = new AtomicInteger(times);
+            this.oneShot = times != Integer.MAX_VALUE;
         }
     }
 
@@ -167,7 +174,8 @@ public final class FaultInjectingSandboxProvider implements SandboxProvider {
     }
 
     /**
-     * Injects a fault into the n-th call of an operation (1-based, counted since this wrapper was made).
+     * Injects a fault into the n-th call of an operation: 1-based, counted like {@link #calls}, so since this wrapper
+     * was made or since the last {@link #resetCounts()}.
      *
      * @param operation
      *            the operation
@@ -196,20 +204,16 @@ public final class FaultInjectingSandboxProvider implements SandboxProvider {
         return calls.get(operation).get();
     }
 
-    /** Resets every counter to zero. */
+    /** Resets every counter to zero; {@link #injectAt} counts from here. */
     public void resetCounts() {
         calls.values().forEach(counter -> counter.set(0));
     }
 
     private <T> T call(Operation operation, ProviderSandboxRef ref, Supplier<T> action) {
         final int number = calls.get(operation).incrementAndGet();
-        Fault fault = null;
-        for (Rule rule : rules) {
-            if (rule.operation == operation && (rule.call == 0 || rule.call == number)
-                    && rule.remaining.getAndUpdate(n -> n > 0 ? n - 1 : 0) > 0) {
-                fault = rule.fault;
-                break;
-            }
+        Fault fault = match(operation, number, true);
+        if (fault == null) {
+            fault = match(operation, number, false);
         }
         if (fault == null) {
             return action.get();
@@ -238,6 +242,17 @@ public final class FaultInjectingSandboxProvider implements SandboxProvider {
         }
         action.get();
         throw new SandboxProviderException("injected lost response of " + operation);
+    }
+
+    /** The first matching rule of one kind, used up by this call; {@code null} when none matches. */
+    private Fault match(Operation operation, int number, boolean oneShot) {
+        for (Rule rule : rules) {
+            if (rule.operation == operation && rule.oneShot == oneShot && (rule.call == 0 || rule.call == number)
+                    && rule.remaining.getAndUpdate(n -> n > 0 ? n - 1 : 0) > 0) {
+                return rule.fault;
+            }
+        }
+        return null;
     }
 
     private void run(Operation operation, ProviderSandboxRef ref, Runnable action) {

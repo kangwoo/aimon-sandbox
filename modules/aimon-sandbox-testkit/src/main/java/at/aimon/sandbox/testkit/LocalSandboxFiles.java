@@ -61,9 +61,6 @@ final class LocalSandboxFiles implements SandboxFiles {
         if (Files.isDirectory(host)) {
             throw new VirtualFileSystemException("Is a directory: " + path);
         }
-        if (mode == WriteMode.CREATE_NEW && Files.exists(host)) {
-            throw new FileAlreadyExistsException(path);
-        }
         try {
             Files.createDirectories(host.getParent());
             final Path tmp = Files.createTempFile(host.getParent(), ".aimon-write-", ".tmp");
@@ -72,8 +69,9 @@ final class LocalSandboxFiles implements SandboxFiles {
                     Files.copy(in, tmp, StandardCopyOption.REPLACE_EXISTING);
                 }
                 if (mode == WriteMode.CREATE_NEW) {
-                    // No REPLACE_EXISTING: the rename itself refuses a file that appeared since the check above.
-                    Files.move(tmp, host, StandardCopyOption.ATOMIC_MOVE);
+                    // link(2) refuses an existing target atomically; rename(2) would replace it, whatever
+                    // ATOMIC_MOVE suggests.
+                    Files.createLink(host, tmp);
                 } else {
                     try {
                         Files.move(tmp, host, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
@@ -166,20 +164,49 @@ final class LocalSandboxFiles implements SandboxFiles {
     public void move(String from, String to, boolean overwrite) {
         final Path source = existing(from);
         final Path target = connection.toHost(to);
-        if (Files.exists(target, LinkOption.NOFOLLOW_LINKS) && !overwrite) {
-            throw new FileAlreadyExistsException(to);
-        }
         try {
             Files.createDirectories(target.getParent());
             if (overwrite) {
                 Files.move(source, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
             } else {
-                Files.move(source, target, StandardCopyOption.ATOMIC_MOVE);
+                moveWithoutReplacing(source, target);
             }
-        } catch (java.nio.file.FileAlreadyExistsException e) {
+        } catch (java.nio.file.FileAlreadyExistsException | DirectoryNotEmptyException e) {
             throw new FileAlreadyExistsException(to);
         } catch (IOException e) {
             throw new VirtualFileSystemException("cannot move " + from + " to " + to + ": " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * rename(2) replaces an existing file, and an empty directory, so it cannot refuse a target on its own. A symbolic
+     * link is re-created at the target (symlink(2) refuses an existing target) and then removed — link(2) would follow
+     * it on macOS and turn it into a hard link to what it points at; a file is linked (link(2) refuses an existing
+     * target) and then unlinked; a directory first reserves the target as an empty
+     * directory (mkdir(2) refuses an existing one) and is then renamed over that reservation, which fails rather than
+     * replaces if anything was put into it meanwhile.
+     */
+    private static void moveWithoutReplacing(Path source, Path target) throws IOException {
+        if (Files.isSymbolicLink(source)) {
+            Files.createSymbolicLink(target, Files.readSymbolicLink(source));
+            Files.delete(source);
+            return;
+        }
+        if (!Files.isDirectory(source, LinkOption.NOFOLLOW_LINKS)) {
+            Files.createLink(target, source);
+            Files.delete(source);
+            return;
+        }
+        Files.createDirectory(target);
+        try {
+            Files.move(source, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+        } catch (IOException e) {
+            try {
+                Files.deleteIfExists(target);
+            } catch (IOException ignored) {
+                // Someone else's content is in the reservation now: it stays theirs.
+            }
+            throw e;
         }
     }
 

@@ -106,4 +106,30 @@ class FaultInjectingSandboxProviderTest {
                 .isInstanceOf(UnsupportedOperationException.class);
         connection.close();
     }
+
+    @Test
+    void aOneShotFaultWinsOverAStandingOneAddedBefore() {
+        final ProviderSandboxRef ref = faults.create(spec("e"));
+        faults.inject(Operation.STATUS, Fault.delay(Duration.ofMillis(1)));
+        faults.injectOnce(Operation.STATUS, Fault.notFound());
+        faults.injectAt(Operation.STATUS, 3, Fault.fail(SandboxProviderException.Kind.PERMANENT));
+
+        assertThatThrownBy(() -> faults.status(ref)).isInstanceOf(SandboxNotFoundException.class);
+        assertThat(faults.status(ref)).isPresent();
+        assertThatThrownBy(() -> faults.status(ref)).isInstanceOf(SandboxProviderException.class)
+                .hasMessageContaining("PERMANENT");
+        assertThat(faults.status(ref)).isPresent();
+    }
+
+    @Test
+    void injectAtCountsFromTheLastReset() {
+        final ProviderSandboxRef ref = faults.create(spec("f"));
+        faults.status(ref);
+        faults.status(ref);
+        faults.resetCounts();
+        faults.injectAt(Operation.STATUS, 1, Fault.notFound());
+
+        assertThatThrownBy(() -> faults.status(ref)).isInstanceOf(SandboxNotFoundException.class);
+        assertThat(faults.calls(Operation.STATUS)).isEqualTo(1);
+    }
 }

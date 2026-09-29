@@ -87,17 +87,28 @@ final class LocalRunningCommand implements RunningCommand {
         killer.start();
     }
 
+    /**
+     * Signals the process group. Right after the start, perl may not have run {@code setpgrp} yet, so there is no
+     * group to signal: the leader itself gets the signal then — it has not started anything that could escape it.
+     */
     private void signal(String name) {
+        boolean delivered = false;
         try {
             final Process kill = new ProcessBuilder("/bin/kill", "-" + name, "--", "-" + pgid).start();
             kill.getInputStream().readAllBytes();
             kill.getErrorStream().readAllBytes();
-            kill.waitFor(5, TimeUnit.SECONDS);
+            delivered = kill.waitFor(5, TimeUnit.SECONDS) && kill.exitValue() == 0;
         } catch (IOException e) {
-            process.destroyForcibly();
+            delivered = false;
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            process.destroyForcibly();
+        }
+        if (!delivered && process.isAlive()) {
+            if ("KILL".equals(name)) {
+                process.destroyForcibly();
+            } else {
+                process.destroy();
+            }
         }
     }
 

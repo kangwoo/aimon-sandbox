@@ -252,6 +252,7 @@ public final class LocalProcessSandboxProvider implements SandboxProvider {
     public void destroy(ProviderSandboxRef ref) {
         final LocalSandbox sandbox = sandboxes.remove(ref.sandboxId());
         if (sandbox != null) {
+            sandbox.destroyed = true;
             sandbox.killAll();
             deleteTree(sandbox.dir);
         }
@@ -301,8 +302,9 @@ public final class LocalProcessSandboxProvider implements SandboxProvider {
     }
 
     /**
-     * Kills every command still running. Sandbox directories are kept unless the provider created its own base
-     * directory, which is then deleted — a test's sandboxes do not outlive it.
+     * Kills every command still running, and what they left running in their process groups. Sandbox directories are
+     * kept unless the provider created its own base directory, which is then deleted — a test's sandboxes do not
+     * outlive it.
      */
     @Override
     public void close() {
@@ -332,14 +334,21 @@ public final class LocalProcessSandboxProvider implements SandboxProvider {
         }
     }
 
-    /** One sandbox: a directory, its labels, its expiry and the commands running in it. */
+    /**
+     * One sandbox: a directory, its labels, its expiry, the commands running in it and every process group a command
+     * started — a command's {@code sleep 600 &} stays in its group after the command ends, and a real sandbox would
+     * take it along when destroyed.
+     */
     static final class LocalSandbox {
         final ProviderSandboxRef ref;
         final Path dir;
         final Map<String, String> labels;
         final Map<String, String> environment;
         final Set<LocalRunningCommand> running = ConcurrentHashMap.newKeySet();
+        /** Process group id → its leader's start time, which tells a reused pid from the group's own leader. */
+        final Map<Long, Optional<Instant>> processGroups = new ConcurrentHashMap<>();
         volatile Instant expiresAt;
+        volatile boolean destroyed;
 
         LocalSandbox(ProviderSandboxRef ref, Path dir, Map<String, String> labels, Instant expiresAt,
                 Map<String, String> environment) {
@@ -354,9 +363,40 @@ public final class LocalProcessSandboxProvider implements SandboxProvider {
             return ProviderSandbox.of(ref, ProviderSandboxState.RUNNING, labels, expiresAt);
         }
 
+        /**
+         * @throws SandboxNotFoundException
+         *             once this sandbox was destroyed, as a real provider answers
+         */
+        void requireLive() {
+            if (destroyed) {
+                throw new SandboxNotFoundException(ref);
+            }
+        }
+
         void killAll() {
             for (LocalRunningCommand command : List.copyOf(running)) {
                 command.kill();
+            }
+            processGroups.forEach((pgid, started) -> {
+                // A live process with the group's id that started later is a reused pid, not this group's leader.
+                final boolean reused = ProcessHandle.of(pgid).flatMap(handle -> handle.info().startInstant())
+                        .map(start -> started.map(start::isAfter).orElse(true)).orElse(false);
+                if (!reused) {
+                    killGroup(pgid);
+                }
+            });
+        }
+
+        private static void killGroup(long pgid) {
+            try {
+                final Process kill = new ProcessBuilder("/bin/kill", "-KILL", "--", "-" + pgid).start();
+                kill.getInputStream().readAllBytes();
+                kill.getErrorStream().readAllBytes();
+                kill.waitFor(5, TimeUnit.SECONDS);
+            } catch (IOException e) {
+                log.debug("Could not kill process group {}: {}", pgid, e.getMessage());
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
             }
         }
     }
