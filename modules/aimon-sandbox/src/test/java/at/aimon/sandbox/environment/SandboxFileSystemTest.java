@@ -90,6 +90,16 @@ class SandboxFileSystemTest {
     }
 
     @Test
+    void searchPatternsAreSanitisedAsCoreDoes() {
+        fs.write("dir/a.txt", "a");
+        fs.write("dir/sub/b.txt", "b");
+        fs.write("dir/c.md", "c");
+
+        // SearchPatterns.sanitize: "/" and brackets removed, "**" collapsed — "**/*.{txt}" reads as "*.txt".
+        assertThat(fs.search("dir", "**/*.{txt}", 10)).containsExactlyInAnyOrder("dir/a.txt", "dir/sub/b.txt");
+    }
+
+    @Test
     void metadataCarriesAnEtagThatChangesWithContent() {
         fs.write("m.txt", "aaaa");
         final FileMetadata before = fs.getMetadata("m.txt");

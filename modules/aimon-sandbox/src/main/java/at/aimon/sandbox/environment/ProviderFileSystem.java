@@ -17,6 +17,7 @@ import java.util.Optional;
 import at.aimon.core.filesystem.BackendStatus;
 import at.aimon.core.filesystem.BackendType;
 import at.aimon.core.filesystem.FileMetadata;
+import at.aimon.core.filesystem.SearchPatterns;
 import at.aimon.core.filesystem.VfsPaths;
 import at.aimon.core.filesystem.VirtualFileSystem;
 import at.aimon.core.filesystem.exception.FileAlreadyExistsException;
@@ -223,7 +224,8 @@ final class ProviderFileSystem implements VirtualFileSystem {
         if (maxResults < 1) {
             throw new IllegalArgumentException("maxResults must be >= 1");
         }
-        final String glob = pattern.replaceAll("[/\\\\{}\\[\\]]", "").replaceAll("\\*+", "*");
+        // Core's own sanitising, so this filesystem and core's local ones never read a pattern differently.
+        final String glob = SearchPatterns.sanitize(pattern);
         final PathMatcher matcher = FileSystems.getDefault().getPathMatcher("glob:" + glob);
         final List<String> found = new ArrayList<>();
         for (FileStat stat : listing(directory, true)) {
