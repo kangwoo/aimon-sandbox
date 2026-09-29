@@ -45,7 +45,7 @@ tasks.register("checkStyle") {
 // `test` is each module's own test task, which excludes `@Tag("docker")` and `@Tag("packaging")` (see the
 // aimon.java-conventions plugin). No test in this repository carries either tag today, so `integrationTest`
 // and `packagingTest` currently match nothing -- see the tier comment in that plugin, which says what that
-// costs and what the two gated backend classes do instead.
+// costs.
 tasks.register("checkAll") {
     description = "Run all code quality checks (Spotless + Checkstyle + unit tests)"
     group = "verification"

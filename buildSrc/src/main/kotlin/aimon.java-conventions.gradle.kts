@@ -120,13 +120,8 @@ tasks.withType<Test>().configureEach {
 // this build and aimon-core's keep the same shape. But a tier nothing runs cannot be told apart from a
 // passing one: do not read a green `integrationTest` or `packagingTest` here as verification of anything.
 //
-// What isolation actually gets checked by is two classes, `DockerSandboxBackendIntegrationTest` and
-// `KubernetesSandboxBackendIntegrationTest`, and they are gated with `@EnabledIfEnvironmentVariable` on
-// AIMON_DOCKER_IT / AIMON_KUBERNETES_IT. A gated class skips unless its variable is set, and a skip leaves
-// the build green, so those two have no CI signal either -- they had none in aimon-core, where the gap was
-// noticed and recorded (backlog `live-api-test-tier.md`, LA-2) without being closed. It moved here with the
-// code. Giving these two a real tier -- tag them, run them against a daemon and a kind cluster in CI -- is
-// the first thing this repository should do that aimon-core could not justify doing for three leaf modules.
+// The first subject is planned: docs/design/workspace-sandbox.md §16 runs the provider contract suite against
+// an OpenSandbox server started by Testcontainers under `@Tag("docker")`.
 tasks.named<Test>("test") {
     useJUnitPlatform {
         excludeTags("docker")
@@ -205,8 +200,9 @@ tasks.withType<JacocoReport>().configureEach {
 // than scattered across the twenty build files that carry a floor.
 //
 // A module with no entry gets no rule rather than a floor of zero. Zero would be a rule that always passes,
-// which reads as "verified" in the task list and verifies nothing; absence at least tells the truth. All three
-// modules here have an entry, so absence means someone added a module and did not add a floor.
+// which reads as "verified" in the task list and verifies nothing; absence at least tells the truth. No module
+// has an entry today because none has sources yet (see the properties file); once one does, absence means
+// someone added code and did not add a floor.
 val coverageBaselines = Properties().apply {
     val file = rootProject.file("gradle/coverage-baselines.properties")
     if (file.exists()) {

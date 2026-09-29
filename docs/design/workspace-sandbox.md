@@ -1,8 +1,9 @@
 # 워크스페이스 샌드박스 — 기존 도구가 OpenSandbox 위의 격리 환경을 투명하게 쓴다
 
-> Status: **PROPOSED** — 구현 전 설계. 채택되면 [`sandbox.md`](sandbox.md) 가 설명하는 identifier 기반
-> 설계(도구 4개 · `SandboxBackend` · Docker/K8s 백엔드)를 **대체한다.** 하위 호환은 목표가 아니다 —
-> 옛 도구·타입·모듈을 남겨 두지 않고, 이행 경로 대신 대응표(§17)를 둔다.
+> Status: **ACCEPTED** — 구현 전. identifier 기반 옛 설계(도구 4개 · `SandboxBackend` · Docker/K8s 백엔드)를
+> **대체한다.** 옛 코드와 문서는 저장소에서 지웠다 — 마지막 모습은 커밋 `704013c` 의
+> [`sandbox.md`](https://github.com/kangwoo/aimon-sandbox/blob/704013c02cb14f16ec37ebf8c07f90d7e107db73/docs/design/sandbox.md) 이고, 배포본은 `at.aimon.core:aimon-sandbox{,-docker,-kubernetes}:0.2.4` 다. 하위 호환은
+> 목표가 아니다 — 이행 경로 대신 대응표(§17)를 둔다.
 >
 > 입력: 공개하지 않은 두 초안 — *OpenSandbox 기반 Multi-Agent Sandbox Platform 설계* (v0.2),
 > *AIMON Core + OpenSandbox 기반 Multi-Agent Sandbox 설계* (v0.3). 초안은 보존하지 않는다 — 채택한 것은 본문에,
@@ -17,14 +18,14 @@
 
 ### 1.1 지금 설계가 막히는 자리
 
-[`sandbox.md`](sandbox.md) 의 샌드박스는 **도구가 들고 다니는 별도 세계**다. 그래서 다음 문제가 생긴다.
+옛 설계([`sandbox.md`](https://github.com/kangwoo/aimon-sandbox/blob/704013c02cb14f16ec37ebf8c07f90d7e107db73/docs/design/sandbox.md))의 샌드박스는 **도구가 들고 다니는 별도 세계**다. 그래서 다음 문제가 생긴다.
 
 | 문제 | 원인 |
 |------|------|
 | `Write` 로 고친 파일을 `RunSandbox` 가 못 본다 | 파일 도구는 VFS, 샌드박스는 컨테이너. 둘을 잇는 것은 `CopyToSandbox` 의 tar 복사뿐이다 |
 | 모델이 인프라를 관리한다 | `identifier` · `ttl_seconds` · `lock_sandbox` 가 도구 인자다. 모델이 id 를 짓고, 수명을 정하고, 락을 켠다 |
 | 셸 상태가 없다 | `exec` 1건마다 새 프로세스다. `cd` · `export` 가 다음 명령까지 이어지지 않는다 |
-| 취소가 없다 | `exec` 에 취소 채널이 없어 `RunState.CANCELED` 도 없다(sandbox.md §13) |
+| 취소가 없다 | `exec` 에 취소 채널이 없어 `RunState.CANCELED` 도 없다([옛 설계](https://github.com/kangwoo/aimon-sandbox/blob/704013c02cb14f16ec37ebf8c07f90d7e107db73/docs/design/sandbox.md) §13) |
 | 멀티 에이전트 개념이 없다 | 여러 에이전트가 한 샌드박스를 나눠 쓰는 방법, 역할별로 다른 샌드박스를 두는 방법이 모두 "같은 identifier 를 쓰기로 약속한다"뿐이다 |
 | 백엔드가 인프라를 직접 구현한다 | 파드 생성·exec·파일 전송·만료 라벨을 Docker 와 K8s 에 각각 따로 적었다. 네트워크 정책·자격 증명·pause 는 아예 없다 |
 | 멀티 인스턴스가 이름뿐이다 | `RunStore` · `SandboxExpiryStore` · `SandboxLock` 모두 인터페이스는 있지만 구현은 로컬 하나뿐이다 |
@@ -824,7 +825,7 @@ OpenSandbox 의 만료는 idle 타임아웃이 아니라 **절대 시각**이고
 `lastActivityAt` 기록과 같은 간격으로 스로틀하고, 명령이 도는 동안은 heartbeat 가 부른다). resume 할 때도 같은 값으로
 민다. AIMON 쪽 janitor 가 전부 멈춰도 샌드박스는 마지막 활동에서 `terminateAfter` 뒤에 프로바이더가 회수한다. 옛
 설계가 TTL 을 스토어와 라벨 두 곳에 둔 것은 "재시작한 프로세스가 만료 시각을 잃는다"는 문제 때문이었다
-(sandbox.md §4.3). 만료를 집행하는 쪽이 프로바이더면 그 문제 자체가 없다.
+([옛 설계](https://github.com/kangwoo/aimon-sandbox/blob/704013c02cb14f16ec37ebf8c07f90d7e107db73/docs/design/sandbox.md) §4.3). 만료를 집행하는 쪽이 프로바이더면 그 문제 자체가 없다.
 
 일시 정지 중에도 만료 시각이 흐르는지는 §6.4 의 확인 항목이다. 흐르지 않으면 PAUSED 슬롯의 최후 방어선은 janitor
 뿐이므로, 그 경우 프로바이더는 `PAUSE_RESUME` 을 광고하지 않는다.
@@ -1552,12 +1553,12 @@ Docker 없이 돌리기 위한 것이다. **장애 주입 래퍼**(`FaultInjecti
    전용, 셸 상태 파일)·활동 heartbeat·janitor 의 idle 집행(terminate · close · 멈춘 CLOSING 이어받기 · 툼스톤 삭제)·
    기본 admission·스킬 셸 훅 거부·기동 시 설정 검사·testkit(계약 + 로컬 프로바이더 + 장애 주입). 슬롯은 `primary`
    하나만, 단일 노드만. 이 단계에서 `isolate()` 는 비어 있음을 돌려주고 코어가 워크플로 격리 단계를 거부한다(7단계에서
-   worktree 로 바뀐다). `PAUSE_RESUME` 이 없으므로 `pauseAfter` 를 가진 프로파일은 기동 거부된다(§6.4). 이 시점에 옛
-   도구 넷과 백엔드 모듈을 지운다 — 코어 새 버전을 의존하는 순간 옛 `OrcaSandboxToolProvider` 가 컴파일되지
-   않으므로(EE-1) 이 단계가 코어 업그레이드와 같은 변경이다
+   worktree 로 바뀐다). `PAUSE_RESUME` 이 없으므로 `pauseAfter` 를 가진 프로파일은 기동 거부된다(§6.4). 코어를 실행 환경
+   SPI 가 있는 버전으로 올리는 것도 이 단계다. 옛 도구 넷과 백엔드 모듈은 이 단계에 앞서 **이미 지웠다** — `aimon-sandbox`
+   는 빈 모듈로 이 단계를 기다린다
 4. **aimon-sandbox-opensandbox.** 프로바이더·만료 연장·라벨 인코딩과 대조·`deployment` 라벨·janitor 의 샌드박스
    조정(STALE·ORPHAN·DUPLICATE·LOST 확인)·계약 스위트 통합 테스트·K8s 런타임 검증(이 단계 항목, §16). 조정은
-   `InMemory` 저장소의 재시작 뒤 고아를 치우는 유일한 장치이므로 여기서 들어간다. **3단계와 한 릴리스로 낸다** — 3단계가 옛 백엔드를 지우고 `LocalProcessSandboxProvider`
+   `InMemory` 저장소의 재시작 뒤 고아를 치우는 유일한 장치이므로 여기서 들어간다. **3단계와 한 릴리스로 낸다** — 옛 백엔드는 이미 없고 `LocalProcessSandboxProvider`
    는 운영용이 아니므로, 3단계만 내면 운영에 쓸 프로바이더가 없다
 5. **멀티 슬롯.** 슬롯별 프로파일과 프로파일 고정 검사 · 공유 볼륨과 `sharedAccess` · 볼륨 조정과 보존 · bare 저장소 seed ·
    오케스트레이터 도구 · 워크스페이스 쿼터 · 정의의 `sandbox.slot`/`sandbox.profile` · 정책의 `forkSlot`. **선행 조건:
@@ -1696,7 +1697,7 @@ Docker 없이 돌리기 위한 것이다. **장애 주입 래퍼**(`FaultInjecti
 
 ## 관련 문서
 
-- [`sandbox.md`](sandbox.md) — 이 설계가 대체하는 identifier 기반 설계
+- [`sandbox.md` @ `704013c`](https://github.com/kangwoo/aimon-sandbox/blob/704013c02cb14f16ec37ebf8c07f90d7e107db73/docs/design/sandbox.md) — 이 설계가 대체한 identifier 기반 설계(삭제됨)
 - [`scope-model.md`](https://github.com/kangwoo/aimon-core/blob/main/docs/overview/scope-model.md) — 수명과 소멸 책임
 - [`glossary.md`](https://github.com/kangwoo/aimon-core/blob/main/docs/overview/glossary.md) §4 — 턴 · iteration · execution
 - [`session/routing.md`](https://github.com/kangwoo/aimon-core/blob/main/docs/design/session/routing.md) — 세션의 노드 배치와 lease

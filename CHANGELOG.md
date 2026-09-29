@@ -5,6 +5,26 @@ All notable aimon-sandbox changes are recorded here. The format is loosely based
 
 ## [Unreleased]
 
+### Removed — the identifier-based sandbox
+
+Everything below "Split out of aimon-core" is superseded by
+[`docs/design/workspace-sandbox.md`](docs/design/workspace-sandbox.md), which replaces it without a
+compatibility layer (§17 maps old to new). Nothing from it has been released under `at.aimon.sandbox`.
+
+- **`aimon-sandbox-docker` and `aimon-sandbox-kubernetes` are gone.** The only backend in the new design is
+  OpenSandbox, which covers both runtimes (§6.4); `aimon-sandbox-opensandbox` arrives in step 4 (§18).
+- **`aimon-sandbox` is empty.** The four tools (`RunSandbox`, `CopyToSandbox`, `RestartSandbox`,
+  `DeleteSandbox`), `SandboxBackend`, `SandboxConfig`, `RunStore`/`RunManager`, `SandboxExpiryStore`,
+  `SandboxLock`, `ReaperService`, the tar transfer classes and `IdentifierValidator` were all deleted; each
+  has a replacement or an explicit "none" in §17, and none is reused as-is. The module and its coordinate
+  stay because the new design builds there (§4.1). It now declares aimon-core on `api`, as §4.1 requires.
+- **Build cleanup.** The Docker, Kubernetes and slf4j catalog entries, the three coverage floors and the
+  comments about the two gated integration-test classes went with the code, and so did
+  its design document, `docs/design/sandbox.md` (last version at commit `704013c`).
+  `workspace-sandbox.md` is now ACCEPTED.
+- **The known gap below closes by removal**, not by being fixed: the classes without a CI signal no longer
+  exist. The new design's first `@Tag("docker")` tier is the OpenSandbox provider contract suite (§16).
+
 ### Split out of aimon-core
 
 The three sandbox modules moved here from
