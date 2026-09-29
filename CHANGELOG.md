@@ -5,6 +5,32 @@ All notable aimon-sandbox changes are recorded here. The format is loosely based
 
 ## [Unreleased]
 
+### Added — workspace sandbox, implementation step 3
+
+The domain and the local path of [`docs/design/workspace-sandbox.md`](docs/design/workspace-sandbox.md) §18-3;
+how it was built and where it departed from the plan is
+[`docs/design/workspace-sandbox-step3.md`](docs/design/workspace-sandbox-step3.md). **Not usable in production
+yet**: the only provider is the test-only `LocalProcessSandboxProvider`; the OpenSandbox provider is step 4, and
+steps 3 and 4 are released together.
+
+- **`aimon-sandbox`** now has code: workspace records with a version-CAS store (`InMemorySandboxWorkspaceStore`,
+  single node only) and the `SandboxWorkspaceManager` (lazy provisioning, owner checks at every entry point,
+  close/reopen with tombstones, CAS retry), the `SandboxProvider` SPI and its labels, the default binding policy
+  with tenant and session-owner resolution, and `SandboxExecutionEnvironmentProvider` — aimon-core's
+  `ExecutionEnvironmentProvider` answered with a declared descriptor, read-only staging and shell areas, shell state
+  (cwd, exported variables) kept in files inside the sandbox, staging verified inside the sandbox, and `rg --json`
+  search. Around it: the activity heartbeat, a janitor that enforces idle policy, a default per-tenant admission,
+  refusal of skill shell-action hooks, and startup validation, all assembled by `WorkspaceSandbox`.
+- **`aimon-sandbox-testkit`** is a new, published module: the provider and store contract suites, the
+  local-process provider, fault injection, a manual clock and scheduler.
+- **Refused at startup, not ignored**: profiles with `pause-after` (step 7), `shared-access` other than `none`
+  (step 5), a `seed` (step 5) or `credentials` (step 4). Only the `primary` slot is served (step 5).
+- **aimon-core is pinned to `0.3.1-SNAPSHOT`**, resolved through a `mavenLocal()` filtered to the `at.aimon.core`
+  group and to snapshots. **This is a release blocker**: nothing is released from this repository until
+  aimon-core 0.3.1 is on Maven Central, the pin is raised to it, and `mavenLocal()` is removed.
+- `slf4j-api` and `jackson-databind` join the catalog at aimon-core's own runtime versions: aimon-core's published
+  API exports no dependencies, so what this code compiles against is declared here.
+
 ### Removed — the identifier-based sandbox
 
 Everything below "Split out of aimon-core" is superseded by
@@ -13,12 +39,12 @@ compatibility layer (§17 maps old to new). Nothing from it has been released un
 
 - **`aimon-sandbox-docker` and `aimon-sandbox-kubernetes` are gone.** The only backend in the new design is
   OpenSandbox, which covers both runtimes (§6.4); `aimon-sandbox-opensandbox` arrives in step 4 (§18).
-- **`aimon-sandbox` is empty.** The four tools (`RunSandbox`, `CopyToSandbox`, `RestartSandbox`,
+- **`aimon-sandbox` was emptied** (step 3, above, fills it again). The four tools (`RunSandbox`, `CopyToSandbox`, `RestartSandbox`,
   `DeleteSandbox`), `SandboxBackend`, `SandboxConfig`, `RunStore`/`RunManager`, `SandboxExpiryStore`,
   `SandboxLock`, `ReaperService`, the tar transfer classes and `IdentifierValidator` were all deleted; each
   has a replacement or an explicit "none" in §17, and none is reused as-is. The module and its coordinate
   stay because the new design builds there (§4.1). It now declares aimon-core on `api`, as §4.1 requires.
-- **Build cleanup.** The Docker, Kubernetes and slf4j catalog entries, the three coverage floors and the
+- **Build cleanup.** The Docker, Kubernetes and slf4j catalog entries (slf4j returned with step 3, above), the three coverage floors and the
   comments about the two gated integration-test classes went with the code, and so did
   its design document, `docs/design/sandbox.md` (last version at commit `704013c`).
   `workspace-sandbox.md` is now ACCEPTED.
