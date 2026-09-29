@@ -125,9 +125,11 @@ public final class SandboxExecutionEnvironmentProvider implements ExecutionEnvir
         final String root = choice.slot().equals(parentBinding.slot())
                 ? parentBinding.root()
                 : SandboxBinding.DEFAULT_ROOT;
-        // The fork's own principal when it carries one. Without one — aimon-core's skill-fork path does not forward it
-        // (SubagentBackedSkillForkExecutor) — the fork acts for its parent, whose caller already passed the gate: the
-        // parent environment it was handed is what entitles it to this workspace.
+        // The fork's own principal when it carries one. Without one the fork acts for its parent, whose caller already
+        // passed the gate: the parent environment it was handed is what entitles it to this workspace. aimon-core
+        // versions before the fix on core branch fix/skill-fork-forward-principal (not yet on core main) send skill
+        // forks without a principal (SubagentBackedSkillForkExecutor); once every supported core forwards it, revisit
+        // this fallback (WS §20).
         final WorkspaceOwner caller = request.principal().isPresent()
                 ? callers.callerOf(request.principal())
                 : parentBinding.caller();

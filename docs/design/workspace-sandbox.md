@@ -590,8 +590,9 @@ public interface SandboxBindingPolicy {
 
 **포크는 부모의 워크스페이스를 물려받는다.** 부모 환경의 바인딩에서 workspaceId · owner · root 를 그대로 물려받고
 shellKey 만 `exec:{executionId}` 로 바꾼다. `caller` 는 포크 요청의 principal 이고, 요청에 principal 이 없으면 부모의
-`caller` 다 — 코어의 스킬 포크 경로(`SubagentBackedSkillForkExecutor`)는 principal 을 넘기지 않는데, 포크는 부모 실행을
-대신해 도는 것이고 부모의 `caller` 는 이미 주체 검사를 통과했다. 포크가 받은 부모 환경 자체가 그 워크스페이스를 쓸
+`caller` 다 — 포크는 부모 실행을 대신해 도는 것이고 부모의 `caller` 는 이미 주체 검사를 통과했다. 이 대체 경로는
+코어의 성질이 아니라 **옛 코어를 위한 것**이다. 코어 브랜치 `fix/skill-fork-forward-principal` 의 수정(아직 코어 main 에
+없다) 이전 버전의 스킬 포크 경로(`SubagentBackedSkillForkExecutor`)가 principal 을 넘기지 않는다(§20). 포크가 받은 부모 환경 자체가 그 워크스페이스를 쓸
 자격이다. 슬롯은 정책의 `forkSlot` 이 정한다 — 기본 구현은 `ForkDefinition` 의
 `sandbox.slot` 속성이 있으면 그것, 없으면 부모의 슬롯이다. 슬롯이 부모와 다르면 root 는 그 슬롯의 `/workspace/repo`
 다. 포크가 몇 단계로 중첩되어도, 부모가 세션 없는 실행(스케줄 루틴)이어도 같은 워크스페이스에 머문다.
@@ -1821,6 +1822,10 @@ found·"생성은 됐지만 응답 유실"·노드 종료(호출 경로를 그 �
   명령은 계속 돌지만 결과를 받을 쪽이 없다. 프로바이더 쪽 명령 id 를 레코드에 남겨 다른 노드가 다시 붙게
   할지는 6단계(영속 저장소) 이후에 판단한다. 그때까지는 heartbeat 가 노드와 함께 멈추므로, 결과를 받을 쪽이
   없는 명령은 idle 정책에 따라 샌드박스와 함께 정리된다
+- **principal 없는 포크의 대체 경로** *(코어 수정이 지원 범위의 모든 코어에 들어가면 닫는다)* — principal 이 없는 포크
+  요청은 부모의 `caller` 를 물려받는다(§8.2). 그 경로가 필요한 이유는 코어 브랜치 `fix/skill-fork-forward-principal` 이전
+  코어의 스킬 포크가 principal 을 넘기지 않기 때문이다. 그 수정이 코어 main 에 들어가고 지원하는 최소 코어가 그 버전이
+  되면, 대체 경로를 없애고 principal 없는 포크를 루트 요청처럼 주체 검사에 맡길지(부모 상속이 조용히 남지 않게) 다시 정한다
 - **스트리밍 도구 출력** — SPI 는 `OutputSink` 로 준비되어 있지만 코어 `BashTool` 이 부분 출력을 이벤트로
   내보내는 경로가 없다
 - **`sharedAccess: none` 슬롯의 git 직접 clone** *(5단계에서 닫는다)* — §18 은 git seed 를 5단계에 두었고 직접 clone 은

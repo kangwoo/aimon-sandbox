@@ -1085,8 +1085,8 @@ document says. WS is updated in the same change; the section named in brackets i
     FORK mode: aimon-core's `SubagentBackedSkillForkExecutor` builds the fork's environment request without the
     principal, so `callerOf(empty)` produced an anonymous caller and every skill-fork `Bash` failed "not permitted".
     The fork acts for its parent, whose caller already passed the gate, and the parent environment it was handed is
-    its entitlement; a fork that carries a principal still gets that principal. The core gap itself (the principal
-    is not forwarded on the skill-fork path) is left to aimon-core — no core change was made here.
+    its entitlement; a fork that carries a principal still gets that principal. The core gap itself is left to
+    aimon-core — no core change was made here. (PR review 1: this is a property of older cores, not of core — see 54.)
 45. **The janitor has a scheduler thread of its own** (assembly), and a scheduled task that throws an `Error` keeps
     running at its next period. A failed assembly after startup validation closes the schedulers it started.
 46. **A listing over 100 000 entries fails** [WS §11.1] instead of returning a silently truncated tree to Glob/Grep.
@@ -1137,3 +1137,8 @@ document says. WS is updated in the same change; the section named in brackets i
     the image contract and fails on the `exec` itself, both as step `workspace`
     (`SandboxSeederTest#aWorkspaceThatIsNotWritableIsAPermanentFailure`, `#aSeedLockThatCannotBeOpenedIsAPermanentFailure`,
     `SandboxWorkspaceManagerTest#anUnusableWorkspaceIsAPermanentSeedFailure`).
+54. **The fork-principal fallback is for older cores** [WS §8.2, §20]. Departure 44 read as if core never forwards
+    the principal on the skill-fork path. Core branch `fix/skill-fork-forward-principal` fixes exactly that and is not
+    yet on core main, so the fallback (a fork without a principal inherits its parent's caller) is now described as
+    applying to core versions before that fix, in the provider's comment, WS §8.2 and a new WS §20 open item to
+    revisit it once every supported core carries the fix.
