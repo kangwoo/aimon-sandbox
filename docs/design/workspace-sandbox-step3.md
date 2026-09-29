@@ -284,7 +284,7 @@ public final class SandboxWorkspaceManager {
     void close(SandboxWorkspaceId id, Principal caller);      // owner-checked
     void reopen(SandboxWorkspaceId id, Principal caller);     // owner-checked; CLOSED -> OPEN, new incarnation
     // package-private, used only by SandboxJanitor (same package):
-    void closeInternal(SandboxWorkspaceId id, CloseCause cause);
+    boolean closeProcedure(SandboxWorkspaceId id, CloseCause cause, Predicate<SandboxWorkspace> guard);  // §12-28, §12-34
 }
 public final class ConnectedSlot {
     SandboxWorkspace workspace(); SandboxSlot slot(); SandboxConnection connection(); List<String> notices();
@@ -389,16 +389,16 @@ earlier than any live profile would be; its provider expiry, set with the old va
 FAILED from `create`/seed/labels, `markLost`, close — per WS §5.2, so a workspace whose only slot failed is not
 idle-closed early;
 (b) OPEN workspaces with no RUNNING/PAUSED/PROVISIONING slot and `now − max(createdAt, openedAt, slots'
-lastActiveAt) ≥ closeAfter` → `closeInternal(IDLE)`, where `openedAt` is the `stateSince` stamped by every transition
+lastActiveAt) ≥ closeAfter` → `closeProcedure(IDLE, idle guard)`, where `openedAt` is the `stateSince` stamped by every transition
 into OPEN (create, explicit `reopen`, idle auto-reopen) — so a reopened workspace gets a full `closeAfter` before it
 can be idle-closed again, even if its first provisioning is rejected by admission;
-(c) CLOSING with `now − stateSince ≥ closeResumeAfter` → `closeInternal(stored cause)`;
+(c) CLOSING with `now − stateSince ≥ closeResumeAfter` → `closeProcedure(stored cause, "still CLOSING with the scanned incarnation")`;
 (d) CLOSED (either cause) with `now − stateSince ≥ closedRetention` → `delete(id, version)`. The next `connect` for
 that id creates a brand-new workspace **without** a reset notice — nothing is left to tell it from a new session
 (Q1, D12).
 Each item is isolated (one failure is logged and the loop continues).
 
-**Close procedure** (`close` and `closeInternal`; WS §10.5 without the volume steps), every step idempotent so (c) can
+**Close procedure** (`close` and the janitor's guarded `closeProcedure` — §12-28, §12-34; WS §10.5 without the volume steps), every step idempotent so (c) can
 rerun it from the top:
 1. CAS OPEN → CLOSING(`stateSince=now`, `closeCause`); already CLOSING ⇒ keep the stored cause; CLOSED ⇒ no-op.
 2. For every slot not TERMINATED: CAS TERMINATED(`lastActiveAt=now`), then `destroy(providerRef)` if it has one
@@ -755,7 +755,7 @@ verification, staging parity with core (`SandboxStagingIT`: a skill whose file c
 an in-workspace resource is returned uncopied), `SandboxUnavailableException`/`BindingRejectedException` reaching the
 model through core `ReadTool`/`BashTool` as the WS §15 message (not the generic tool error), startup rejection of a
 profile with `credentials` (Q3), after `closedRetention` a deleted record's id gets a new workspace **without** a
-reset notice (`WorkspaceLifecycleIT#expiredRecordIsDeletedAndIdStartsFreshWithoutNotice`, Q1/D12), content search
+reset notice (`WorkspaceLifecycleIT#anExpiredClosedRecordIsDeletedAndTheIdStartsFreshWithoutANotice`, Q1/D12), content search
 via `rg --json` (gated on `assumeTrue(LocalProcessSandboxProvider.hostHasRipgrep())`, plus an ungated test that the stub makes search fail loudly), janitor items (a)–(d), exec shell-dir sweep.
 
 **Wrapper robustness** (`ShellWrapperTest` for the script text, `SandboxShellIT` through the local provider): a
@@ -975,7 +975,7 @@ These three depart from the design as written; review 1 found them in the code, 
     freshly read record, whatever its state, before the close's state-switch CAS; a refusal leaves the record alone.
     For an idle close it is the idle condition; for a resumed stuck close it is "still CLOSING with the incarnation
     the janitor scanned" (fixed after build review 3, below). `closeInternal` stays as the unguarded internal close
-    path of WS §8.3.
+    path of WS §8.3 (superseded by 34: it was removed).
 29. **A failed seed check destroys the sandbox** after the FAILED CAS it won; the design only recorded FAILED. That
     sandbox has verified labels and is this generation's own, and no record points anyone at it any more. A label
     mismatch is not destroyed (the sandbox may not be ours).
@@ -1020,3 +1020,91 @@ These three depart from the design as written; review 1 found them in the code, 
 ### Build
 
 26. `aimon-sandbox-testkit` also declares `implementation(libs.slf4j.api)` (it logs).
+
+### Follow-up: the open non-blocking findings (after build review 4)
+
+Each item from HANDOFF's follow-up list and review 4's two non-blocking items, where the fix changes what WS or this
+document says. WS is updated in the same change; the section named in brackets is the one amended.
+
+30. **Store versions are never reused, and a store returns what it keeps** [WS §5.3, §16]. `createIfAbsent` starts a
+    re-created id above every version the id had before (`InMemorySandboxWorkspaceStore` keeps the highest deleted
+    version as a floor), so a caller holding the deleted record cannot CAS its successor (ABA); the design's "stored
+    with version 1" holds only for an id the store never held. `SandboxWorkspaceStore` also states that a later `find`
+    equals what `update`/`createIfAbsent` returned, with `Instant`s kept to at least milliseconds. The contract suite
+    pins both, plus `update` ignoring `next.version()`, refusing another record's id, failing after `delete`, and
+    paging over filtered-out records.
+31. **The janitor reclaims an abandoned PROVISIONING claim** [WS §10.2, §10.4 item 1]. A claim nobody finished or took
+    over for `2 × provisionTimeout` is CASed (same generation and claim, workspace OPEN) to TERMINATED, and a sandbox
+    the claimer may have created under its key is destroyed. The design left such a slot in PROVISIONING until the
+    next connect, where it blocked the idle close and held an admission slot. Twice the takeover threshold leaves a
+    slow but live claimer, and the connect-path takeover, to go first.
+32. **A sandbox whose `status` fails, or is not visible, after `create` is destroyed** [WS §10.1] — only once the
+    FAILED CAS of this claim is won: the sandbox carries this generation's key and no one took the claim over. A label
+    mismatch is still not destroyed. (The design's rule "never destroy on the call path after a lost CAS" is about a
+    lost CAS and is unchanged.)
+33. **`connect` carries its notices on the error, and never throws raw** [WS §10.1, §15]. When the recreate that follows
+    an idle reopen or a lost/terminated slot fails, the reset or "recreated" notice is appended to that error — the
+    next call sees FAILED, not TERMINATED, and would have nothing to tell. A `RuntimeException` from the store or an
+    application `SandboxAdmission` becomes `SandboxUnavailableException`.
+34. **`closeInternal` is removed** (review 4). It had no caller since the janitor closes through the guarded
+    `closeProcedure` (departure 28, whose "stays as the unguarded internal close path" no longer holds). An unused
+    unguarded close would only invite being wired into the janitor by mistake; `closeProcedure` is the internal path.
+35. **`reopen` refuses a record that became CLOSING before its CAS** [WS §15]. The CLOSING check moved inside the CAS
+    decision; it used to return silently.
+36. **Workspace existence through `close`/`reopen` is documented, not changed** [WS §15]. `close` of an absent id is
+    success (idempotent for the owner, e.g. after the tombstone expired), so a foreign caller can tell "not
+    permitted" from success. Hiding that would make the owner's own close fail after tombstone expiry; ids
+    (`ws:{sessionId}`) are not guessable. Recorded as a known, accepted limit in the javadoc and WS §15.
+37. **The shell's exec runs in `/workspace`, and the wrapper moves into the root** [WS §9]. A new shell (no state
+    file) `cd`s to the root; a saved directory that is gone falls back to the root (`cwd=1`) or, when the root is
+    gone too, to `/workspace` (`cwd=2`, new trailer value). The notice says "the shell continues in …" instead of
+    "the command ran in …" when the command had its own `workingDirectory`. The local provider now refuses a missing
+    working directory instead of silently using `/workspace`, as a real exec server may. Whether execd refuses a
+    missing directory is still to confirm in step 4 — with this change it no longer matters to the shell.
+38. **The command never travels as an argument** [WS §9, §11.1]. The outer writes it to `run-{id}.cmd` with the
+    `printf` builtin and the inner reads it (`read -d ''`); a command whose quoted form exceeds 64 KiB is uploaded
+    through the files API and not embedded at all. Staging verification embeds its file list only up to 32 KiB; a
+    longer list is uploaded as a NUL-separated file under `.aimon-staged` and removed afterwards. What remains for
+    step 4: confirm against execd how it passes the script (one argv string or stdin) and its own request-size limit.
+39. **The state save cannot be broken by the command's `PATH` or its functions, and hides itself** [WS §9]. It uses
+    builtins and `command -p mv`, unsets functions named `builtin`/`command`, and removes its temp file when the save
+    fails. The EXIT trap turns off `-x`/`-v` and clears DEBUG/RETURN inside a silenced group before anything runs, so a
+    DEBUG trap no longer traces the save; under `set -v` the one-line trap string is still echoed (bash echoes a trap
+    string as it reads it) — documented.
+40. **A command that removes `.aimon-shell` is reported as a wrapper failure** (exit 71, "its output is lost") [WS §9,
+    §15], not as exit 0 with empty output.
+41. **A `null` timeout is no timeout** [WS §9], as core defines it: no watchdog, and an exec backstop of one day. It
+    used to become two minutes.
+42. **The timeout kill is documented as best-effort** [WS §9]: jobs the command put into their own process group
+    (`set -m`, `setsid`) survive the watchdog's `kill -KILL 0` until the sandbox goes. Killing by session or cgroup
+    needs execd — deferred to step 4.
+43. **Startup refuses `terminate-after < 3 × activity-write-interval`** [WS §13.2], so one late or failed heartbeat
+    write cannot let a running command's sandbox expire.
+44. **A fork request without a principal keeps its parent's caller** [WS §3.1, §8.2]. Found while testing §16 row 15 in
+    FORK mode: aimon-core's `SubagentBackedSkillForkExecutor` builds the fork's environment request without the
+    principal, so `callerOf(empty)` produced an anonymous caller and every skill-fork `Bash` failed "not permitted".
+    The fork acts for its parent, whose caller already passed the gate, and the parent environment it was handed is
+    its entitlement; a fork that carries a principal still gets that principal. The core gap itself (the principal
+    is not forwarded on the skill-fork path) is left to aimon-core — no core change was made here.
+45. **The janitor has a scheduler thread of its own** (assembly), and a scheduled task that throws an `Error` keeps
+    running at its next period. A failed assembly after startup validation closes the schedulers it started.
+46. **A listing over 100 000 entries fails** [WS §11.1] instead of returning a silently truncated tree to Glob/Grep.
+47. **Content search normalises its path and honours cancellation** [WS §7]: rg gets the absolute, normalised path (so
+    `./src//` and `../repo/src` read back as `src/…`), and a cancelled query kills rg. Staging verification, the seed
+    and the exec-shell sweep kill their command when interrupted, as `RunningCommand.await` asks.
+48. **Testkit behaviour** [WS §16]: the local provider refuses a missing working directory (37), answers
+    `SandboxNotFoundException` through a connection opened before `destroy`, kills every process group its commands
+    started on `destroy`/`close` (a `sleep 600 &` no longer outlives its sandbox), signals the leader when a kill
+    lands before perl's `setpgrp`, and makes no-replace writes and moves atomic (`link(2)` for files, a `mkdir(2)`
+    reservation for directories — `rename(2)` replaces). `FaultInjectingSandboxProvider` lets a one-shot rule win over
+    a standing one; `injectAt` counts since the last `resetCounts()` (javadoc corrected). Departure 24's fixed
+    `sleep 17.321` became a random timeout per run.
+49. **The provider contract suite is stricter** [WS §16]: `kill()` must end the victim's background child, a provider
+    advertising EXPIRY must report `expiresAt`, output must reach the `OutputSink`, and a connection opened before
+    `destroy` must answer not found.
+50. **A no-replace move of a symbolic link moves the link** (fixed after follow-up review 1). Departure 48's
+    `link(2)`-then-unlink path followed a symlink source on macOS — the link became a hard link to its target's
+    content, and a link to a directory was refused. A symlink source is now re-created at the target with
+    `symlink(2)` (which refuses an existing target) and then removed, as the old rename did
+    (`LocalProcessSandboxProviderTest#aNoReplaceMoveOfASymbolicLinkMovesTheLinkItself`, links to a file and to a
+    directory, plus refusal over an existing target).
