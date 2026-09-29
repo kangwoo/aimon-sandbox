@@ -461,4 +461,33 @@ class WorkspaceLifecycleIT {
                     .contains("profile 'fresh'");
         }
     }
+
+    @Test
+    void aReopenRacingACloseIsRefusedNotSilentlyIgnored() throws Exception {
+        harness.close();
+        final InMemorySandboxWorkspaceStore delegate = new InMemorySandboxWorkspaceStore();
+        final java.util.concurrent.atomic.AtomicBoolean armed = new java.util.concurrent.atomic.AtomicBoolean();
+        final SandboxWorkspaceStore store = new at.aimon.sandbox.DelegatingStore(delegate) {
+            @Override
+            public java.util.Optional<SandboxWorkspace> find(SandboxWorkspaceId id) {
+                final java.util.Optional<SandboxWorkspace> read = delegate.find(id);
+                // After reopen's first read: a close of the same workspace starts (reopened elsewhere, closing again).
+                if (armed.compareAndSet(true, false)) {
+                    final SandboxWorkspace closed = read.orElseThrow();
+                    delegate.update(id, closed.version(), closed.toBuilder().state(WorkspaceState.CLOSING).build());
+                }
+                return read;
+            }
+        };
+        harness = SandboxHarness.builder().store(store).build();
+        final SessionId session = SessionId.generate();
+        bash(harness.mainTurn(session, ALICE), "true");
+        harness.sandbox.manager().close(id(session), ALICE);
+
+        armed.set(true);
+
+        assertThatThrownBy(() -> harness.sandbox.manager().reopen(id(session), ALICE))
+                .isInstanceOf(SandboxUnavailableException.class).hasMessageContaining("still closing");
+        assertThat(harness.record(session).state()).isEqualTo(WorkspaceState.CLOSING);
+    }
 }

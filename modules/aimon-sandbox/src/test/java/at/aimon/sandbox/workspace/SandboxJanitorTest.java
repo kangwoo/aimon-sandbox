@@ -18,6 +18,9 @@ import at.aimon.core.environment.ExecutionEnvironment;
 import at.aimon.sandbox.SandboxHarness;
 import at.aimon.sandbox.binding.ShellKey;
 import at.aimon.sandbox.environment.SandboxExecutionEnvironment;
+import at.aimon.sandbox.provider.CreateSpec;
+import at.aimon.sandbox.provider.ProviderSandboxRef;
+import at.aimon.sandbox.provider.SandboxLabels;
 import at.aimon.sandbox.testkit.SandboxTestProfiles;
 
 /** {@link SandboxJanitor}: idle enforcement items (a)–(d) and the exec-shell sweep (§10.4 item 1). */
@@ -210,5 +213,57 @@ class SandboxJanitorTest {
 
         harness.sandbox.janitor().close();
         assertThat(harness.scheduler.scheduled()).isZero();
+    }
+
+    @Test
+    void anAbandonedProvisioningClaimIsReclaimedAndNoLongerBlocksTheIdleClose() {
+        final SandboxWorkspace stuck = stuckProvisioning(Duration.ofMinutes(11));
+        // What the dead claimer may have created under its key before it died.
+        final ProviderSandboxRef orphan = harness.local.create(CreateSpec.builder().key("dead").image("local")
+                .labels(SandboxLabels.labels(harness.sandbox.settings().deployment(), stuck.id().value(),
+                        stuck.incarnation(), "primary", 1, stuck.owner().tenant().value()))
+                .expiresAt(harness.clock.instant().plus(Duration.ofHours(2))).build());
+        assertThat(harness.local.sandboxCount()).isEqualTo(1);
+
+        harness.sandbox.janitor().runOnce();
+
+        final SandboxSlot slot = harness.store.find(stuck.id()).orElseThrow().slot("primary").orElseThrow();
+        assertThat(slot.state()).isEqualTo(SlotState.TERMINATED);
+        assertThat(slot.provisioning()).isEmpty();
+        assertThat(harness.local.status(orphan)).as("the claimer's sandbox is destroyed").isEmpty();
+        assertThat(harness.events).extracting(SandboxEvent::type).contains(SandboxEvent.Type.TERMINATED);
+
+        harness.clock.advance(harness.sandbox.settings().closeAfter());
+        harness.sandbox.janitor().runOnce();
+
+        final SandboxWorkspace closed = harness.store.find(stuck.id()).orElseThrow();
+        assertThat(closed.state()).isEqualTo(WorkspaceState.CLOSED);
+        assertThat(closed.closeCause()).contains(CloseCause.IDLE);
+    }
+
+    @Test
+    void aProvisioningClaimYoungerThanTwiceTheProvisionTimeoutIsLeftToItsClaimer() {
+        // Past provisionTimeout the next connect takes it over (§10.1); the janitor waits twice as long.
+        final SandboxWorkspace stuck = stuckProvisioning(Duration.ofMinutes(6));
+
+        harness.sandbox.janitor().runOnce();
+
+        assertThat(harness.store.find(stuck.id()).orElseThrow().slot("primary").orElseThrow().state())
+                .isEqualTo(SlotState.PROVISIONING);
+    }
+
+    private SandboxWorkspace stuckProvisioning(Duration claimAge) {
+        final java.time.Instant now = harness.clock.instant();
+        final String hash = harness.sandbox.profiles().find("standard").orElseThrow().contentHash();
+        return harness.store.createIfAbsent(
+                SandboxWorkspace.builder().id(SandboxWorkspaceId.of("ws:" + SessionId.generate().value()))
+                        .owner(WorkspaceOwner.of(TenantId.DEFAULT, "alice")).incarnation("stuck001").stateSince(now)
+                        .createdAt(now).lastActivityAt(now)
+                        .slots(java.util.Map.of("primary",
+                                SandboxSlot.builder().name("primary").profile("standard").profileHash(hash)
+                                        .state(SlotState.PROVISIONING).generation(1)
+                                        .provisioning(ProvisioningClaim.of(now.minus(claimAge), "dead-node"))
+                                        .lastActivityAt(now).build()))
+                        .build());
     }
 }

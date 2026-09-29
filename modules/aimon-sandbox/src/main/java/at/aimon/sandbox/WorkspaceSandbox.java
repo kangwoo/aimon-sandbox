@@ -56,6 +56,7 @@ public final class WorkspaceSandbox implements AutoCloseable {
     private final SandboxProvider provider;
     private final boolean ownProvider;
     private final SandboxScheduler scheduler;
+    private final SandboxScheduler janitorScheduler;
     private final boolean ownScheduler;
     private final SandboxWorkspaceStore store;
     private final SandboxProfileRegistry profiles;
@@ -71,28 +72,37 @@ public final class WorkspaceSandbox implements AutoCloseable {
                 builder.tenantResolver != null, builder.sessionOwnerLookup != null));
         this.ownProvider = builder.ownProvider;
         this.ownScheduler = builder.scheduler == null;
-        this.scheduler = ownScheduler ? SandboxScheduler.daemon() : builder.scheduler;
-        this.store = builder.store != null ? builder.store : new InMemorySandboxWorkspaceStore();
-        this.profiles = new SandboxProfileRegistry(settings.profiles(), settings.defaultProfile());
-        final Clock clock = builder.clock;
-        this.connections = new SandboxConnectionCache(provider, clock);
-        final CallerResolver callers = new CallerResolver(settings,
-                builder.tenantResolver != null ? builder.tenantResolver : SandboxTenantResolver.SINGLE_TENANT);
-        final SandboxAdmission admission = builder.admission != null
-                ? builder.admission
-                : settings.maxRunningPerTenant() == SandboxSettings.UNLIMITED
-                        ? SandboxAdmission.UNLIMITED
-                        : new DefaultSandboxAdmission(store, settings.maxRunningPerTenant());
-        this.manager = SandboxWorkspaceManager.builder().settings(settings).profiles(profiles).provider(provider)
-                .store(store).connections(connections).admission(admission).events(builder.eventListener)
-                .callers(callers).clock(clock).scheduler(scheduler).build();
-        this.janitor = new SandboxJanitor(manager, scheduler);
-        final SandboxBindingPolicy policy = builder.bindingPolicy != null
-                ? builder.bindingPolicy
-                : new DefaultSandboxBindingPolicy(callers, profiles, builder.sessionOwnerLookup);
-        this.environmentProvider = SandboxExecutionEnvironmentProvider.builder().policy(policy).callers(callers)
-                .manager(manager).connections(connections).profiles(profiles).store(store).settings(settings)
-                .clock(clock).build();
+        // The janitor gets a thread of its own: one pass can wait up to close-wait per closing workspace, and the
+        // heartbeats that keep running commands alive must not queue behind it.
+        this.scheduler = ownScheduler ? SandboxScheduler.daemon("aimon-sandbox-heartbeat", 2) : builder.scheduler;
+        this.janitorScheduler = ownScheduler ? SandboxScheduler.daemon("aimon-sandbox-janitor", 1) : builder.scheduler;
+        try {
+            this.store = builder.store != null ? builder.store : new InMemorySandboxWorkspaceStore();
+            this.profiles = new SandboxProfileRegistry(settings.profiles(), settings.defaultProfile());
+            final Clock clock = builder.clock;
+            this.connections = new SandboxConnectionCache(provider, clock);
+            final CallerResolver callers = new CallerResolver(settings,
+                    builder.tenantResolver != null ? builder.tenantResolver : SandboxTenantResolver.SINGLE_TENANT);
+            final SandboxAdmission admission = builder.admission != null
+                    ? builder.admission
+                    : settings.maxRunningPerTenant() == SandboxSettings.UNLIMITED
+                            ? SandboxAdmission.UNLIMITED
+                            : new DefaultSandboxAdmission(store, settings.maxRunningPerTenant());
+            this.manager = SandboxWorkspaceManager.builder().settings(settings).profiles(profiles).provider(provider)
+                    .store(store).connections(connections).admission(admission).events(builder.eventListener)
+                    .callers(callers).clock(clock).scheduler(scheduler).build();
+            this.janitor = new SandboxJanitor(manager, janitorScheduler);
+            final SandboxBindingPolicy policy = builder.bindingPolicy != null
+                    ? builder.bindingPolicy
+                    : new DefaultSandboxBindingPolicy(callers, profiles, builder.sessionOwnerLookup);
+            this.environmentProvider = SandboxExecutionEnvironmentProvider.builder().policy(policy).callers(callers)
+                    .manager(manager).connections(connections).profiles(profiles).store(store).settings(settings)
+                    .clock(clock).build();
+        } catch (RuntimeException e) {
+            // Nothing is returned to close: the threads this constructor started must not outlive the failure.
+            closeSchedulers();
+            throw e;
+        }
         log.info("Workspace sandbox ready: deployment={}, node={}, profiles={}, default={}", settings.deployment(),
                 settings.nodeId(), profiles.all().keySet(), settings.defaultProfile());
     }
@@ -160,12 +170,27 @@ public final class WorkspaceSandbox implements AutoCloseable {
     public void close() {
         janitor.close();
         connections.close();
-        if (ownScheduler) {
-            scheduler.close();
-        }
+        closeSchedulers();
         if (ownProvider) {
             provider.close();
         }
+    }
+
+    private void closeSchedulers() {
+        if (ownScheduler) {
+            scheduler.close();
+            janitorScheduler.close();
+        }
+    }
+
+    /** @return the scheduler heartbeats run on */
+    SandboxScheduler heartbeatScheduler() {
+        return scheduler;
+    }
+
+    /** @return the scheduler the janitor runs on: its own unless one scheduler was supplied for both */
+    SandboxScheduler janitorScheduler() {
+        return janitorScheduler;
     }
 
     /** Builder for {@link WorkspaceSandbox}. */
@@ -241,7 +266,10 @@ public final class WorkspaceSandbox implements AutoCloseable {
             return this;
         }
 
-        /** Default: a daemon scheduler owned (and closed) by the assembly. */
+        /**
+         * Default: daemon schedulers owned (and closed) by the assembly, one for heartbeats and one for the janitor.
+         * A supplied scheduler runs both.
+         */
         public Builder scheduler(SandboxScheduler scheduler) {
             this.scheduler = scheduler;
             return this;

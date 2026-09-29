@@ -33,6 +33,13 @@ final class SandboxStartupValidator {
 
     private static final Logger log = LoggerFactory.getLogger(SandboxStartupValidator.class);
 
+    /**
+     * How many activity writes a profile's {@code terminate-after} must span: a heartbeat writes once per
+     * {@code activity-write-interval}, and one late or failed write must not let the janitor terminate a sandbox whose
+     * command is still running.
+     */
+    static final int ACTIVITY_WRITES_PER_TERMINATE_AFTER = 3;
+
     /** Kubernetes label-value rules (§6.3). */
     static final Pattern LABEL_SAFE = Pattern.compile("[a-z0-9]([-a-z0-9_.]{0,61}[a-z0-9])?");
 
@@ -75,6 +82,7 @@ final class SandboxStartupValidator {
                 violations.add("profile '" + profile.name() + "' is defined twice");
             }
             checkProfile(profile, wiring.capabilities, violations);
+            checkTerminateAfterSpansHeartbeats(profile, settings.activityWriteInterval(), violations);
         }
         if (settings.defaultProfile() == null) {
             violations.add("default-profile is required");
@@ -161,6 +169,21 @@ final class SandboxStartupValidator {
             violations.add(p + "the provider does not advertise " + missing + " (waive isolation capabilities for "
                     + "local development only, with insecure-allow)");
         }
+    }
+
+    private static void checkTerminateAfterSpansHeartbeats(SandboxProfile profile, Duration activityWriteInterval,
+            List<String> violations) {
+        if (activityWriteInterval.isNegative() || activityWriteInterval.isZero()) {
+            return;
+        }
+        final Duration least = activityWriteInterval.multipliedBy(ACTIVITY_WRITES_PER_TERMINATE_AFTER);
+        profile.terminateAfter()
+                .filter(terminateAfter -> !terminateAfter.isNegative() && !terminateAfter.isZero()
+                        && terminateAfter.compareTo(least) < 0)
+                .ifPresent(terminateAfter -> violations.add(
+                        "profile '" + profile.name() + "': terminate-after " + terminateAfter + " must be at least "
+                                + ACTIVITY_WRITES_PER_TERMINATE_AFTER + " × activity-write-interval (" + least
+                                + "), or a running command's sandbox can expire " + "between two heartbeats"));
     }
 
     private static void warn(SandboxSettings settings) {

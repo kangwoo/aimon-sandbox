@@ -38,6 +38,11 @@ import at.aimon.sandbox.provider.SandboxProviderException;
  * checks at every public entry point, explicit and idle close with tombstones, and reopen.
  *
  * <p>
+ * Build it through {@code WorkspaceSandbox}: {@link #builder()} runs none of the startup validation (§13.2), so a
+ * hand-wired manager would silently accept profiles this version refuses — {@code pause-after}, {@code seed},
+ * shared access, credentials — and act on them as if they were not there.
+ *
+ * <p>
  * Every write is read → decide → {@code update(id, expectedVersion, next)}; on {@link StaleVersionException} the
  * record is re-read and the decision re-made, up to {@code casRetries} times (§5.3). Provider calls happen only after
  * the CAS that authorises them. A CAS lost after a provider call never destroys what the call made — the sandbox may be
@@ -95,7 +100,12 @@ public final class SandboxWorkspaceManager {
         this.seeder = new SandboxSeeder(settings.provisionTimeout());
     }
 
-    /** @return a new builder */
+    /**
+     * For tests and custom assemblies. <b>Runs no startup validation</b>: build through {@code WorkspaceSandbox}, which
+     * refuses the settings this version cannot honour (§13.2).
+     *
+     * @return a new builder
+     */
     public static Builder builder() {
         return new Builder();
     }
@@ -112,21 +122,30 @@ public final class SandboxWorkspaceManager {
      *            the execution's binding
      * @return the connected slot
      * @throws SandboxUnavailableException
-     *             with a model-facing reason when the slot cannot be used
+     *             with a model-facing reason when the slot cannot be used — also when the store or the admission
+     *             fails, and carrying the notices this call gathered (a reset the model must hear of)
      */
     public ConnectedSlot connect(SandboxBinding binding) {
         final Connect attempt = new Connect(binding);
-        while (true) {
-            try {
-                final ConnectedSlot connected = attempt.step();
-                if (connected != null) {
-                    return connected;
-                }
-            } catch (StaleVersionException e) {
-                if (++attempt.conflicts > settings.casRetries()) {
-                    throw busy(binding.workspaceId());
+        try {
+            while (true) {
+                try {
+                    final ConnectedSlot connected = attempt.step();
+                    if (connected != null) {
+                        return connected;
+                    }
+                } catch (StaleVersionException e) {
+                    if (++attempt.conflicts > settings.casRetries()) {
+                        throw busy(binding.workspaceId());
+                    }
                 }
             }
+        } catch (SandboxUnavailableException e) {
+            throw attempt.withNotices(e);
+        } catch (RuntimeException e) {
+            // A store or an application's admission failing: core's tools report "unavailable", not a raw exception.
+            throw attempt.withNotices(new SandboxUnavailableException(
+                    "the sandbox workspace cannot be used right now: " + e.getMessage(), e));
         }
     }
 
@@ -144,6 +163,18 @@ public final class SandboxWorkspaceManager {
         private Connect(SandboxBinding binding) {
             this.binding = binding;
             this.started = clock.instant();
+        }
+
+        /**
+         * The error with this call's notices appended. A reset notice (idle reopen, a lost or terminated sandbox) is
+         * otherwise lost when the recreate that follows it fails: the next call finds the slot FAILED, not
+         * TERMINATED, and has nothing to tell (§15).
+         */
+        private SandboxUnavailableException withNotices(SandboxUnavailableException e) {
+            if (notices.isEmpty()) {
+                return e;
+            }
+            return new SandboxUnavailableException(e.getMessage() + " (also: " + String.join("; ", notices) + ")", e);
         }
 
         /** @return the connected slot, or {@code null} to go round again */
@@ -336,23 +367,32 @@ public final class SandboxWorkspaceManager {
                 .environment(profile.environment()).labels(labels)
                 .expiresAt(now.plus(profile.terminateAfter().orElseThrow())).build();
         final ProviderSandboxRef ref;
-        final Optional<ProviderSandbox> status;
         try {
             ref = provider.create(spec);
+        } catch (SandboxProviderException e) {
+            throw fail(workspace, slot, profile, kindOf(e), "create", e.getMessage(), null);
+        } catch (RuntimeException e) {
+            throw fail(workspace, slot, profile, SlotFailure.Kind.TRANSIENT, "create", String.valueOf(e), null);
+        }
+        // From here the sandbox is this claim's own (created under this generation's key): a failure that records
+        // FAILED also destroys it, since no record points anyone at it any more.
+        final Optional<ProviderSandbox> status;
+        try {
             status = provider.status(ref);
         } catch (SandboxProviderException e) {
-            throw fail(workspace, slot, profile, kindOf(e), "create", e.getMessage());
+            throw fail(workspace, slot, profile, kindOf(e), "create", e.getMessage(), ref);
         } catch (RuntimeException e) {
-            throw fail(workspace, slot, profile, SlotFailure.Kind.TRANSIENT, "create", String.valueOf(e));
+            throw fail(workspace, slot, profile, SlotFailure.Kind.TRANSIENT, "create", String.valueOf(e), ref);
         }
         if (status.isEmpty()) {
             throw fail(workspace, slot, profile, SlotFailure.Kind.TRANSIENT, "create",
-                    "the created sandbox " + ref + " is not visible to the provider");
+                    "the created sandbox " + ref + " is not visible to the provider", ref);
         }
         final List<String> mismatched = SandboxLabels.mismatches(labels, status.get().labels());
         if (!mismatched.isEmpty()) {
+            // Not destroyed: a sandbox whose labels do not match may not be ours.
             throw fail(workspace, slot, profile, SlotFailure.Kind.PERMANENT, "labels",
-                    "the provider returned sandbox " + ref + " whose labels " + mismatched + " do not match");
+                    "the provider returned sandbox " + ref + " whose labels " + mismatched + " do not match", null);
         }
         final Optional<SandboxWorkspace> running = mutate(workspace.id(),
                 current -> sameClaim(current, slot).map(s -> current.withSlot(s.toBuilder().state(SlotState.RUNNING)
@@ -375,9 +415,15 @@ public final class SandboxWorkspaceManager {
                 : SlotFailure.Kind.TRANSIENT;
     }
 
-    /** CAS the claimed generation to FAILED and build the error for the caller. */
+    /**
+     * CAS the claimed generation to FAILED and build the error for the caller.
+     *
+     * @param created
+     *            the sandbox this claim created, destroyed once the FAILED CAS is won; {@code null} for none, or for
+     *            one that may not be ours
+     */
     private SandboxUnavailableException fail(SandboxWorkspace workspace, SandboxSlot slot, SandboxProfile profile,
-            SlotFailure.Kind kind, String step, String reason) {
+            SlotFailure.Kind kind, String step, String reason, ProviderSandboxRef created) {
         final Instant now = clock.instant();
         final int attempts = slot.failure().filter(f -> f.kind() == kind).map(f -> f.attempts() + 1).orElse(1);
         final SlotFailure failure = SlotFailure.builder().at(now).kind(kind).step(step).reason(reason)
@@ -387,6 +433,9 @@ public final class SandboxWorkspaceManager {
                         .provisioning(null).failure(failure).lastActiveAt(now).build())).orElse(null));
         log.warn("Provisioning {}/{} generation {} failed ({} {}): {}", workspace.id(), slot.name(), slot.generation(),
                 kind, step, reason);
+        if (stored.isPresent() && created != null) {
+            destroyQuietly(created);
+        }
         return stored.map(w -> failed(w.slot(slot.name()).orElseThrow()))
                 .orElseGet(() -> new SandboxUnavailableException("the sandbox could not be provisioned: " + reason));
     }
@@ -435,7 +484,9 @@ public final class SandboxWorkspaceManager {
 
     /**
      * Closes a workspace for good: its sandboxes are destroyed and the record stays as a tombstone for
-     * {@code closedRetention}, answering "workspace closed" until {@link #reopen} (§10.5). Idempotent.
+     * {@code closedRetention}, answering "workspace closed" until {@link #reopen} (§10.5). Idempotent, so closing an
+     * id that has no record is success — which also means a foreign caller learns whether an id exists ("not
+     * permitted" or nothing), the one thing §15 lets the owner check reveal. Workspace ids are not guessable.
      *
      * @param id
      *            the workspace
@@ -463,40 +514,33 @@ public final class SandboxWorkspaceManager {
      * @param caller
      *            the principal asking; must pass the owner check
      * @throws SandboxUnavailableException
-     *             when the caller may not reopen it, it does not exist, or it is still closing
+     *             when the caller may not reopen it, it does not exist, or it is still closing — also when it became
+     *             CLOSING after this call first read it
      */
     public void reopen(SandboxWorkspaceId id, Principal caller) {
         final WorkspaceOwner who = callers.callerOf(Optional.ofNullable(caller));
         final SandboxWorkspace found = store.find(id)
                 .orElseThrow(() -> new SandboxUnavailableException("no such sandbox workspace"));
         checkOwner(found, who);
-        if (found.state() == WorkspaceState.CLOSING) {
-            throw new SandboxUnavailableException(
-                    "the sandbox workspace is still closing; reopen it once it is " + "closed");
-        }
-        mutate(id, current -> current.state() == WorkspaceState.CLOSED ? reopened(current, clock.instant()) : null)
-                .ifPresent(reopened -> {
-                    if (!reopened.incarnation().equals(found.incarnation())) {
-                        emit(SandboxEvent.Type.WORKSPACE_REOPENED, reopened, null, "reopened by the application");
-                    }
-                });
+        // Decided on the freshly read record inside the CAS: a close that started since the first read is refused,
+        // not silently ignored.
+        mutate(id, current -> {
+            if (current.state() == WorkspaceState.CLOSING) {
+                throw new SandboxUnavailableException(
+                        "the sandbox workspace is still closing; reopen it once it is closed");
+            }
+            return current.state() == WorkspaceState.CLOSED ? reopened(current, clock.instant()) : null;
+        }).ifPresent(reopened -> {
+            if (!reopened.incarnation().equals(found.incarnation())) {
+                emit(SandboxEvent.Type.WORKSPACE_REOPENED, reopened, null, "reopened by the application");
+            }
+        });
     }
 
     /**
-     * The janitor's close path (§8.3: it is not a public entry point and takes no caller).
-     *
-     * @param id
-     *            the workspace
-     * @param cause
-     *            why
-     */
-    void closeInternal(SandboxWorkspaceId id, CloseCause cause) {
-        closeProcedure(id, cause, current -> true);
-    }
-
-    /**
-     * The close procedure (§10.5, without the volume steps). Every step is idempotent, so the janitor can resume a
-     * close stuck in CLOSING from the top.
+     * The close procedure (§10.5, without the volume steps) behind {@link #close} and the janitor's closes, which are
+     * internal paths with no caller (§8.3). Every step is idempotent, so the janitor can resume a close stuck in
+     * CLOSING from the top.
      *
      * @param guard
      *            re-checked on the freshly read record, whatever its state, before the state-switch CAS; a refusal
@@ -584,6 +628,57 @@ public final class SandboxWorkspaceManager {
         before[0].providerRef().ifPresent(this::destroyQuietly);
         emit(SandboxEvent.Type.TERMINATED, terminated.get(), before[0], cause);
         return true;
+    }
+
+    /**
+     * Reclaims a PROVISIONING slot whose claim nobody finished or took over (§10.4 item 1 as amended in implementation
+     * step 3): its claimer died, or its {@code create} or RUNNING CAS failed in a way that left the claim behind. Such
+     * a slot would otherwise block the idle close and hold an admission slot until someone connects to that session.
+     * The claim must be {@link #provisioningAbandoned abandoned} — twice {@code provisionTimeout}, longer than any
+     * claimer still working and than the connect-path takeover — and still the same on the freshly read record. The
+     * slot becomes TERMINATED, and a sandbox the claimer may have created under its key is destroyed.
+     *
+     * @return whether this call reclaimed it
+     */
+    boolean reclaimProvisioning(SandboxWorkspaceId id, SandboxSlot slot) {
+        final ProvisioningClaim claim = slot.provisioning().orElse(null);
+        if (slot.state() != SlotState.PROVISIONING || claim == null) {
+            return false;
+        }
+        final SandboxSlot[] before = new SandboxSlot[1];
+        final Optional<SandboxWorkspace> reclaimed = mutate(id,
+                current -> current.state() != WorkspaceState.OPEN
+                        ? null
+                        : current.slot(slot.name())
+                                .filter(s -> s.state() == SlotState.PROVISIONING && s.generation() == slot.generation()
+                                        && s.provisioning().equals(Optional.of(claim))
+                                        && provisioningAbandoned(claim, clock.instant()))
+                                .map(s -> {
+                                    before[0] = s;
+                                    return current.withSlot(s.terminated(clock.instant()));
+                                }).orElse(null));
+        if (reclaimed.isEmpty()) {
+            return false;
+        }
+        final String key = SandboxLabels.key(settings.deployment(), id.value(), reclaimed.get().incarnation(),
+                slot.name(), slot.generation());
+        final Map<String, String> selector = new LinkedHashMap<>(
+                SandboxLabels.workspaceSelector(settings.deployment(), id.value()));
+        selector.put(SandboxLabels.SANDBOX_KEY, SandboxLabels.h(key));
+        try {
+            provider.list(selector).forEach(sandbox -> destroyQuietly(sandbox.ref()));
+        } catch (RuntimeException e) {
+            log.warn("Listing the sandbox of abandoned claim {} failed; it is left to provider expiry: {}", key,
+                    e.getMessage());
+        }
+        emit(SandboxEvent.Type.TERMINATED, reclaimed.get(), before[0],
+                "provisioning claim of " + claim.nodeId() + " abandoned since " + claim.since());
+        return true;
+    }
+
+    /** Whether a provisioning claim is old enough for the janitor to reclaim: twice {@code provisionTimeout}. */
+    boolean provisioningAbandoned(ProvisioningClaim claim, Instant now) {
+        return !now.isBefore(claim.since().plus(settings.provisionTimeout().multipliedBy(2)));
     }
 
     /**
@@ -688,12 +783,17 @@ public final class SandboxWorkspaceManager {
                 + " concurrent updates in a row); retry the call");
     }
 
+    /**
+     * Destroys, then evicts: a connection a concurrent call cached between an eviction and the destroy would outlive
+     * the sandbox, and nothing would evict it again. After the destroy, a new {@code connect} answers not found.
+     */
     void destroyQuietly(ProviderSandboxRef ref) {
-        connections.evict(ref);
         try {
             provider.destroy(ref);
         } catch (RuntimeException e) {
             log.warn("Destroying {} failed; it is left to provider expiry: {}", ref, e.getMessage());
+        } finally {
+            connections.evict(ref);
         }
     }
 

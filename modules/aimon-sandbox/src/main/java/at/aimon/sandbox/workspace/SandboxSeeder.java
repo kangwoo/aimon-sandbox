@@ -10,6 +10,7 @@ import at.aimon.sandbox.provider.Capability;
 import at.aimon.sandbox.provider.ExecOutcome;
 import at.aimon.sandbox.provider.ExecSpec;
 import at.aimon.sandbox.provider.OutputSink;
+import at.aimon.sandbox.provider.RunningCommand;
 import at.aimon.sandbox.provider.SandboxConnection;
 import at.aimon.sandbox.provider.SandboxProviderException;
 
@@ -72,12 +73,15 @@ final class SandboxSeeder {
      *             (transient) when the seed could not run at all
      */
     Optional<Failure> seed(SandboxConnection connection, SandboxProfile profile, String root) {
+        final RunningCommand command = connection.run(ExecSpec.builder().command(script(profile, root))
+                .workingDirectory("/workspace").environment(profile.environment()).timeout(provisionTimeout)
+                .maxCaptureBytes(64 * 1024).build(), OutputSink.DISCARD);
         final ExecOutcome outcome;
         try {
-            outcome = connection.run(ExecSpec.builder().command(script(profile, root)).workingDirectory("/workspace")
-                    .environment(profile.environment()).timeout(provisionTimeout).maxCaptureBytes(64 * 1024).build(),
-                    OutputSink.DISCARD).await(provisionTimeout);
+            outcome = command.await(provisionTimeout);
         } catch (InterruptedException e) {
+            // RunningCommand.await: the seed keeps running unless the one who stops waiting kills it.
+            command.kill();
             Thread.currentThread().interrupt();
             throw new SandboxProviderException("interrupted while seeding the sandbox");
         }

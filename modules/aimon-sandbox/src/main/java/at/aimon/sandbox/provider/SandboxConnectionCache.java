@@ -55,7 +55,19 @@ public final class SandboxConnectionCache implements AutoCloseable {
      *             when the sandbox is gone
      */
     public SandboxConnection get(ProviderSandboxRef ref) {
-        return connections.computeIfAbsent(ref, provider::connect);
+        final SandboxConnection cached = connections.get(ref);
+        if (cached != null) {
+            return cached;
+        }
+        // Connected outside the map: computeIfAbsent would hold the map bin's lock through a remote call and stall
+        // every other sandbox hashed to that bin. Two racing callers may both connect; the loser closes its own.
+        final SandboxConnection fresh = provider.connect(ref);
+        final SandboxConnection raced = connections.putIfAbsent(ref, fresh);
+        if (raced != null) {
+            closeQuietly(fresh);
+            return raced;
+        }
+        return fresh;
     }
 
     /**
@@ -153,7 +165,8 @@ public final class SandboxConnectionCache implements AutoCloseable {
     }
 
     /**
-     * Marks an {@code exec:} shell directory as in use by a command.
+     * Marks an {@code exec:} shell directory as in use by a command. Waits while the sweep is deleting that directory,
+     * so a command never starts in a directory that is being removed under it.
      *
      * @param ref
      *            the sandbox
@@ -161,8 +174,23 @@ public final class SandboxConnectionCache implements AutoCloseable {
      *            the shell's state directory
      */
     public void execShellStarted(ProviderSandboxRef ref, String directory) {
+        final LockKey key = new LockKey(ref, directory);
+        boolean interrupted = false;
         synchronized (execShells) {
-            execShells.computeIfAbsent(new LockKey(ref, directory), k -> new ExecShell()).running++;
+            ExecShell shell = execShells.get(key);
+            while (shell != null && shell.sweeping) {
+                try {
+                    execShells.wait();
+                } catch (InterruptedException e) {
+                    // The sweep's own exec is bounded; finish waiting and keep the interrupt for the caller.
+                    interrupted = true;
+                }
+                shell = execShells.get(key);
+            }
+            execShells.computeIfAbsent(key, k -> new ExecShell()).running++;
+        }
+        if (interrupted) {
+            Thread.currentThread().interrupt();
         }
     }
 
@@ -176,9 +204,13 @@ public final class SandboxConnectionCache implements AutoCloseable {
      */
     public void execShellFinished(ProviderSandboxRef ref, String directory) {
         synchronized (execShells) {
-            final ExecShell shell = execShells.computeIfAbsent(new LockKey(ref, directory), k -> new ExecShell());
-            shell.running = Math.max(0, shell.running - 1);
-            shell.finishedAt = clock.instant();
+            // Absent when the sandbox was evicted meanwhile: re-adding it would make the sweep connect to a sandbox
+            // that is gone, on every pass.
+            final ExecShell shell = execShells.get(new LockKey(ref, directory));
+            if (shell != null) {
+                shell.running = Math.max(0, shell.running - 1);
+                shell.finishedAt = clock.instant();
+            }
         }
     }
 
@@ -202,15 +234,34 @@ public final class SandboxConnectionCache implements AutoCloseable {
         }
         int deleted = 0;
         for (LockKey key : due) {
+            final ExecShell shell;
+            synchronized (execShells) {
+                // Re-checked now: a command may have started since the snapshot. From here until the delete ends, a
+                // command starting on this directory waits (execShellStarted).
+                shell = execShells.get(key);
+                if (shell == null || shell.running != 0 || shell.finishedAt == null
+                        || shell.finishedAt.isAfter(cutoff)) {
+                    continue;
+                }
+                shell.sweeping = true;
+            }
             try {
                 final String d = key.name.replace("'", "'\\''");
-                final ExecOutcome outcome = get(key.ref).run(
+                final RunningCommand command = get(key.ref).run(
                         ExecSpec.builder()
                                 .command("d='" + d
                                         + "'; [ -d \"$d\" ] || exit 0; exec 9>\"$d/lock\" && flock -n 9 && rm -rf "
                                         + "\"$d\"")
                                 .timeout(Duration.ofSeconds(30)).maxCaptureBytes(4096).build(),
-                        OutputSink.DISCARD).await(Duration.ofSeconds(30));
+                        OutputSink.DISCARD);
+                final ExecOutcome outcome;
+                try {
+                    outcome = command.await(Duration.ofSeconds(30));
+                } catch (InterruptedException e) {
+                    // RunningCommand.await: the command keeps running unless the caller kills it.
+                    command.kill();
+                    throw e;
+                }
                 if (outcome.exitCode() == 0) {
                     deleted++;
                     forget(key);
@@ -222,6 +273,11 @@ public final class SandboxConnectionCache implements AutoCloseable {
                 return deleted;
             } catch (RuntimeException e) {
                 log.debug("Could not sweep exec shell {} of {}: {}", key.name, key.ref, e.getMessage());
+            } finally {
+                synchronized (execShells) {
+                    shell.sweeping = false;
+                    execShells.notifyAll();
+                }
             }
         }
         return deleted;
@@ -289,6 +345,7 @@ public final class SandboxConnectionCache implements AutoCloseable {
     private static final class ExecShell {
         private int running;
         private Instant finishedAt;
+        private boolean sweeping;
     }
 
     private static final class LockKey {

@@ -5,6 +5,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * The default store: a map in this JVM. <b>Single node only</b> (docs/design/workspace-sandbox.md §5.3) — a restart
@@ -17,6 +18,11 @@ public final class InMemorySandboxWorkspaceStore implements SandboxWorkspaceStor
     // ConcurrentHashMap and not a sorted concurrent map: its compute methods apply the function at most once and
     // atomically, which is what makes them a CAS. ConcurrentSkipListMap may re-run the function under contention.
     private final ConcurrentHashMap<SandboxWorkspaceId, SandboxWorkspace> records = new ConcurrentHashMap<>();
+    /**
+     * The highest version any deleted record had. A record created afterwards starts above it, whatever its id, so a
+     * stale CAS against a deleted record can never match its successor (no ABA) — without remembering every id.
+     */
+    private final AtomicLong deletedVersionFloor = new AtomicLong();
 
     @Override
     public Optional<SandboxWorkspace> find(SandboxWorkspaceId id) {
@@ -26,7 +32,8 @@ public final class InMemorySandboxWorkspaceStore implements SandboxWorkspaceStor
     @Override
     public SandboxWorkspace createIfAbsent(SandboxWorkspace initial) {
         Objects.requireNonNull(initial, "initial must not be null");
-        return records.computeIfAbsent(initial.id(), id -> initial.toBuilder().version(1).build());
+        return records.computeIfAbsent(initial.id(),
+                id -> initial.toBuilder().version(deletedVersionFloor.get() + 1).build());
     }
 
     @Override
@@ -57,6 +64,8 @@ public final class InMemorySandboxWorkspaceStore implements SandboxWorkspaceStor
                 stale[0] = true;
                 return current;
             }
+            // Inside the map's atomic section: a createIfAbsent of this id waits for it, so it sees the new floor.
+            deletedVersionFloor.accumulateAndGet(current.version(), Math::max);
             return null;
         });
         if (stale[0]) {

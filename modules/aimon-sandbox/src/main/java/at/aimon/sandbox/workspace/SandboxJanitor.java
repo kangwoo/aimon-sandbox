@@ -21,6 +21,9 @@ import at.aimon.sandbox.profile.SandboxProfile;
  * <ol>
  * <li><b>terminate</b> — every RUNNING slot idle for its profile's {@code terminateAfter} (the longest configured
  * value when its profile was removed);</li>
+ * <li><b>reclaim</b> — every PROVISIONING slot whose claim is older than twice {@code provisionTimeout}: its claimer
+ * is gone, and nobody connected to take it over (§10.1). It becomes TERMINATED, so it no longer blocks the idle close
+ * or holds an admission slot;</li>
  * <li><b>idle close</b> — every OPEN workspace with no live slot for {@code closeAfter}, counted from the latest of
  * its creation, its last reopen and its slots' {@code lastActiveAt};</li>
  * <li><b>resume</b> — every close stuck in CLOSING for {@code closeResumeAfter}, from the top;</li>
@@ -105,6 +108,11 @@ public final class SandboxJanitor implements AutoCloseable {
 
     private void enforceIdle(SandboxWorkspace workspace, Instant now) {
         for (SandboxSlot slot : workspace.slots().values()) {
+            if (slot.state() == SlotState.PROVISIONING
+                    && slot.provisioning().map(claim -> manager.provisioningAbandoned(claim, now)).orElse(false)) {
+                manager.reclaimProvisioning(workspace.id(), slot);
+                continue;
+            }
             if (slot.state() != SlotState.RUNNING) {
                 continue;
             }

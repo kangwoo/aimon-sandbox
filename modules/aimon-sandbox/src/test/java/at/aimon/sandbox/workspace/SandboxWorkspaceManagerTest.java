@@ -7,9 +7,11 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -18,11 +20,13 @@ import at.aimon.core.agent.session.SessionId;
 import at.aimon.core.environment.ExecutionEnvironment;
 import at.aimon.core.shell.ShellCommandResult;
 import at.aimon.sandbox.DelegatingProvider;
+import at.aimon.sandbox.DelegatingStore;
 import at.aimon.sandbox.SandboxHarness;
 import at.aimon.sandbox.provider.CreateSpec;
 import at.aimon.sandbox.provider.ProviderSandbox;
 import at.aimon.sandbox.provider.ProviderSandboxRef;
 import at.aimon.sandbox.provider.SandboxLabels;
+import at.aimon.sandbox.provider.SandboxNotFoundException;
 import at.aimon.sandbox.provider.SandboxProviderException;
 import at.aimon.sandbox.testkit.FaultInjectingSandboxProvider.Fault;
 import at.aimon.sandbox.testkit.FaultInjectingSandboxProvider.Operation;
@@ -233,6 +237,152 @@ class SandboxWorkspaceManagerTest {
         assertThat(provisioned.generation()).contains(1L);
         assertThat(provisioned.profile()).contains("standard");
         assertThat(provisioned.owner().principalId()).isEqualTo("alice");
+    }
+
+    @Test
+    void aResetNoticeRidesOnTheErrorWhenTheRecreateAfterAnIdleCloseFails() throws Exception {
+        final SessionId session = SessionId.generate();
+        bash(harness.mainTurn(session, ALICE), "true");
+        harness.clock.advance(Duration.ofHours(2));
+        harness.sandbox.janitor().runOnce();
+        harness.clock.advance(Duration.ofHours(24));
+        harness.sandbox.janitor().runOnce();
+        assertThat(harness.record(session).closeCause()).contains(CloseCause.IDLE);
+        harness.faults.injectOnce(Operation.CREATE, Fault.fail(SandboxProviderException.Kind.TRANSIENT));
+
+        // The next call finds the slot FAILED, not TERMINATED, and has no reset to report: this error is the only
+        // place the model hears that /workspace was reset.
+        assertThatThrownBy(() -> bash(harness.mainTurn(session, ALICE), "true"))
+                .isInstanceOf(SandboxUnavailableException.class).hasMessageContaining("could not be provisioned")
+                .hasMessageContaining(SandboxWorkspaceManager.RESET_NOTICE);
+    }
+
+    @Test
+    void aRecreatedNoticeRidesOnTheErrorWhenTheRecreateOfATerminatedSlotFails() throws Exception {
+        final SessionId session = SessionId.generate();
+        bash(harness.mainTurn(session, ALICE), "true");
+        harness.clock.advance(Duration.ofHours(2));
+        harness.sandbox.janitor().runOnce();
+        assertThat(harness.primary(session).state()).isEqualTo(SlotState.TERMINATED);
+        harness.faults.injectOnce(Operation.CREATE, Fault.fail(SandboxProviderException.Kind.TRANSIENT));
+
+        assertThatThrownBy(() -> bash(harness.mainTurn(session, ALICE), "true"))
+                .isInstanceOf(SandboxUnavailableException.class).hasMessageContaining("the sandbox was recreated");
+    }
+
+    @Test
+    void aStoreThatRoundsInstantsDoesNotFakeALostRunningCas() throws Exception {
+        harness.close();
+        // A store that keeps milliseconds, as a database column would: what it returns differs from what was passed.
+        final SandboxWorkspaceStore rounding = new DelegatingStore(new InMemorySandboxWorkspaceStore()) {
+            @Override
+            public SandboxWorkspace update(SandboxWorkspaceId id, long expectedVersion, SandboxWorkspace next) {
+                final Map<String, SandboxSlot> slots = new HashMap<>();
+                next.slots().forEach((name, slot) -> slots.put(name, slot.toBuilder()
+                        .provisioning(slot.provisioning().map(claim -> ProvisioningClaim
+                                .of(claim.since().truncatedTo(ChronoUnit.MILLIS), claim.nodeId())).orElse(null))
+                        .build()));
+                return delegate.update(id, expectedVersion, next.toBuilder().slots(slots).build());
+            }
+        };
+        harness = SandboxHarness.builder().store(rounding).settings(s -> s.provisionTimeout(Duration.ofSeconds(2)))
+                .build();
+        harness.clock.advance(Duration.ofNanos(123_456_789));
+        final SessionId session = SessionId.generate();
+
+        final ShellCommandResult result = bash(harness.mainTurn(session, ALICE), "echo rounded");
+
+        assertThat(result.stdout()).isEqualTo("rounded\n");
+        assertThat(harness.primary(session).state()).isEqualTo(SlotState.RUNNING);
+        assertThat(harness.faults.calls(Operation.CREATE)).isEqualTo(1);
+    }
+
+    @Test
+    void conflictsOnTheClaimDoNotUseUpTheRecreateBudget() throws Exception {
+        harness.close();
+        final AtomicInteger claimConflicts = new AtomicInteger();
+        // Every claim CAS loses to a concurrent write first, more often than the per-call recreate budget (3).
+        final SandboxWorkspaceStore contended = new DelegatingStore(new InMemorySandboxWorkspaceStore()) {
+            @Override
+            public SandboxWorkspace update(SandboxWorkspaceId id, long expectedVersion, SandboxWorkspace next) {
+                final boolean claim = next.slot("primary").map(slot -> slot.state() == SlotState.PROVISIONING)
+                        .orElse(false)
+                        && delegate.find(id).flatMap(current -> current.slot("primary")).map(SandboxSlot::state)
+                                .map(state -> state != SlotState.PROVISIONING).orElse(true);
+                if (claim && claimConflicts.incrementAndGet() <= 4) {
+                    final SandboxWorkspace current = delegate.find(id).orElseThrow();
+                    delegate.update(id, current.version(), current);
+                }
+                return delegate.update(id, expectedVersion, next);
+            }
+        };
+        harness = SandboxHarness.builder().store(contended).settings(s -> s.casRetries(10)).build();
+
+        final ShellCommandResult result = bash(harness.mainTurn(SessionId.generate(), ALICE), "echo claimed");
+
+        assertThat(result.stdout()).isEqualTo("claimed\n");
+        assertThat(claimConflicts.get()).isGreaterThan(4);
+        assertThat(harness.faults.calls(Operation.CREATE)).isEqualTo(1);
+    }
+
+    @Test
+    void aSandboxWhoseStatusFailsAfterCreateIsDestroyed() {
+        final SessionId session = SessionId.generate();
+        harness.faults.injectOnce(Operation.STATUS, Fault.fail(SandboxProviderException.Kind.TRANSIENT));
+
+        assertThatThrownBy(() -> bash(harness.mainTurn(session, ALICE), "true"))
+                .hasMessageContaining("could not be provisioned");
+
+        assertThat(harness.primary(session).state()).isEqualTo(SlotState.FAILED);
+        assertThat(harness.local.sandboxCount()).as("the created sandbox is ours and unused: destroyed").isZero();
+    }
+
+    @Test
+    void aFailingStoreIsReportedAsUnavailableNotRaw() {
+        harness.close();
+        final SandboxWorkspaceStore broken = new DelegatingStore(new InMemorySandboxWorkspaceStore()) {
+            @Override
+            public SandboxWorkspace createIfAbsent(SandboxWorkspace initial) {
+                // Only connect creates records; resolve reads, and core already reports its failures itself.
+                throw new IllegalStateException("database is down");
+            }
+        };
+        harness = SandboxHarness.builder().store(broken).build();
+
+        assertThatThrownBy(() -> bash(harness.mainTurn(SessionId.generate(), ALICE), "true"))
+                .isInstanceOf(SandboxUnavailableException.class).hasMessageContaining("database is down");
+    }
+
+    @Test
+    void aDestroyedSandboxLeavesNoConnectionCachedByACallRacingTheDestroy() {
+        harness.close();
+        final SandboxHarness[] self = new SandboxHarness[1];
+        final ProviderSandboxRef[] created = new ProviderSandboxRef[1];
+        harness = SandboxHarness.builder().decorate((provider, clock) -> new DelegatingProvider(provider) {
+            @Override
+            public ProviderSandboxRef create(CreateSpec spec) {
+                created[0] = super.create(spec);
+                return created[0];
+            }
+
+            @Override
+            public void destroy(ProviderSandboxRef ref) {
+                // A concurrent call looks the sandbox up just before it goes, and caches a connection to it.
+                self[0].sandbox.connections().get(ref);
+                super.destroy(ref);
+            }
+        }).build();
+        self[0] = harness;
+        // A status failure after create destroys the new sandbox exactly once (M5); a close would destroy every
+        // recorded sandbox a second time and evict a stale connection by accident.
+        harness.faults.injectOnce(Operation.STATUS, Fault.fail(SandboxProviderException.Kind.TRANSIENT));
+
+        assertThatThrownBy(() -> bash(harness.mainTurn(SessionId.generate(), ALICE), "true"))
+                .hasMessageContaining("could not be provisioned");
+
+        assertThat(harness.local.sandboxCount()).isZero();
+        assertThatThrownBy(() -> harness.sandbox.connections().get(created[0])).as("no stale connection stays cached")
+                .isInstanceOf(SandboxNotFoundException.class);
     }
 
     private SandboxWorkspace stuck(SessionId session, ProvisioningClaim claim) {

@@ -32,11 +32,26 @@ public interface SandboxScheduler extends AutoCloseable {
     @Override
     void close();
 
-    /** @return a scheduler on two daemon threads */
+    /** @return a scheduler on two daemon threads named {@code aimon-sandbox-N} */
     static SandboxScheduler daemon() {
+        return daemon("aimon-sandbox", 2);
+    }
+
+    /**
+     * A scheduler on daemon threads. A task that throws anything — an {@link Error} too — is logged and runs again at
+     * its next period: a {@code ScheduledExecutorService} would otherwise cancel every later run silently, and the
+     * janitor or a heartbeat would stop until restart.
+     *
+     * @param name
+     *            the thread name prefix
+     * @param threads
+     *            how many threads
+     * @return the scheduler
+     */
+    static SandboxScheduler daemon(String name, int threads) {
         final AtomicInteger counter = new AtomicInteger();
-        final ScheduledExecutorService executor = Executors.newScheduledThreadPool(2, runnable -> {
-            final Thread thread = new Thread(runnable, "aimon-sandbox-" + counter.incrementAndGet());
+        final ScheduledExecutorService executor = Executors.newScheduledThreadPool(threads, runnable -> {
+            final Thread thread = new Thread(runnable, name + "-" + counter.incrementAndGet());
             thread.setDaemon(true);
             return thread;
         });
@@ -46,8 +61,9 @@ public interface SandboxScheduler extends AutoCloseable {
                 final ScheduledFuture<?> future = executor.scheduleAtFixedRate(() -> {
                     try {
                         task.run();
-                    } catch (RuntimeException e) {
-                        org.slf4j.LoggerFactory.getLogger(SandboxScheduler.class).warn("Scheduled task failed", e);
+                    } catch (Throwable e) {
+                        // Anything: an escaping throwable would cancel every later run (see the javadoc).
+                        org.slf4j.LoggerFactory.getLogger(SandboxScheduler.class).error("Scheduled task failed", e);
                     }
                 }, period.toMillis(), period.toMillis(), TimeUnit.MILLISECONDS);
                 return () -> future.cancel(false);

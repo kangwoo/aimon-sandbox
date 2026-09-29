@@ -148,4 +148,18 @@ class SandboxStartupValidatorTest {
                             e -> assertThat(e.violations()).hasSizeGreaterThanOrEqualTo(3));
         }
     }
+
+    @Test
+    void terminateAfterMustSpanSeveralActivityWrites() {
+        final SandboxSettings tooShort = SandboxTestProfiles
+                .settings(local().terminateAfter(Duration.ofSeconds(60)).build())
+                .activityWriteInterval(Duration.ofSeconds(30)).build();
+        final SandboxSettings enough = SandboxTestProfiles
+                .settings(local().terminateAfter(Duration.ofSeconds(90)).build())
+                .activityWriteInterval(Duration.ofSeconds(30)).build();
+
+        assertThat(violations(tooShort, LOCAL, false, false))
+                .anyMatch(v -> v.contains("terminate-after PT1M must be at least 3 × activity-write-interval"));
+        assertThat(violations(enough, LOCAL, false, false)).isEmpty();
+    }
 }
