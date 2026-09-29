@@ -1472,7 +1472,9 @@ aimon:
 샌드박스 이미지가 지켜야 하는 것: `bash` · coreutils(`sha256sum`) · util-linux `flock` · `git` · `rg`(ripgrep) · uid 1000
 `sandbox` 사용자 · 그 사용자 소유의 `/workspace`. OpenSandbox 가 execd 를 주입하므로 이미지가 execd 를 포함할 필요는
 없다(구현 시 확인). 계약을 벗어난 이미지는 첫 프로비저닝의 seed 단계에서 `command -v git rg flock sha256sum` 검사로 실패시킨다.
-실패를 늦게 발견하면 `Grep` 이 원인 모를 에러를 낸다.
+실패를 늦게 발견하면 `Grep` 이 원인 모를 에러를 낸다. `/workspace` 가 없거나 쓸 수 없거나 그 안의 seed 락을 열 수 없는
+것도 같은 계약 위반이다. seed 는 락을 잡기 전에 이를 확인하고 FAILED(영구, step `workspace`)로 끝낸다 — 락 경합(일시
+장애)으로 보고해 매 호출마다 다시 시도하지 않는다.
 
 **실행 uid 는 execd 의 uid 다.** OpenSandbox 의 files API 와 명령은 execd 프로세스의 사용자로 돈다. 그래서 "uid 1000 으로
 돈다"는 이미지와 SecurityContext(`runAsUser: 1000`, `runAsNonRoot`)가 함께 지켜야 하고, seed 의 `id -u` 검사가 그 결과를

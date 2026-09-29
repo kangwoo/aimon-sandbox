@@ -598,7 +598,8 @@ successful verification is never followed by a delete while the lock is held.
 
 ### 6.9 Seed, step-3 subset (WS §11.3, §7)
 
-One exec that takes the seed lock **on an fd** (`exec 8>/workspace/.aimon-seed.lock; flock -w {provisionTimeout} 8` — the same form as the shell lock, the only forms the local provider's `flock` shim supports): `command -v git rg flock sha256sum` (image contract; on the local
+One exec that checks `/workspace` is a writable directory (`fail workspace` otherwise) and then takes the seed lock
+**on an fd**, failing permanently when the lock file cannot be opened (`exec 8>/workspace/.aimon-seed.lock; flock -w {provisionTimeout} 8` — the same form as the shell lock, the only forms the local provider's `flock` shim supports): `command -v git rg flock sha256sum` (image contract; on the local
 provider `flock`/`rg` may be the testkit shims of §6.8), `uname -s` lower-cased = `profile.platform`, and — when the
 profile declares `osVersion` — `uname -sr` matched against it as a glob (`Linux 6.*` for the doc's `Linux 6.x`
 example, `x` read as `*`); an undeclared `osVersion` is not checked, `id -u ≠ 0` and no service-account token (both skipped when
@@ -1129,3 +1130,10 @@ document says. WS is updated in the same change; the section named in brackets i
     only when there is no trailer: a timeout (which reads `.out`/`.err` first), a wrapper failure or a provider error
     (`SandboxShellIT#theNormalPathMakesNoPerFileCleanupCalls`, `#aTimedOutCommandsRunFilesAreRemovedFromTheJvm`,
     `ShellWrapperTest#theEpilogueRemovesTheRunFilesBeforePrintingTheTrailer`).
+53. **A sandbox without a usable `/workspace` is FAILED(permanent)** [WS §13.3, §11.3]. `exec 8>/workspace/.aimon-seed.lock`
+    that fails does not stop a non-POSIX bash (verified under `/bin/bash` 3.2), so `flock` then failed on the missing
+    fd and the seed reported "another seed of this sandbox did not finish" — a transient failure, retried on every
+    call with no FAILED record and no backoff. The seed now checks `[ -d /workspace ] && [ -w /workspace ]` before
+    the image contract and fails on the `exec` itself, both as step `workspace`
+    (`SandboxSeederTest#aWorkspaceThatIsNotWritableIsAPermanentFailure`, `#aSeedLockThatCannotBeOpenedIsAPermanentFailure`,
+    `SandboxWorkspaceManagerTest#anUnusableWorkspaceIsAPermanentSeedFailure`).

@@ -5,6 +5,9 @@ import static at.aimon.sandbox.SandboxHarness.bash;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.nio.file.Files;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
@@ -14,6 +17,7 @@ import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import at.aimon.core.agent.session.SessionId;
@@ -143,6 +147,32 @@ class SandboxWorkspaceManagerTest {
         assertThat(failure.kind()).isEqualTo(SlotFailure.Kind.PERMANENT);
         assertThat(failure.reason()).contains(SandboxLabels.OWNER);
         assertThat(harness.local.sandboxCount()).as("never destroyed: it may be someone else's").isEqualTo(1);
+    }
+
+    @Test
+    @DisplayName("§13.3: a sandbox whose /workspace lock cannot be opened is FAILED(permanent), not retried as busy")
+    void anUnusableWorkspaceIsAPermanentSeedFailure() {
+        harness.close();
+        harness = SandboxHarness.builder().decorate((provider, clock) -> new DelegatingProvider(provider) {
+            @Override
+            public ProviderSandboxRef create(CreateSpec spec) {
+                final ProviderSandboxRef ref = super.create(spec);
+                try {
+                    Files.createDirectories(harness.local.hostRoot(ref).resolve("workspace/.aimon-seed.lock"));
+                } catch (IOException e) {
+                    throw new UncheckedIOException(e);
+                }
+                return ref;
+            }
+        }).build();
+        final SessionId session = SessionId.generate();
+
+        assertThatThrownBy(() -> bash(harness.mainTurn(session, ALICE), "true"))
+                .hasMessageContaining("cannot open /workspace/.aimon-seed.lock")
+                .hasMessageContaining("[step workspace]").hasMessageNotContaining("another seed");
+
+        assertThat(harness.primary(session).state()).isEqualTo(SlotState.FAILED);
+        assertThat(harness.primary(session).failure().orElseThrow().kind()).isEqualTo(SlotFailure.Kind.PERMANENT);
     }
 
     @Test
