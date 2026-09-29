@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
@@ -16,6 +17,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -248,12 +250,18 @@ public abstract class SandboxProviderContract {
     @Test
     void killEndsOnlyItsOwnProcessGroup() throws Exception {
         final SandboxConnection connection = provider.connect(newSandbox());
-        final RunningCommand victim = connection.run(
-                ExecSpec.builder().command("sleep 20 & sleep 20; wait").timeout(COMMAND_TIMEOUT).build(),
-                OutputSink.DISCARD);
+        final RunningCommand victim = connection.run(ExecSpec.builder()
+                .command("sleep 20 & echo $! > /workspace/victim-child.tmp; "
+                        + "mv /workspace/victim-child.tmp /workspace/victim-child; sleep 20; wait")
+                .timeout(COMMAND_TIMEOUT).build(), OutputSink.DISCARD);
         final RunningCommand bystander = connection.run(ExecSpec.builder()
                 .command("sleep 1; echo alive > /workspace/bystander").timeout(COMMAND_TIMEOUT).build(),
                 OutputSink.DISCARD);
+        final long waitUntil = System.nanoTime() + Duration.ofSeconds(10).toNanos();
+        while (connection.files().stat("/workspace/victim-child").isEmpty() && System.nanoTime() < waitUntil) {
+            Thread.sleep(20);
+        }
+        final String child = read(connection, "/workspace/victim-child").strip();
 
         victim.kill();
 
@@ -261,9 +269,39 @@ public abstract class SandboxProviderContract {
         final ExecOutcome killed = victim.await(Duration.ofSeconds(15));
         assertThat(killed.exitCode()).isNotZero();
         assertThat(Duration.ofNanos(System.nanoTime() - started)).isLessThan(Duration.ofSeconds(10));
+        // The background child is in the victim's group: it must be gone too, not orphaned (kill -0 fails).
+        final long deadline = System.nanoTime() + Duration.ofSeconds(10).toNanos();
+        ExecOutcome probe = exec(connection, "kill -0 " + child + " 2>/dev/null");
+        while (probe.exitCode() == 0 && System.nanoTime() < deadline) {
+            Thread.sleep(100);
+            probe = exec(connection, "kill -0 " + child + " 2>/dev/null");
+        }
+        assertThat(probe.exitCode()).as("the victim's background child " + child + " is still alive").isNotZero();
         final ExecOutcome survived = bystander.await(Duration.ofSeconds(15));
         assertThat(survived.exitCode()).isZero();
         assertThat(read(connection, "/workspace/bystander")).isEqualTo("alive\n");
+    }
+
+    @Test
+    void outputReachesTheSinkAsItArrives() throws InterruptedException {
+        final SandboxConnection connection = provider.connect(newSandbox());
+        final Map<OutputSink.Stream, ByteArrayOutputStream> received = new ConcurrentHashMap<>();
+        final OutputSink sink = (stream, bytes, offset, length) -> {
+            final ByteArrayOutputStream buffer = received.computeIfAbsent(stream, k -> new ByteArrayOutputStream());
+            synchronized (buffer) {
+                buffer.write(bytes, offset, length);
+            }
+        };
+
+        final ExecOutcome outcome = connection
+                .run(ExecSpec.builder().command("echo out; echo err >&2").timeout(COMMAND_TIMEOUT).build(), sink)
+                .await(COMMAND_TIMEOUT);
+
+        assertThat(outcome.exitCode()).isZero();
+        assertThat(received.get(OutputSink.Stream.STDOUT)).as("stdout delivered to the sink").isNotNull();
+        assertThat(received.get(OutputSink.Stream.STDOUT).toString(StandardCharsets.UTF_8)).isEqualTo("out\n");
+        assertThat(received.get(OutputSink.Stream.STDERR)).as("stderr delivered to the sink").isNotNull();
+        assertThat(received.get(OutputSink.Stream.STDERR).toString(StandardCharsets.UTF_8)).isEqualTo("err\n");
     }
 
     @Test
@@ -339,6 +377,23 @@ public abstract class SandboxProviderContract {
     }
 
     @Test
+    void aConnectionToADestroyedSandboxAnswersNotFound() {
+        final ProviderSandboxRef ref = newSandbox();
+        final SandboxConnection connection = provider.connect(ref);
+        write(connection, "/workspace/before.txt", "before");
+        provider.destroy(ref);
+
+        // The "lost" path of the manager starts here: an error of another kind would read as "unavailable".
+        assertThatThrownBy(() -> connection
+                .run(ExecSpec.builder().command("true").timeout(COMMAND_TIMEOUT).build(), OutputSink.DISCARD)
+                .await(COMMAND_TIMEOUT)).isInstanceOf(SandboxNotFoundException.class);
+        assertThatThrownBy(() -> write(connection, "/workspace/after.txt", "after"))
+                .isInstanceOf(SandboxNotFoundException.class);
+        assertThatThrownBy(() -> connection.files().stat("/workspace/before.txt"))
+                .isInstanceOf(SandboxNotFoundException.class);
+    }
+
+    @Test
     void extendExpiryMovesForwardOnly() {
         assumeTrue(provider.capabilities().supports(Capability.EXPIRY));
         final ProviderSandboxRef ref = newSandbox();
@@ -347,8 +402,9 @@ public abstract class SandboxProviderContract {
         provider.extendExpiry(ref, later);
         provider.extendExpiry(ref, Instant.now().plus(Duration.ofMinutes(1)));
 
-        provider.status(ref).flatMap(ProviderSandbox::expiresAt)
-                .ifPresent(expiresAt -> assertThat(expiresAt).isAfterOrEqualTo(later));
+        // A provider that advertises EXPIRY reports it: the manager has nothing else to check its extension by.
+        assertThat(provider.status(ref).flatMap(ProviderSandbox::expiresAt)).as("expiresAt of an EXPIRY provider")
+                .hasValueSatisfying(expiresAt -> assertThat(expiresAt).isAfterOrEqualTo(later));
     }
 
     @Test

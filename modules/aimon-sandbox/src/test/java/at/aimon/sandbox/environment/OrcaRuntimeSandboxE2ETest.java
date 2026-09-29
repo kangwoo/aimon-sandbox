@@ -50,6 +50,8 @@ import at.aimon.core.skill.SkillMetadata;
 import at.aimon.core.skill.SkillRegistry;
 import at.aimon.core.subagent.DefaultSubagentExecutionManager;
 import at.aimon.core.subagent.Subagent;
+import at.aimon.core.subagent.SubagentContent;
+import at.aimon.core.subagent.SubagentMetadata;
 import at.aimon.core.subagent.SubagentRegistry;
 import at.aimon.core.tools.bash.BashTool;
 import at.aimon.sandbox.SandboxHarness;
@@ -59,7 +61,8 @@ import at.aimon.sandbox.workspace.WorkspaceScan;
 
 /**
  * The sandbox behind a real {@link OrcaAgentExecutor} (§16 rows 14 and 15): the prompt describes the declared
- * profile without provisioning anything, and a slash-command skill's {@code Bash} runs in the sandbox, not on the host.
+ * profile without provisioning anything, and a slash-command skill's {@code Bash} runs in the sandbox, not on the host
+ * — inline in the session's turn, and in a forked subagent.
  */
 class OrcaRuntimeSandboxE2ETest {
 
@@ -71,6 +74,7 @@ class OrcaRuntimeSandboxE2ETest {
     private DefaultSubagentExecutionManager subagents;
     private OrcaAgentExecutor executor;
     private final MapSkillRegistry skills = new MapSkillRegistry();
+    private final MapSubagentRegistry subagentRegistry = new MapSubagentRegistry();
 
     @BeforeEach
     void setUp() {
@@ -100,7 +104,7 @@ class OrcaRuntimeSandboxE2ETest {
                 .agent(DefaultAgent.builder().name("sandboxed").maxIterations(3).systemPrompt("You are a test agent")
                         .model(LlmModel.builder().name("m").build()).build())
                 .toolRegistry(toolRegistry).hookRegistry(new DefaultHookRegistry()).commandRegistry(commands)
-                .subagentRegistry(new EmptySubagentRegistry()).skillRegistry(skills).controlFileSystem(control)
+                .subagentRegistry(subagentRegistry).skillRegistry(skills).controlFileSystem(control)
                 .environment(Environment.createDefault())
                 .executionEnvironmentProvider(harness.sandbox.environmentProvider()).build();
     }
@@ -143,6 +147,38 @@ class OrcaRuntimeSandboxE2ETest {
         assertThat(Files.exists(Path.of("marker.txt"))).as("nothing on the host's cwd").isFalse();
         assertThat(Files.exists(tempDir.resolve("marker.txt"))).isFalse();
         assertThat(llm.toolResults).anyMatch(text -> text.contains("/workspace/repo"));
+        // Routing, not only the Bash call the script makes anyway: the slash command expanded the skill's body.
+        assertThat(llm.userMessages).anyMatch(text -> text.contains("Write the marker file."));
+    }
+
+    @Test
+    @DisplayName("§16: a slash-command skill run in a forked subagent also runs its Bash in the sandbox")
+    void forkedSlashCommandSkillBashRunsInTheSameSandbox() throws Exception {
+        subagentRegistry.add(
+                Subagent.of("worker", SubagentMetadata.builder().description("does the work").maxIterations(3).build(),
+                        SubagentContent.of("You are the worker.")));
+        skills.add(Skill.builder().name("forked")
+                .metadata(SkillMetadata.builder().name("forked").description("writes a marker in a fork")
+                        .invokePolicy(InvokePolicy.of(true, true)).executionMode(ExecutionMode.FORK)
+                        .forkAgentName("worker").build())
+                .content(SkillContent.of("Write the fork marker file.")).build());
+        llm.respond(LlmResponse
+                .tools(List.of(ToolUse.of("f1", "Bash", Map.of("command", "echo forked > fork-marker.txt; pwd")))));
+        llm.respond(LlmResponse.text("Fork marker written."));
+        final SessionId session = SessionId.generate();
+
+        final OrcaAgentExecutionResult result = executor.execute(runtime(), OrcaAgentExecutionRequest.builder()
+                .userInput("/forked").sessionId(session).principal(SandboxHarness.ALICE).build());
+
+        assertThat(result.isSuccess()).as(result.getErrorMessage()).isTrue();
+        assertThat(llm.userMessages).anyMatch(text -> text.contains("Write the fork marker file."));
+        // The fork shares the session's workspace and slot (§8.2): the marker is in the same sandbox. Core's skill-fork
+        // path forwards no principal; the fork acts for its parent rather than being refused "not permitted".
+        assertThat(llm.toolResults).noneMatch(text -> text.contains("not permitted"));
+        assertThat(harness.hostFile(session, "/workspace/repo/fork-marker.txt")).isEqualTo("forked\n");
+        assertThat(harness.store.scan(WorkspaceScan.builder().build())).hasSize(1);
+        assertThat(Files.exists(Path.of("fork-marker.txt"))).as("nothing on the host's cwd").isFalse();
+        assertThat(Files.exists(tempDir.resolve("fork-marker.txt"))).isFalse();
     }
 
     /** Answers from a queue and records the prompts and tool results it was sent. */
@@ -150,6 +186,7 @@ class OrcaRuntimeSandboxE2ETest {
         private final Deque<LlmResponse> responses = new ArrayDeque<>();
         private final List<String> systemPrompts = new ArrayList<>();
         private final List<String> toolResults = new ArrayList<>();
+        private final List<String> userMessages = new ArrayList<>();
 
         void respond(LlmResponse response) {
             responses.add(response);
@@ -167,6 +204,7 @@ class OrcaRuntimeSandboxE2ETest {
             systemPrompts.add(systemPrompt);
             for (Message message : messages) {
                 message.getToolUseResults().forEach(r -> toolResults.add(String.valueOf(r.getContent())));
+                userMessages.add(String.valueOf(message.getContent()));
             }
             return responses.isEmpty() ? LlmResponse.text("done") : responses.poll();
         }
@@ -205,15 +243,21 @@ class OrcaRuntimeSandboxE2ETest {
         }
     }
 
-    private static final class EmptySubagentRegistry implements SubagentRegistry {
+    private static final class MapSubagentRegistry implements SubagentRegistry {
+        private final Map<String, Subagent> subagents = new HashMap<>();
+
+        void add(Subagent subagent) {
+            subagents.put(subagent.getName(), subagent);
+        }
+
         @Override
         public Optional<Subagent> getSubagent(String subagentName) {
-            return Optional.empty();
+            return Optional.ofNullable(subagents.get(subagentName));
         }
 
         @Override
         public List<Subagent> getAllSubagents() {
-            return List.of();
+            return new ArrayList<>(subagents.values());
         }
 
         @Override

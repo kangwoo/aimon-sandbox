@@ -21,6 +21,7 @@ import at.aimon.core.environment.ExecutionEnvironment;
 import at.aimon.core.shell.ExecutionOptions;
 import at.aimon.core.shell.ShellCommandResult;
 import at.aimon.core.shell.exception.ShellExecutionException;
+import at.aimon.sandbox.DelegatingStore;
 import at.aimon.sandbox.SandboxHarness;
 import at.aimon.sandbox.binding.ShellKey;
 import at.aimon.sandbox.provider.ProviderSandboxRef;
@@ -31,8 +32,36 @@ import at.aimon.sandbox.testkit.SandboxTestProfiles;
 /** Activity heartbeat and expiry (§5.3, §10.3; §16 rows 9, 13, 29). */
 class ActivityHeartbeatIT {
 
-    private final SandboxHarness harness = SandboxHarness.builder().profile(SandboxTestProfiles.local("standard")
-            .terminateAfter(Duration.ofHours(2)).backgroundHeartbeatLimit(Duration.ofHours(1)).build()).build();
+    /** Set before a heartbeat tick: the tick's first write loses its CAS to a concurrent write (§5.3). */
+    private final AtomicBoolean interfere = new AtomicBoolean();
+    private final AtomicInteger heartbeatConflicts = new AtomicInteger();
+    private final Thread testThread = Thread.currentThread();
+    private final SandboxHarness harness = SandboxHarness.builder()
+            .store(new DelegatingStore(new InMemorySandboxWorkspaceStore()) {
+                @Override
+                public SandboxWorkspace update(SandboxWorkspaceId id, long expectedVersion, SandboxWorkspace next) {
+                    // The manual scheduler runs heartbeats on the test thread: only their writes are interfered with.
+                    final boolean heartbeat = Thread.currentThread() == testThread;
+                    if (heartbeat && interfere.compareAndSet(true, false)) {
+                        try {
+                            final SandboxWorkspace current = delegate.find(id).orElseThrow();
+                            delegate.update(id, current.version(), current);
+                        } catch (StaleVersionException e) {
+                            // The other writer got there first: a concurrent write all the same.
+                        }
+                    }
+                    try {
+                        return delegate.update(id, expectedVersion, next);
+                    } catch (StaleVersionException e) {
+                        if (heartbeat) {
+                            heartbeatConflicts.incrementAndGet();
+                        }
+                        throw e;
+                    }
+                }
+            }).profile(SandboxTestProfiles.local("standard").terminateAfter(Duration.ofHours(2))
+                    .backgroundHeartbeatLimit(Duration.ofHours(1)).build())
+            .build();
     private final SessionId session = SessionId.generate();
     private final ExecutionEnvironment env = harness.mainTurn(session, ALICE);
 
@@ -94,7 +123,9 @@ class ActivityHeartbeatIT {
         Instant previous = harness.primary(session).lastActivityAt();
         for (int tick = 0; tick < 4; tick++) {
             final Instant now = harness.clock.advance(Duration.ofMinutes(40));
+            interfere.set(true);
             harness.scheduler.runDue();
+            assertThat(interfere.get()).as("the heartbeat wrote, and its first CAS lost").isFalse();
             final Instant recorded = harness.primary(session).lastActivityAt();
             assertThat(recorded).as("every heartbeat write landed").isEqualTo(now).isAfter(previous);
             previous = recorded;
@@ -105,6 +136,8 @@ class ActivityHeartbeatIT {
         }
         writing.set(false);
         otherWriter.get(10, TimeUnit.SECONDS);
+        // Every tick's write lost a CAS and was retried, never dropped: each still landed (asserted above).
+        assertThat(heartbeatConflicts.get()).as("heartbeat CAS conflicts").isGreaterThanOrEqualTo(4);
 
         assertThat(command.get(20, TimeUnit.SECONDS)).isInstanceOfSatisfying(ShellCommandResult.class,
                 result -> assertThat(result.stdout()).isEqualTo("finished\n"));

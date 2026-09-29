@@ -20,6 +20,7 @@ import org.junit.jupiter.api.Test;
 
 import at.aimon.sandbox.provider.ProviderSandboxRef;
 import at.aimon.sandbox.workspace.CloseCause;
+import at.aimon.sandbox.workspace.ProvisioningClaim;
 import at.aimon.sandbox.workspace.SandboxSlot;
 import at.aimon.sandbox.workspace.SandboxWorkspace;
 import at.aimon.sandbox.workspace.SandboxWorkspaceId;
@@ -33,8 +34,10 @@ import at.aimon.sandbox.workspace.WorkspaceState;
 
 /**
  * The contract every {@link SandboxWorkspaceStore} must pass (docs/design/workspace-sandbox.md §16): one winner for
- * concurrent {@code createIfAbsent}, {@link StaleVersionException} for a stale or absent CAS, scan filters and keyset
- * paging, and tombstones kept until a CAS-guarded delete. {@code InMemorySandboxWorkspaceStore} passes it from
+ * concurrent {@code createIfAbsent}, {@link StaleVersionException} for a stale, absent or deleted CAS, the version the
+ * store assigns (never the caller's, never one a deleted record had), records that read back exactly as returned,
+ * scan filters and keyset paging, and tombstones kept until a CAS-guarded delete. {@code InMemorySandboxWorkspaceStore}
+ * passes it from
  * implementation step 3; the JDBC store (step 6) must pass the same suite, so the two cannot drift apart.
  *
  * <p>
@@ -247,11 +250,102 @@ public abstract class SandboxWorkspaceStoreContract {
     }
 
     @Test
-    void recreatedAfterDeleteStartsAtVersionOne() {
+    void aRecordCreatedAgainAfterDeleteNeverReusesAnOldVersion() {
+        final SandboxWorkspace created = store.createIfAbsent(workspace("ws:a", "t"));
+        final SandboxWorkspace second = store.update(created.id(), created.version(), created.withSlot(slot(1)));
+        final SandboxWorkspace third = store.update(created.id(), second.version(), second.withSlot(slot(2)));
+        store.delete(created.id(), third.version());
+
+        final SandboxWorkspace recreated = store.createIfAbsent(workspace("ws:a", "t2"));
+
+        // A caller still holding the deleted record at any of its versions must not CAS the new one (ABA).
+        assertThat(recreated.version()).isGreaterThan(third.version());
+        for (SandboxWorkspace stale : List.of(created, second, third)) {
+            assertThatThrownBy(() -> store.update(created.id(), stale.version(), stale.withSlot(slot(9))))
+                    .isInstanceOf(StaleVersionException.class);
+        }
+        assertThat(store.find(created.id()).orElseThrow().owner().tenant()).isEqualTo(TenantId.of("t2"));
+    }
+
+    @Test
+    void updateAssignsTheVersionWhateverTheRecordCarries() {
+        final SandboxWorkspace created = store.createIfAbsent(workspace("ws:a", "t"));
+
+        final SandboxWorkspace updated = store.update(created.id(), created.version(),
+                created.toBuilder().version(99).build().withSlot(slot(1)));
+
+        assertThat(updated.version()).isEqualTo(created.version() + 1);
+        assertThat(store.find(created.id()).orElseThrow().version()).isEqualTo(created.version() + 1);
+    }
+
+    @Test
+    void updateWithAnotherRecordsIdIsRefusedAndChangesNothing() {
+        final SandboxWorkspace a = store.createIfAbsent(workspace("ws:a", "t"));
+        final SandboxWorkspace b = store.createIfAbsent(workspace("ws:b", "t"));
+
+        assertThatThrownBy(() -> store.update(a.id(), a.version(), b.withSlot(slot(1))))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThat(store.find(a.id())).contains(a);
+        assertThat(store.find(b.id())).contains(b);
+    }
+
+    @Test
+    void updateAfterDeleteThrowsStaleAndCreatesNothing() {
         final SandboxWorkspace created = store.createIfAbsent(workspace("ws:a", "t"));
         store.delete(created.id(), created.version());
 
-        assertThat(store.createIfAbsent(workspace("ws:a", "t2")).version()).isEqualTo(1);
+        assertThatThrownBy(() -> store.update(created.id(), created.version(), created.withSlot(slot(1))))
+                .isInstanceOf(StaleVersionException.class);
+        assertThat(store.find(created.id())).isEmpty();
+    }
+
+    @Test
+    void recordsReadBackExactlyAsTheStoreReturnedThem() {
+        // Nanoseconds that a store may round: whatever it keeps, find must answer the same as the write returned —
+        // the manager compares a claim it wrote with the stored one, and a mismatch reads as a lost CAS.
+        final Instant precise = T0.plusNanos(123_456_789);
+        final SandboxWorkspace created = store.createIfAbsent(workspace("ws:a", "t").toBuilder().createdAt(precise)
+                .stateSince(precise).lastActivityAt(precise).build());
+        final SandboxSlot claimed = SandboxSlot.builder().name("primary").profile("standard").profileHash("hash")
+                .state(SlotState.PROVISIONING).generation(1)
+                .provisioning(ProvisioningClaim.of(precise.plusNanos(1), "node-a")).lastActivityAt(precise)
+                .lastActiveAt(precise).build();
+
+        final SandboxWorkspace updated = store.update(created.id(), created.version(), created.withSlot(claimed));
+
+        assertThat(store.find(created.id())).contains(updated);
+        assertThat(store.find(created.id()).orElseThrow().slot("primary")).isEqualTo(updated.slot("primary"));
+        final Instant kept = updated.slot("primary").orElseThrow().provisioning().orElseThrow().since();
+        assertThat(Duration.between(kept, precise.plusNanos(1)).abs()).as("kept to at least millisecond precision")
+                .isLessThan(Duration.ofMillis(1));
+        assertThat(Duration.between(updated.createdAt(), precise).abs()).isLessThan(Duration.ofMillis(1));
+    }
+
+    @Test
+    void scanPagesOverFilteredOutRecordsWithoutGapsOrRepeats() {
+        final List<String> expected = new ArrayList<>();
+        for (int i = 0; i < 30; i++) {
+            final String id = String.format("ws:%03d", i);
+            final boolean open = i % 3 != 1;
+            store.createIfAbsent(
+                    workspace(id, "t").toBuilder().state(open ? WorkspaceState.OPEN : WorkspaceState.CLOSED)
+                            .closeCause(open ? null : CloseCause.IDLE).build());
+            if (open) {
+                expected.add(id);
+            }
+        }
+        final List<String> seen = new ArrayList<>();
+        WorkspaceScan scan = WorkspaceScan.builder().states(Set.of(WorkspaceState.OPEN)).limit(7).build();
+        while (true) {
+            final List<SandboxWorkspace> page = store.scan(scan);
+            page.forEach(workspace -> seen.add(workspace.id().value()));
+            if (page.size() < scan.limit()) {
+                break;
+            }
+            scan = scan.next(page.get(page.size() - 1).id());
+        }
+
+        assertThat(seen).isEqualTo(expected);
     }
 
     private List<String> ids(WorkspaceScan scan) {
