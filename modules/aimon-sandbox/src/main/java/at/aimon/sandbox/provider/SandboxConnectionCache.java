@@ -95,7 +95,8 @@ public final class SandboxConnectionCache implements AutoCloseable {
      *            the shell
      * @param wait
      *            how long to wait
-     * @return the held lock, or {@code null} when it did not come free in time
+     * @return the lease; {@link Lease#acquired()} is {@code false} when the lock did not come free in time (closing
+     *         that lease is a no-op)
      * @throws InterruptedException
      *             if interrupted while waiting
      */

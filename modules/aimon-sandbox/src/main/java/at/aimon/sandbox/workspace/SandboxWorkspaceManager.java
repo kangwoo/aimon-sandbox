@@ -494,6 +494,9 @@ public final class SandboxWorkspaceManager {
      *            the principal asking; must pass the owner check
      * @throws SandboxUnavailableException
      *             when the caller may not close it
+     * @throws at.aimon.sandbox.binding.BindingRejectedException
+     *             when the principal gate refuses the caller (§8.3) — like {@code SandboxUnavailableException}, an
+     *             {@code ExecutionEnvironmentUnavailableException}
      */
     public void close(SandboxWorkspaceId id, Principal caller) {
         final WorkspaceOwner who = callers.callerOf(Optional.ofNullable(caller));
@@ -516,6 +519,9 @@ public final class SandboxWorkspaceManager {
      * @throws SandboxUnavailableException
      *             when the caller may not reopen it, it does not exist, or it is still closing — also when it became
      *             CLOSING after this call first read it
+     * @throws at.aimon.sandbox.binding.BindingRejectedException
+     *             when the principal gate refuses the caller (§8.3) — like {@code SandboxUnavailableException}, an
+     *             {@code ExecutionEnvironmentUnavailableException}
      */
     public void reopen(SandboxWorkspaceId id, Principal caller) {
         final WorkspaceOwner who = callers.callerOf(Optional.ofNullable(caller));
