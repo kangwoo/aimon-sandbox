@@ -55,6 +55,14 @@ class ShellWrapperTest {
     }
 
     @Test
+    void theInlineSizeCountsTheQuotedEnvironmentAndWorkingDirectory() {
+        // " 'A=x'" is 6 bytes; "'it'\''s'" is 9.
+        assertThat(ShellWrapper.inlineSize(Map.of("A", "x"), null)).isEqualTo(6);
+        assertThat(ShellWrapper.inlineSize(Map.of(), "it's")).isEqualTo(9);
+        assertThat(ShellWrapper.inlineSize(Map.of(), null)).isZero();
+    }
+
+    @Test
     void theEpilogueRemovesTheRunFilesBeforePrintingTheTrailer() {
         final String script = ShellWrapper.foreground(invocation("true"));
         final String rm = "rm -f \"$r.out\" \"$r.err\" \"$r.in\" \"$r.cmd\" \"$r.cwd\" \"$r.timedout\"\n";

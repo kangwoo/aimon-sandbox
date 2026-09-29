@@ -1142,3 +1142,18 @@ document says. WS is updated in the same change; the section named in brackets i
     yet on core main, so the fallback (a fork without a principal inherits its parent's caller) is now described as
     applying to core versions before that fix, in the provider's comment, WS §8.2 and a new WS §20 open item to
     revisit it once every supported core carries the fix.
+55. **Per-command environment and working directory are bounded** [WS §9]. `embeddable()` bounded only the command;
+    the variables and the working directory always travel in the exec's one argument, so a very large value hit
+    MAX_ARG_STRLEN and surfaced as "the sandbox cannot be reached". Their quoted total is now refused over 32 KiB
+    (`ShellWrapper.INLINE_ENVIRONMENT_LIMIT`) as a bad argument before anything runs; with the 64 KiB command limit the
+    script stays under 128 KiB (`SandboxShellIT#anOversizedEnvironmentIsRefusedAsABadArgumentBeforeAnythingRuns`,
+    `#anEnvironmentJustUnderTheLimitStillRuns`). Uploading the environment like the command was not needed for a
+    bound this large.
+56. **Smaller review-1 nits.** `lockShell`'s javadoc describes the `Lease` with `acquired() == false` it returns, not
+    `null`; `close`/`reopen` name `BindingRejectedException` (the principal gate) next to
+    `SandboxUnavailableException`. The rg exec runs in `/workspace` without `cd`ing into the root (its path is already
+    absolute), so a removed root no longer fails every search into core's per-file fallback walk, and its
+    `RunningCommand.await` goes through `ProviderCalls.guarded` like `run` (`SandboxContentSearchIT`).
+    `ProviderFileSystem.search` calls core's `SearchPatterns.sanitize` instead of a copy of it. The timeout window in
+    which a command that finished just in time is reported as timed out (the watchdog fires between the inner bash
+    returning and the outer stopping it) is documented on `ShellWrapper` rather than closed.

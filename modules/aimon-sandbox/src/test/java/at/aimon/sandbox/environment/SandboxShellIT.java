@@ -501,6 +501,29 @@ class SandboxShellIT {
     }
 
     @Test
+    void anOversizedEnvironmentIsRefusedAsABadArgumentBeforeAnythingRuns() {
+        harness.faults.resetCounts();
+        final String large = "v".repeat(ShellWrapper.INLINE_ENVIRONMENT_LIMIT);
+
+        assertThatThrownBy(() -> bash(env, "true",
+                ExecutionOptions.builder().timeout(Duration.ofSeconds(20)).environment(java.util.Map.of("BIG", large))
+                        .build()))
+                .isInstanceOf(ShellExecutionException.class).hasMessageContaining("too large to pass to the sandbox")
+                .hasMessageNotContaining("cannot be reached");
+        assertThat(harness.faults.calls(Operation.RUN)).isZero();
+    }
+
+    @Test
+    void anEnvironmentJustUnderTheLimitStillRuns() throws Exception {
+        final String value = "v".repeat(ShellWrapper.INLINE_ENVIRONMENT_LIMIT - 16);
+
+        final ShellCommandResult result = bash(env, "printf %s \"${#BIG}\"", ExecutionOptions.builder()
+                .timeout(Duration.ofSeconds(20)).environment(java.util.Map.of("BIG", value)).build());
+
+        assertThat(result.stdout()).isEqualTo(String.valueOf(value.length()));
+    }
+
+    @Test
     void theCommandNeverTravelsAsAnArgumentAndALargeOneIsUploaded() throws Exception {
         final RecordingProvider[] recording = new RecordingProvider[1];
         try (SandboxHarness recorded = SandboxHarness.builder()

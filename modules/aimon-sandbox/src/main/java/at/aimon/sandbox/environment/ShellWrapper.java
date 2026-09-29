@@ -36,7 +36,9 @@ import java.util.regex.Pattern;
  * The command reaches the inner bash through the run file {@code run-{id}.cmd}, never as an argument: the outer writes
  * it there with the {@code printf} builtin, or — for a command too large to embed in the exec at all
  * ({@link #INLINE_COMMAND_LIMIT}) — {@code SandboxShell} uploads it through the files API and the script carries no
- * copy. Linux limits one argument to 128 KiB (MAX_ARG_STRLEN), and the exec's own script is one.
+ * copy. Linux limits one argument to 128 KiB (MAX_ARG_STRLEN), and the exec's own script is one. Per-command
+ * variables and the working directory are always embedded; {@code SandboxShell} refuses them over
+ * {@link #INLINE_ENVIRONMENT_LIMIT} as a bad argument rather than letting the exec fail as an unreachable sandbox.
  *
  * <p>
  * The inner bash keeps its own state in {@code readonly} variables named {@code __aimon_*}; <b>that prefix is
@@ -84,6 +86,12 @@ final class ShellWrapper {
      * file. Well under MAX_ARG_STRLEN (128 KiB) with the rest of the script.
      */
     static final int INLINE_COMMAND_LIMIT = 64 * 1024;
+
+    /**
+     * The largest per-command environment plus working directory, as quoted into the script. They always travel in
+     * the script, so with {@link #INLINE_COMMAND_LIMIT} this keeps the whole exec argument under MAX_ARG_STRLEN.
+     */
+    static final int INLINE_ENVIRONMENT_LIMIT = 32 * 1024;
 
     private static final Pattern ENV_NAME = Pattern.compile("[A-Za-z_][A-Za-z0-9_]*");
 
@@ -160,6 +168,22 @@ final class ShellWrapper {
      */
     static boolean embeddable(String command) {
         return quote(command).getBytes(StandardCharsets.UTF_8).length <= INLINE_COMMAND_LIMIT;
+    }
+
+    /**
+     * @param environment
+     *            per-command variables
+     * @param workingDirectory
+     *            the per-command working directory, or {@code null}
+     * @return how many bytes they take in the script, quoted
+     */
+    static long inlineSize(Map<String, String> environment, String workingDirectory) {
+        long size = workingDirectory == null ? 0 : quote(workingDirectory).getBytes(StandardCharsets.UTF_8).length;
+        for (Map.Entry<String, String> variable : environment.entrySet()) {
+            // As appendInner writes it: a space, then the quoted NAME=value.
+            size += 1 + quote(variable.getKey() + "=" + variable.getValue()).getBytes(StandardCharsets.UTF_8).length;
+        }
+        return size;
     }
 
     /** Everything one invocation of the wrapper needs. */

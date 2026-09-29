@@ -119,6 +119,13 @@ public final class SandboxShell implements VirtualShell {
         if (!invalid.isEmpty()) {
             throw new ShellExecutionException("invalid environment variable names: " + invalid);
         }
+        final long inline = ShellWrapper.inlineSize(options.getEnvironment(), options.getWorkingDirectory());
+        if (inline > ShellWrapper.INLINE_ENVIRONMENT_LIMIT) {
+            // They travel in the exec's one argument: over MAX_ARG_STRLEN the exec fails as if the sandbox were gone.
+            throw new ShellExecutionException("the command's environment variables and working directory are too large"
+                    + " to pass to the sandbox (" + inline + " bytes, at most " + ShellWrapper.INLINE_ENVIRONMENT_LIMIT
+                    + "); pass large values through a file");
+        }
         final ConnectedSlot slot = manager.connect(binding);
         pending.addAll(slot.notices());
         slot.activity().record(false);
