@@ -1122,3 +1122,10 @@ document says. WS is updated in the same change; the section named in brackets i
     migration is needed (`OwnerCheckTest#aUserAndAGroupWithTheSameIdAreDifferentOwners`,
     `#aUserNamedLikeASystemPrincipalIsNotThatPrincipal`, `#aUserNamedAnonymousIsNotAPrincipalLessExecution`,
     `WorkspaceRecordsTest#ownersCarryThePrincipalType`).
+52. **The wrapper removes its own run files** [WS §9]. `SandboxShell` used to `stat` and `delete` each of
+    `.out .err .in .cmd .timedout .cwd` after every command — up to 12 files-API calls on the tool's latency path, 6–12
+    HTTP round trips with the step-4 remote provider — although nothing reads them once the trailer is out. The
+    epilogue now takes the byte counts, runs `rm -f` over the run files and then prints the trailer. The JVM cleans up
+    only when there is no trailer: a timeout (which reads `.out`/`.err` first), a wrapper failure or a provider error
+    (`SandboxShellIT#theNormalPathMakesNoPerFileCleanupCalls`, `#aTimedOutCommandsRunFilesAreRemovedFromTheJvm`,
+    `ShellWrapperTest#theEpilogueRemovesTheRunFilesBeforePrintingTheTrailer`).

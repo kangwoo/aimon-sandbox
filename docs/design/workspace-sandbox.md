@@ -728,7 +728,9 @@ disk · pids)이 호출자 이하여야 한다. 모델이 고르는 경로(`Sand
   lock         flock target — one command per shellKey, across nodes
   owner        "{nodeId} {pid} {pidStartTime}" of the wrapper holding the lock
   heartbeat    rewritten by the owning node every activityWriteInterval while it holds the lock (§5.3)
-  run-{id}.cmd / .out / .err / .in / .timedout / .cwd    one command's text, output, stdin and flags; deleted afterwards
+  run-{id}.cmd / .out / .err / .in / .timedout / .cwd    one command's text, output, stdin and flags; the wrapper
+                                                         deletes them before its trailer, SandboxShell only when
+                                                         there is no trailer (timeout, wrapper failure)
 
 run(ExecSpec{ command: OUTER, workingDirectory: /workspace, timeout: commandTimeout + lockWait + 5s,
               maxCaptureBytes: max + 1 KiB }):
@@ -742,6 +744,7 @@ OUTER (its fds 1/2 are the exec's pipes and are never redirected):
   rc=$?; stop the watchdog
   run.out gone? -> "the command removed ...; its output is lost" >&2; exit 71
   head -c {max} run.out; head -c {max} run.err >&2           # truncated inside the sandbox
+  rm -f run.out run.err run.in run.cmd run.cwd run.timedout   # nothing reads them after the trailer
   printf '\n{nonce} exit=%d out=%d err=%d cwd=%d\n' ... >&2   # trailer: the command's own exit code, byte counts
 INNER:
   base = export -p                                            # profile env, execd variables
@@ -759,7 +762,10 @@ INNER:
 `head -c` 로 상한만큼 내보내고, 마지막에 무작위 nonce 가 붙은 트레일러(`exit=N out=BYTES err=BYTES cwd=0|1|2`)를 stderr 에
 적는다. `cwd` 는 저장된 작업 디렉터리를 되살리지 못했을 때 root 로 갔으면 1, root 도 없어 `/workspace` 로 갔으면 2 다. `SandboxShell` 은 트레일러를 떼어 내고 바이트 수로 잘림을 판단한다. 트레일러가 없으면 명령이 끝까지 가지 못한
 것이다 — `.timedout` 이 있으면 타임아웃, exit 75 면 락 대기 실패, 그 밖은 래퍼 실패다(명령이 `.aimon-shell` 을 지워 실행
-파일이 사라진 경우는 exit 71 과 그 이유 — 빈 성공으로 보고하지 않는다). JVM 이 스스로 `kill()` 한
+파일이 사라진 경우는 exit 71 과 그 이유 — 빈 성공으로 보고하지 않는다). 트레일러를 찍기 전에 래퍼가 실행 파일을
+스스로 지운다. 정상 경로에서는 아무도 그 파일을 읽지 않으므로, 명령마다 files API 로 stat · delete 를 부르지 않는다(원격
+프로바이더에서는 명령마다 HTTP 왕복 여러 번이다). JVM 쪽 정리는 트레일러가 없는 경로 — `.out`/`.err` 를 읽는 타임아웃과
+래퍼 실패 — 에만 남는다. JVM 이 스스로 `kill()` 한
 경우(인터럽트, 최후 방어선, 샌드박스 소실)는 무엇이 돌아왔든 그 판정이 먼저다. 래퍼는 bash 3.2 와 POSIX 도구만 쓴다.
 
 - **모델 명령은 데이터다.** 명령 문자열은 작은따옴표로 감싸(`'` 는 `'\''`) 래퍼 스크립트에 값으로만 들어가고, 바깥이

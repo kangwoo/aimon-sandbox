@@ -17,7 +17,8 @@ import java.util.regex.Pattern;
  * <ul>
  * <li>the <b>outer</b> wrapper owns the exec's stdout/stderr (never redirected), the {@code flock} on the shell's lock
  * file, a watchdog that enforces the command timeout from the moment the lock is held, and the trailer it prints last:
- * {@code \n{nonce} exit=N out=BYTES err=BYTES cwd=0|1|2} on stderr;</li>
+ * {@code \n{nonce} exit=N out=BYTES err=BYTES cwd=0|1|2} on stderr, after removing the run files (only a run
+ * that ends without a trailer — a timeout, a wrapper failure — leaves them to {@code SandboxShell});</li>
  * <li>the <b>inner</b> bash restores {@code cwd} and exported variables from the state file (a new shell starts in the
  * root), {@code eval}s the command, and on exit saves {@code cwd} plus the exported variables that differ from its
  * starting environment. Its stdout and stderr go to per-run files, so a backgrounded descendant ({@code npm run dev &})
@@ -48,6 +49,13 @@ import java.util.regex.Pattern;
  * The timeout kill is best-effort: the watchdog kills the wrapper's process group, and a job the command put in a
  * group of its own ({@code set -m}, {@code setsid}) outlives it until the sandbox goes. Killing by session or cgroup
  * needs the exec server's help (implementation step 4).
+ *
+ * <p>
+ * A command that finishes just as its timeout expires can still be reported as timed out: when the watchdog's sleep
+ * ends in the few instructions between the inner bash returning and the outer stopping the watchdog, the watchdog
+ * writes {@code .timedout} and kills the group, the outer included, before the trailer. The inner EXIT trap has
+ * already saved the state by then, so the report's "cd/export were not applied" may be wrong for that run; the window
+ * is the outer's two builtins, and the command did run for its whole timeout.
  *
  * <p>
  * The script is bash 3.2 compatible and needs {@code flock}, {@code head}, {@code wc}, {@code sleep}, {@code kill},
@@ -325,8 +333,12 @@ final class ShellWrapper {
         s.append("c=0; [ -e \"$r.cwd\" ] && read -r c < \"$r.cwd\"\n");
         s.append("head -c ").append(in.maxBytes).append(" \"$r.out\"\n");
         s.append("head -c ").append(in.maxBytes).append(" \"$r.err\" >&2\n");
+        s.append("o=$(wc -c < \"$r.out\"); e=$(wc -c < \"$r.err\")\n");
+        // Nothing reads the run files once the trailer is out: remove them here, not by per-file calls from the JVM.
+        s.append("rm -f \"$r.out\" \"$r.err\" \"$r.in\" \"$r.cmd\" \"$r.cwd\"")
+                .append(in.timeout != null ? " \"$r.timedout\"" : "").append('\n');
         s.append("printf '\\n%s exit=%d out=%d err=%d cwd=%d\\n' ").append(quote(in.nonce))
-                .append(" \"$rc\" \"$(wc -c < \"$r.out\")\" \"$(wc -c < \"$r.err\")\" \"$c\" >&2\n");
+                .append(" \"$rc\" \"$o\" \"$e\" \"$c\" >&2\n");
         return s.toString();
     }
 

@@ -55,6 +55,17 @@ class ShellWrapperTest {
     }
 
     @Test
+    void theEpilogueRemovesTheRunFilesBeforePrintingTheTrailer() {
+        final String script = ShellWrapper.foreground(invocation("true"));
+        final String rm = "rm -f \"$r.out\" \"$r.err\" \"$r.in\" \"$r.cmd\" \"$r.cwd\" \"$r.timedout\"\n";
+
+        assertThat(script).contains(rm).contains("\"$rc\" \"$o\" \"$e\" \"$c\" >&2");
+        assertThat(script.indexOf("wc -c < \"$r.err\"")).isLessThan(script.indexOf(rm));
+        assertThat(script.indexOf(rm)).isLessThan(script.indexOf("printf '\\n%s exit="));
+        assertThat(ShellWrapper.background(invocation("true"))).contains("rm -f \"$r.out\"");
+    }
+
+    @Test
     void backgroundTakesNoLockAndHasNoWatchdog() {
         final String script = ShellWrapper.background(invocation("sleep 1"));
 

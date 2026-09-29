@@ -155,6 +155,7 @@ public final class SandboxShell implements VirtualShell {
         if (execKey) {
             connections.execShellStarted(slot.ref(), directory);
         }
+        boolean wrapperCleanedUp = false;
         try {
             final ShellWrapper.Invocation invocation = new ShellWrapper.Invocation().command(text).directory(directory)
                     .runPrefix(runPrefix).root(binding.root()).nodeId(settings.nodeId()).nonce(nonce)
@@ -180,15 +181,21 @@ public final class SandboxShell implements VirtualShell {
             final ExecSpec spec = ExecSpec.builder().command(script).workingDirectory(ShellWrapper.EXEC_DIRECTORY)
                     .environment(slot.profile().environment()).timeout(backstop)
                     .maxCaptureBytes(max + TRAILER_ALLOWANCE).build();
-            return await(slot, spec, new Run(runPrefix, nonce, timeout != null ? timeout : backstop, max,
-                    options.getCharset(), foreground, options.getWorkingDirectory() != null));
+            final ShellCommandResult result = await(slot, spec,
+                    new Run(runPrefix, nonce, timeout != null ? timeout : backstop, max, options.getCharset(),
+                            foreground, options.getWorkingDirectory() != null));
+            // A result means the trailer was read, and the wrapper removed its run files before printing it.
+            wrapperCleanedUp = true;
+            return result;
         } catch (SandboxNotFoundException e) {
             slot.activity().markLost();
             throw new ShellExecutionException(SandboxWorkspaceManager.LOST_MESSAGE, e, "", "", false, pending.drain());
         } catch (SandboxProviderException e) {
             throw new SandboxUnavailableException("the sandbox cannot be reached: " + e.getMessage(), e);
         } finally {
-            cleanUp(files, runPrefix);
+            if (!wrapperCleanedUp) {
+                cleanUp(files, runPrefix);
+            }
             if (execKey) {
                 connections.execShellFinished(slot.ref(), directory);
             }
@@ -358,6 +365,10 @@ public final class SandboxShell implements VirtualShell {
         }
     }
 
+    /**
+     * Removes the run files of a run that ended without a trailer (a timeout, which reads {@code .out}/{@code .err}
+     * first, a wrapper failure, a provider error): on the normal path the wrapper removes them itself.
+     */
     private static void cleanUp(SandboxFiles files, String prefix) {
         for (String suffix : List.of(".out", ".err", ".in", ".cmd", ".timedout", ".cwd")) {
             try {

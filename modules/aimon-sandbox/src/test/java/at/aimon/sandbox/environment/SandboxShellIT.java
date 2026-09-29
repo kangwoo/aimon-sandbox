@@ -375,14 +375,42 @@ class SandboxShellIT {
         assertThat(next.notices()).anyMatch(notice -> notice.contains("no longer exists"));
     }
 
-    @Test
-    void runFilesAreRemovedAfterEachCommand() throws Exception {
-        bash(env, "echo out; echo err >&2");
-
+    private void assertNoRunFiles() throws Exception {
         final Path shellDir = harness.host(session, ShellWrapper.directory(ShellKey.session(session).directoryName()));
         try (var files = Files.list(shellDir)) {
             assertThat(files.map(p -> p.getFileName().toString())).noneMatch(name -> name.startsWith("run-"));
         }
+    }
+
+    @Test
+    void runFilesAreRemovedAfterEachCommand() throws Exception {
+        bash(env, "echo out; echo err >&2");
+
+        assertNoRunFiles();
+    }
+
+    @Test
+    @DisplayName("the wrapper removes its own run files: a normal command makes no per-file cleanup calls")
+    void theNormalPathMakesNoPerFileCleanupCalls() throws Exception {
+        harness.faults.resetCounts();
+
+        final ShellCommandResult result = bash(env, "cat; echo err >&2; cd /workspace",
+                ExecutionOptions.builder().timeout(Duration.ofSeconds(20)).stdin("in").build());
+
+        assertThat(result.stdout()).isEqualTo("in");
+        assertThat(harness.faults.calls(Operation.FILES_STAT)).as("stat calls").isZero();
+        assertThat(harness.faults.calls(Operation.FILES_DELETE)).as("delete calls").isZero();
+        assertNoRunFiles();
+    }
+
+    @Test
+    void aTimedOutCommandsRunFilesAreRemovedFromTheJvm() throws Exception {
+        assertThatThrownBy(() -> bash(env, "echo partial; sleep 10", timeout(Duration.ofSeconds(1))))
+                .isInstanceOfSatisfying(ShellTimeoutException.class,
+                        e -> assertThat(e.stdout()).isEqualTo("partial\n"));
+
+        assertThat(harness.faults.calls(Operation.FILES_DELETE)).isPositive();
+        assertNoRunFiles();
     }
 
     @Test
