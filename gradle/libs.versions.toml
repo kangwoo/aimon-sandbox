@@ -6,9 +6,10 @@
 #
 # `aimon-core` is the one entry that is not a third-party library. It is the framework this repository
 # implements an SPI of, and it is consumed as a released artifact from Maven Central rather than as a
-# sibling project -- that is the whole point of the split. Raising it is a deliberate act: the compile
-# surface is `at.aimon.core.agent.orca`, `at.aimon.core.agent.tool` and `at.aimon.core.filesystem`, and
-# aimon-core is 0.x, so a minor bump there may require changes here.
+# sibling project -- that is the whole point of the split. Raising it is a deliberate act: aimon-core is
+# 0.x, so a minor bump there may require changes here. The workspace sandbox needs a core with the
+# execution-environment SPI (docs/design/workspace-sandbox.md §7); that bump lands with implementation
+# step 3, together with the first code that compiles against it.
 [versions]
 aimon-core = "0.2.4"
 
@@ -17,11 +18,6 @@ lombok = "1.18.48"
 junit = "5.12.2"
 assertj = "3.27.7"
 mockito = "5.23.0"
-
-docker-java = "3.7.1"
-kubernetes-client = "27.0.0"
-
-slf4j = "2.0.19"
 
 checkstyle = "10.12.5"
 spotless = "6.25.0"
@@ -43,13 +39,6 @@ junit-platform-launcher = { module = "org.junit.platform:junit-platform-launcher
 assertj-core = { module = "org.assertj:assertj-core", version.ref = "assertj" }
 mockito-core = { module = "org.mockito:mockito-core", version.ref = "mockito" }
 mockito-junit-jupiter = { module = "org.mockito:mockito-junit-jupiter", version.ref = "mockito" }
-
-docker-java-core = { module = "com.github.docker-java:docker-java-core", version.ref = "docker-java" }
-docker-java-transport-httpclient5 = { module = "com.github.docker-java:docker-java-transport-httpclient5", version.ref = "docker-java" }
-kubernetes-client-java = { module = "io.kubernetes:client-java", version.ref = "kubernetes-client" }
-kubernetes-client-java-extended = { module = "io.kubernetes:client-java-extended", version.ref = "kubernetes-client" }
-
-slf4j-api = { module = "org.slf4j:slf4j-api", version.ref = "slf4j" }
 
 [bundles]
 testing = ["junit-jupiter", "assertj-core", "mockito-core", "mockito-junit-jupiter"]
