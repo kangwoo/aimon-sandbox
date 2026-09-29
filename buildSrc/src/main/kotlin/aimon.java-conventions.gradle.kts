@@ -200,9 +200,9 @@ tasks.withType<JacocoReport>().configureEach {
 // than scattered across the twenty build files that carry a floor.
 //
 // A module with no entry gets no rule rather than a floor of zero. Zero would be a rule that always passes,
-// which reads as "verified" in the task list and verifies nothing; absence at least tells the truth. No module
-// has an entry today because none has sources yet (see the properties file); once one does, absence means
-// someone added code and did not add a floor.
+// which reads as "verified" in the task list and verifies nothing; absence at least tells the truth. Every module
+// with sources has an entry (see the properties file); a module without one means someone added code and did not
+// add a floor.
 val coverageBaselines = Properties().apply {
     val file = rootProject.file("gradle/coverage-baselines.properties")
     if (file.exists()) {

@@ -1,14 +1,16 @@
 rootProject.name = "aimon-sandbox"
 
 include(
-    // The workspace sandbox (docs/design/workspace-sandbox.md §4.1). Empty until implementation step 3
-    // (§18): the identifier-based tools, `SandboxBackend` and the Docker/Kubernetes backends it replaces
-    // were deleted rather than kept alongside it. `aimon-sandbox-opensandbox`, `aimon-sandbox-testkit` and
-    // `aimon-sandbox-store-jdbc` join as their steps land.
+    // The workspace sandbox (docs/design/workspace-sandbox.md §4.1), filled by implementation step 3 (§18):
+    // the identifier-based tools, `SandboxBackend` and the Docker/Kubernetes backends it replaces were deleted
+    // rather than kept alongside it. The testkit joined with step 3; `aimon-sandbox-opensandbox` (step 4) and
+    // `aimon-sandbox-store-jdbc` (step 6) join as their steps land.
     "aimon-sandbox",
+    "aimon-sandbox-testkit",
 )
 
 project(":aimon-sandbox").projectDir = file("modules/aimon-sandbox")
+project(":aimon-sandbox-testkit").projectDir = file("modules/aimon-sandbox-testkit")
 
 // No BOM, and that is a decision rather than an omission.
 //

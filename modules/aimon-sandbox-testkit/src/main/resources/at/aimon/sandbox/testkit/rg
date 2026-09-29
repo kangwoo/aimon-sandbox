@@ -1,0 +1,5 @@
+#!/bin/sh
+# Stands in for ripgrep on a host that has none, so the seed's image-contract check passes on the local provider. It
+# never pretends to search: any use fails loudly (exit 2), never as "no matches" (exit 1).
+echo "ripgrep is not installed on this host (LocalProcessSandboxProvider stub)" >&2
+exit 2

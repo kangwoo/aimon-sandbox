@@ -1,6 +1,7 @@
 # 워크스페이스 샌드박스 — 기존 도구가 OpenSandbox 위의 격리 환경을 투명하게 쓴다
 
-> Status: **ACCEPTED** — 구현 전. identifier 기반 옛 설계(도구 4개 · `SandboxBackend` · Docker/K8s 백엔드)를
+> Status: **ACCEPTED** — 3단계(도메인과 로컬 경로)까지 구현되었다. 운영에 쓸 프로바이더(4단계)는 아직 없다. 3단계의
+> 구현 설계와 거기서 벗어난 점은 [`workspace-sandbox-step3.md`](workspace-sandbox-step3.md) 에 있다. identifier 기반 옛 설계(도구 4개 · `SandboxBackend` · Docker/K8s 백엔드)를
 > **대체한다.** 옛 코드와 문서는 저장소에서 지웠다 — 마지막 모습은 커밋 `704013c` 의
 > [`sandbox.md`](https://github.com/kangwoo/aimon-sandbox/blob/704013c02cb14f16ec37ebf8c07f90d7e107db73/docs/design/sandbox.md) 이고, 배포본은 `at.aimon.core:aimon-sandbox{,-docker,-kubernetes}:0.2.4` 다. 하위 호환은
 > 목표가 아니다 — 이행 경로 대신 대응표(§17)를 둔다.
@@ -96,7 +97,7 @@
 | **slot** | 워크스페이스 안에서 샌드박스를 가리키는 이름. `^[a-z][a-z0-9-]{0,30}$`. 기본 슬롯은 `primary` |
 | **SandboxProfile** | 샌드박스를 어떻게 만들지 정한 운영자 설정 — 이미지·자원·런타임 클래스·egress·자격 증명·idle 정책 |
 | **generation** | 슬롯의 샌드박스가 새로 만들어질 때마다 1씩 늘어나는 정수. 이전 셸 상태와 파일이 사라졌음을 알리는 신호다 |
-| **SandboxBinding** | 한 실행이 쓸 `(workspaceId, owner, slot, requiredProfile?, shellKey, root)`. 바인딩 정책이 만든다(§8) |
+| **SandboxBinding** | 한 실행이 쓸 `(workspaceId, owner, slot, requiredProfile?, shellKey, root)` 와, 그 실행의 주체인 `caller`(`(tenantId, principal)`, §8.3). owner 검사(§8.3)가 `caller` 를 레코드의 owner 와 비교한다. 바인딩 정책이 만들되, `caller` 는 정책이 무엇을 넣었든 환경 provider 가 요청의 principal 로 덮어쓴다(루트·fork 모두, §8.3). principal 이 없는 fork 요청은 부모 바인딩의 `caller` 를 물려받는다(§8.2) |
 | **shellKey** | 지속 셸 상태를 가리키는 키. 같은 키로 들어온 명령들은 cwd·환경 변수를 공유한다 |
 | **provider** | 실제 샌드박스를 만드는 인프라. 이 설계에서는 OpenSandbox |
 
@@ -107,9 +108,9 @@
 
 | 대상 | 수명 | 키 / 저장 위치 | 닫는 곳 |
 |------|------|---------------|--------|
-| `SandboxProvider` · `SandboxWorkspaceStore` · `SandboxWorkspaceManager` · `SandboxProfileRegistry` · `SandboxBindingPolicy` · `SandboxTenantResolver` · `SessionOwnerLookup` · `SandboxAdmission` · `SandboxEventListener` · `SandboxJanitor` · `SandboxExecutionEnvironmentProvider` | Application | 어셈블리 싱글턴 | 앱 shutdown |
+| `SandboxProvider` · `SandboxWorkspaceStore` · `SandboxWorkspaceManager` · `SandboxProfileRegistry` · `SandboxBindingPolicy` · `SandboxTenantResolver` · `SessionOwnerLookup` · `SandboxAdmission` · `SandboxEventListener` · `SandboxJanitor` · `SandboxExecutionEnvironmentProvider` | Application | 어셈블리 싱글턴 — `WorkspaceSandbox` 가 만들고 검사하고(§13.2) 닫는다(§4.1) | 앱 shutdown |
 | 오케스트레이터 도구 | Agent | `ToolRegistry` | 상태 없음 |
-| `SandboxWorkspace` 레코드, 원격 샌드박스, 공유 볼륨 | **Workspace** (영속) | `SandboxWorkspaceId` / `SandboxWorkspaceStore` | 명시적 close 또는 idle 만료(§10). 명시적 close 의 CLOSED 레코드는 `closedRetention` 동안 툼스톤으로 남는다(§10.5) |
+| `SandboxWorkspace` 레코드, 원격 샌드박스, 공유 볼륨 | **Workspace** (영속) | `SandboxWorkspaceId` / `SandboxWorkspaceStore` | 명시적 close 또는 idle 만료(§10). CLOSED 레코드는 `closedRetention` 동안 남는다 — 명시적 close 의 것은 막는 툼스톤, idle close 의 것은 막지 않는 기록이다(§10.5) |
 | 셸 상태 파일(cwd·환경 변수) | 샌드박스 generation | 샌드박스 안 `/workspace/.aimon-shell/` | generation 과 함께 사라진다. `exec:` 키의 파일은 `execShellIdle` 뒤 지운다(§9) |
 | `SandboxBinding` · `SandboxExecutionEnvironment` | Execution | `ToolContext` | 실행과 함께 버린다. 원격 자원을 쥐지 않는다 — 코어 계약상 환경은 닫을 것이 없는 뷰다 |
 | 프로바이더 연결 캐시 · shellKey 직렬화 락 | 노드 로컬 | `SandboxConnectionCache` | 앱 shutdown |
@@ -138,11 +139,13 @@ aimon-core (repo: aimon-core)
         │ api
 ┌───────┴───────────────────────────────────────────────────────────────┐
 │ aimon-sandbox                      (repo: aimon-sandbox)               │
+│   (root)       WorkspaceSandbox (assembly) · SandboxSettings           │
 │   workspace/   SandboxWorkspace · SandboxWorkspaceStore(I) · InMemory  │
 │                SandboxWorkspaceManager · SandboxJanitor                │
 │                SandboxAdmission(I) · SandboxEventListener(I)           │
 │   binding/     SandboxBindingPolicy(I) · DefaultSandboxBindingPolicy   │
 │                SandboxTenantResolver(I) · SessionOwnerLookup(I)        │
+│                CallerResolver                                          │
 │   provider/    SandboxProvider(I) · SandboxConnection(I) · specs       │
 │                SharedVolumes(I) · SandboxConnectionCache               │
 │   profile/     SandboxProfile · SandboxProfileRegistry                 │
@@ -159,12 +162,23 @@ aimon-core (repo: aimon-core)
 │     Config                │ │   WorkspaceStore      │ │     Contract                 │
 │   VolumeReclaimer(I)      │ │   (§18-6)             │ │   LocalProcessSandbox-       │
 │   -> com.alibaba.         │ │                       │ │     Provider (tests only)    │
-│      opensandbox          │ │                       │ │                              │
+│      opensandbox          │ │                       │ │   FaultInjectingSandbox-     │
+│                           │ │                       │ │     Provider · ManualClock · │
+│                           │ │                       │ │     ManualScheduler          │
 └───────────────────────────┘ └───────────────────────┘ └──────────────────────────────┘
 ```
 
 `aimon-sandbox` 는 코어를 `api` 로 의존한다. 공개 타입이 코어 SPI(`ExecutionEnvironmentProvider`,
 `VirtualFileSystem`, `VirtualShell`)를 구현하고 코어 타입(`Principal`, `SessionId`)을 인자로 노출하기 때문이다.
+
+**어셈블리는 루트 패키지의 `WorkspaceSandbox` 다.** §3.2 의 애플리케이션 싱글턴은 만드는 순서와 닫는 의무가 있고,
+기동 시 검사(§13.2)는 그 전부를 한 번에 봐야 한다. 이 모듈은 DI 컨테이너를 가정하지 않으므로 `WorkspaceSandbox.builder()`
+가 설정(`SandboxSettings` — §13.2 의 키 가운데 그 단계가 읽는 것만)과 프로바이더를 받아 검사하고, 싱글턴을 만들고,
+`close()` 로 닫는다. 샌드박스는 닫지 않는다 — 워크스페이스 수명이다(§3.2). 스킬 셸 훅 거부(§12.1)에 쓸 파서도 여기서
+준다(`WorkspaceSandbox.markdownSkillParser()`). 이후 Spring 스타터가 생기면 그 속성이 `SandboxSettings` 로 옮겨 담긴다.
+
+`aimon-sandbox-testkit` 은 발행한다 — 이 저장소 밖의 프로바이더와 저장소 구현도 계약 스위트를 통과해야 하기
+때문이다(§16). 계약 스위트는 JUnit 5 추상 클래스이므로 testkit 은 JUnit·AssertJ 를 `api` 로 싣는다.
 
 의존은 한 방향이다. 코어는 샌드박스를 모르고, `aimon-sandbox` 는 OpenSandbox SDK 를 모른다. OpenSandbox
 SDK 타입이 `aimon-sandbox-opensandbox` 밖으로 새어 나가지 않는다 — 공개 메서드의 인자·반환에 SDK 타입이
@@ -203,7 +217,7 @@ OpenSandboxProvider  ──>  OpenSandbox API (/command)  ──>  execd in sand
 | 필드 | 뜻 |
 |------|-----|
 | `id` | `SandboxWorkspaceId` — 불투명 문자열. 기본 정책은 루트 세션에서 결정론적으로 만든다(§8.2) |
-| `owner` | `WorkspaceOwner` — `(tenantId, principalId)`. 바인딩 정책이 정하고(§8.3) 레코드를 만들 때 고정된다. 호출한 실행의 주체가 아니라 **워크스페이스의 소유자**다 |
+| `owner` | `WorkspaceOwner` — `(tenantId, principal)`. principal 은 `TYPE:id`(예: `USER:alice`)로 기록한다(§8.3). 바인딩 정책이 정하고(§8.3) 레코드를 만들 때 고정된다. 호출한 실행의 주체가 아니라 **워크스페이스의 소유자**다 |
 | `state` | `OPEN` · `CLOSING` · `CLOSED` |
 | `incarnation` | 레코드를 만들 때와 `reopen` 할 때마다 새로 뽑는 짧은 무작위 id. 샌드박스 키와 공유 볼륨 이름에 들어가, 같은 워크스페이스 id 로 다시 만들어진 워크스페이스가 옛 자원과 섞이지 않게 한다(§6.3, §10.5) |
 | `sharedVolume` | `VolumeRef`? — 공유 볼륨 이름. 이름 규칙으로 정해지고(§6.3), 볼륨 자체는 첫 샌드박스 생성이 만든다(§6.1) |
@@ -221,6 +235,7 @@ OpenSandboxProvider  ──>  OpenSandbox API (/command)  ──>  execd in sand
 |------|-----|
 | `name` | 슬롯 이름 |
 | `profile` | 프로파일 이름. 슬롯이 처음 만들어질 때 고정된다. 이후 다른 프로파일을 요구하는 바인딩은 거부된다(§8.3) |
+| `profileHash` | 현재 generation 을 만들 때 쓴 프로파일 내용의 SHA-256. `permanent` 실패를 "프로파일이 바뀔 때까지" 재시도하지 않는다는 규칙(§10.1)이 비교할 대상이다 |
 | `state` | `PROVISIONING` · `RUNNING` · `PAUSED` · `TERMINATED` · `FAILED` |
 | `generation` | 새로 프로비저닝할 때마다 +1. FAILED 에서 재시도할 때도 +1 이다 |
 | `provisioning` | `(since, nodeId)`? — PROVISIONING 에 들어간 시각과 그 노드. 인계(§10.1)의 기준이다 |
@@ -267,9 +282,19 @@ public interface SandboxWorkspaceStore {
     SandboxWorkspace createIfAbsent(SandboxWorkspace initial);          // returns the stored one
     SandboxWorkspace update(SandboxWorkspaceId id, long expectedVersion,
                             SandboxWorkspace next);                     // throws StaleVersionException
+    void delete(SandboxWorkspaceId id, long expectedVersion);           // expired CLOSED records (§10.5); CAS
     List<SandboxWorkspace> scan(WorkspaceScan scan);                    // idle / state / tenant filters, paged
 }
 ```
+
+`delete` 는 janitor 가 기한이 지난 CLOSED 레코드를 지울 때(§10.5) 쓴다. 버전으로 보호하므로 그 사이 들어온 `reopen` 을
+지우지 않는다. 레코드가 이미 없으면 성공이다. `update` 도 레코드가 없으면 `StaleVersionException` 이다.
+
+**version 은 저장소가 매기고, 지운 레코드의 version 을 다시 쓰지 않는다.** 처음 보는 id 는 1 에서 시작하지만, 지웠다가
+다시 만든 id 는 예전에 가졌던 어느 version 보다 큰 값에서 시작한다 — 지워진 레코드를 읽어 둔 호출자의 CAS 가 새 레코드에
+맞아떨어지는 ABA 를 막는다. `update` 는 `next` 가 들고 온 version 을 무시하고, id 가 다른 레코드는 거부한다.
+**저장소가 돌려준 것이 저장된 것이다.** `update`·`createIfAbsent` 의 반환값과 나중의 `find` 가 같아야 한다. 저장소는
+`Instant` 를 자기 정밀도로 줄여 저장해도 되지만(적어도 밀리초) 호출자는 넘긴 값이 아니라 돌려받은 값과 비교한다.
 
 초안은 `WorkspaceRepository` · `SandboxInstanceRepository` · `AgentSandboxSessionRepository` 셋을 제안했다.
 셋으로 나누면 "슬롯을 TERMINATED 로 바꾸면서 그 슬롯의 공유 볼륨 참조를 정리한다" 같은 한 가지 변경이 세 저장소
@@ -344,13 +369,21 @@ public interface SandboxConnection extends AutoCloseable {
 }
 
 public interface RunningCommand {
-    ExecOutcome await(Duration timeout) throws InterruptedException;  // exit code, stdout/stderr, truncation flags
+    ExecOutcome await(Duration timeout) throws InterruptedException;  // exit code, stdout/stderr, truncation flags;
+                                                                     // past the timeout: kill() and timedOut
     void kill();                          // SIGTERM to the process group, then SIGKILL after grace
+}
+
+public final class ProviderCapabilities {                // advertised() + maxExpiry()
+    Set<Capability> advertised();
+    Optional<Duration> maxExpiry();                      // the server's max expiry; terminateAfter must not exceed it
 }
 ```
 
-`ExecSpec` 는 명령 문자열 · `workingDirectory` · `environment`(프로파일의 `env` 만 — 명령별 환경은 §9 의 서브셸로) ·
-타임아웃 · `maxCaptureBytes` 를 담는다. 명령은 **execd 의 uid** 로 돈다. `/command` 의 uid 인자는 쓰지 않는다 — files
+`ExecSpec` 는 명령 문자열(`bash -c` 로 도는 스크립트) · `workingDirectory` · `environment`(프로파일의 `env` 만 — 명령별
+환경은 §9 의 서브셸로. 예외는 스테이징 검증이 `PATH` 를 고정하는 것 하나다, §11.1) · 타임아웃(프로바이더 쪽 최후 방어선) ·
+`maxCaptureBytes`(stdout · stderr 각각의 상한) 를 담는다. `ProviderCapabilities.maxExpiry()` 는 §13.2 의
+`terminate-after ≤ max-expiry` 검사가 읽는다 — 서버 설정이라 매니저가 볼 수 있는 통로는 SPI 뿐이다. 명령은 **execd 의 uid** 로 돈다. `/command` 의 uid 인자는 쓰지 않는다 — files
 API 에는 uid 인자가 없으므로, 명령만 다른 uid 로 돌리면 파일 도구가 쓴 파일과 소유자가 어긋난다(§13.3). 프로바이더는 stdout 과 stderr 를 **구분해서** 돌려주고, `kill()` 은
 그 호출의 프로세스 그룹만 끝낸다. 지속 셸 세션은 SPI 에 없다 — `SandboxShell` 이 이 위에서 셸 상태를 이어 붙인다(§9).
 
@@ -359,7 +392,11 @@ API 에는 uid 인자가 없으므로, 명령만 다른 uid 로 돌리면 파일
 샌드박스 생성과 달리 볼륨 삭제는 어느 샌드박스 요청에도 딸려 있지 않기 때문이다.
 
 `SandboxFiles` 는 `read(path, range)` · `write(path, InputStream, length, mode)` · `stat` · `list(dir,
-recursive, limit)` · `delete` · `move` 를 갖는다. 전부 샌드박스 안 **절대 경로**를 받는다. `stat` 은 코어
+recursive, limit)` · `createDirectories` · `delete` · `move` 를 갖는다. 전부 샌드박스 안 **절대 경로**를 받는다. `list` 는
+이름이 아니라 항목마다의 `stat`(디렉터리 여부 포함)을 돌려준다 — VFS 목록이 디렉터리를 가려야 하는데, 이름만 주면
+항목마다 `stat` 호출이 하나씩 더 든다. 실패는 코어 VFS 예외(`FileNotFoundException` 등)이고, 샌드박스가 없으면
+`SandboxNotFoundException` 이다. 프로바이더 호출의 실패는 `SandboxProviderException` 이며 `kind`(`TRANSIENT` ·
+`PERMANENT`)가 §10.1 의 실패 분류다. 광고하지 않은 capability 의 호출은 `UnsupportedOperationException` 이다. `stat` 은 코어
 `FileMetadata` 의 변경 감지 계약을 지켜야 한다 — 내용이 바뀌면 mtime(밀리초 이상 해상도) 또는 etag 가 반드시 바뀐다.
 해상도가 초 단위인 프로바이더는 etag 를 줘야 한다(§7).
 
@@ -411,7 +448,10 @@ volume 은 만든 뒤 라벨을 바꿀 수 없다. 그래서 볼륨은 라벨이
 
 **돌려받은 샌드박스는 대조한 뒤에만 쓴다.** `create` 가 기존 샌드박스를 돌려주거나 `status` 로 다시 찾은 경우,
 매니저는 그 샌드박스의 workspace · sandbox-key · generation · owner 라벨이 레코드와 같은지 확인한다. 다르면 쓰지
-않고 슬롯을 FAILED 로 둔다. 인코딩 버그나 라벨 충돌이 남의 샌드박스를 넘겨주는 경로를 막는다.
+않고 슬롯을 FAILED(`permanent`, 단계 `labels`)로 둔다. 인코딩 버그나 라벨 충돌이 남의 샌드박스를 넘겨주는 경로를
+막는다. 대조에 실패한 샌드박스는 남의 것일 수 있으므로 지우지도 않는다. 라벨 계산과 대조는 매니저 쪽 일이라
+`CreateSpec` 을 만드는 3단계에 이미 들어 있다(`SandboxLabels`) — 4단계에 남는 것은 OpenSandbox 가 그 라벨을 실제로
+받아들이는지의 검증이다.
 
 `deployment` 는 한 워크스페이스 저장소를 공유하는 AIMON 노드 집합의 이름이다(설정 필수, 기본값 없음).
 OpenSandbox 서버 하나를 여러 애플리케이션이나 여러 개발자 머신이 같이 쓰면 `managed=true` 만으로는
@@ -487,7 +527,7 @@ EE-42(워크플로 스크립트의 인라인 서브에이전트가 속성을 싣
 | `resolve(request)` | 바인딩 정책(§8)으로 `SandboxBinding` 을 만들고 `SandboxExecutionEnvironment` 를 돌려준다. **원격 자원은 만들지 않는다** — 첫 파일·셸 호출이 `connect()` 로 프로비저닝한다(§10.1) |
 | `fileSystem()` | `SandboxFileSystem` — 프로바이더 `files()` 위의 VFS. 상대 경로는 바인딩의 `root` 기준 |
 | `shell()` | `SandboxShell` — shellKey 의 셸 상태를 이어 붙인 셸(§9) |
-| `descriptor()` | 프로파일에 **선언한** platform·OS·shellName(§13.1), `workingDirectory = root`, notes 에 "isolated sandbox" · egress 요약 · 상대 경로 기준(§11.1). `resolve()` 는 원격 자원을 만들지 않으므로 이미지에 물어볼 수 없다 — 선언값을 쓰고, 프로비저닝의 seed 단계가 실제 이미지(`uname -sr`)와 대조해 다르면 슬롯을 FAILED 로 둔다. notes 에는 셸 상태가 cwd 와 export 된 변수만 잇는다는 사실(§9)도 넣는다. 선언값이라 재생성을 넘어 같은 값이고, 프롬프트 캐시가 흔들리지 않는다(코어 §10) |
+| `descriptor()` | 프로파일에 **선언한** platform·OS·shellName(§13.1), `workingDirectory = root`, notes 에 "isolated sandbox" · egress 요약 · 상대 경로 기준(§11.1). `resolve()` 는 원격 자원을 만들지 않으므로 이미지에 물어볼 수 없다 — 선언값을 쓰고, 프로비저닝의 seed 단계가 실제 이미지와 대조해(platform 은 `uname -s`, osVersion 은 선언했을 때만 `uname -sr` 에 글롭으로) 다르면 슬롯을 FAILED 로 둔다. notes 에는 셸 상태가 cwd 와 export 된 변수만 잇는다는 사실(§9)도 넣는다. 선언값이라 재생성을 넘어 같은 값이고, 프롬프트 캐시가 흔들리지 않는다(코어 §10) |
 | `contentSearch()` | 샌드박스 안에서 `rg --json` 한 번. 이미지 계약(§13.3)이 ripgrep 을 요구하는 이유다 |
 | `durable()` | `false` — 코어가 artifact 를 제어 저장소로 복사한다(§11.5) |
 | `stage(resource)` | `/workspace/.aimon-staged/{name}/{contentKey}/` 로 materialize. 샌드박스 안의 `.staged` 마커가 있고 **사본의 내용 해시가 `contentKey` 와 맞을 때만** 생략한다. 스테이징 영역은 **파일 도구에 읽기 전용**이다(코어 §4.4, 이 문서 §11.1) |
@@ -549,7 +589,11 @@ public interface SandboxBindingPolicy {
 ### 8.2 기본 정책
 
 **포크는 부모의 워크스페이스를 물려받는다.** 부모 환경의 바인딩에서 workspaceId · owner · root 를 그대로 물려받고
-shellKey 만 `exec:{executionId}` 로 바꾼다. 슬롯은 정책의 `forkSlot` 이 정한다 — 기본 구현은 `ForkDefinition` 의
+shellKey 만 `exec:{executionId}` 로 바꾼다. `caller` 는 포크 요청의 principal 이고, 요청에 principal 이 없으면 부모의
+`caller` 다 — 포크는 부모 실행을 대신해 도는 것이고 부모의 `caller` 는 이미 주체 검사를 통과했다. 이 대체 경로는
+코어의 성질이 아니라 **옛 코어를 위한 것**이다. 코어 브랜치 `fix/skill-fork-forward-principal` 의 수정(아직 코어 main 에
+없다) 이전 버전의 스킬 포크 경로(`SubagentBackedSkillForkExecutor`)가 principal 을 넘기지 않는다(§20). 포크가 받은 부모 환경 자체가 그 워크스페이스를 쓸
+자격이다. 슬롯은 정책의 `forkSlot` 이 정한다 — 기본 구현은 `ForkDefinition` 의
 `sandbox.slot` 속성이 있으면 그것, 없으면 부모의 슬롯이다. 슬롯이 부모와 다르면 root 는 그 슬롯의 `/workspace/repo`
 다. 포크가 몇 단계로 중첩되어도, 부모가 세션 없는 실행(스케줄 루틴)이어도 같은 워크스페이스에 머문다.
 `invokingSessionId` 로 워크스페이스를 다시 계산하면 세션 없는 부모의 포크가 자기 `executionId` 로 새 워크스페이스를
@@ -564,7 +608,7 @@ shellKey 만 `exec:{executionId}` 로 바꾼다. 슬롯은 정책의 `forkSlot` 
 | 항목 | 규칙 |
 |------|-----|
 | workspaceId | 세션에서 결정론적으로 — `ws:{sessionId}`. 세션이 없고 실행 id 가 있는 실행(스케줄 루틴)은 `ws:{executionId}`. **둘 다 없는 요청은 사용 불가**다. 워크스페이스를 지어낼 근거가 없는 요청에 공유될 id 를 만들지 않는다 |
-| owner | `(tenantId, principalId)`. 메인 턴은 **세션의 소유자**(`SessionOwnerLookup`), 루틴은 요청의 주체. tenantId 는 `SandboxTenantResolver` 가 주체에서 구한다(§8.3) |
+| owner | `(tenantId, principal)` — principal 은 `TYPE:id`(§8.3). 메인 턴은 **세션의 소유자**(`SessionOwnerLookup`), 루틴은 요청의 주체. tenantId 는 `SandboxTenantResolver` 가 주체에서 구한다(§8.3) |
 | slot | `definitionAttributes()` 의 `sandbox.slot` 이 있으면 그것, 없으면 `primary` |
 | profile | `sandbox.profile` 이 있으면 그것이 **요구 프로파일**이다. 없으면 요구가 없고, 슬롯을 처음 만들 때만 설정의 기본 프로파일을 쓴다. 슬롯의 프로파일은 만들 때 고정된다(§8.3) |
 | shellKey | 메인 턴: `session:{sessionId}` — 턴을 넘어 cwd 가 유지된다. 루틴: `exec:{executionId}`. 포크는 위의 규칙대로 `exec:{executionId}` — 부모 셸을 오염시키지 않는다 |
@@ -587,7 +631,7 @@ workspaceId 를 결정론적으로 만들기 때문에 별도의 세션→워크
 다른 테넌트의 워크스페이스 id 를 돌려줘도 여기서 막힌다. 정책을 믿되 경계는 두 번 긋는다.
 
 - 테넌트가 같아야 한다(항상)
-- `workspace-access: principal`(기본)이면 principal 도 `owner.principalId` 와 같아야 한다. 같은 테넌트의 다른 사용자가
+- `workspace-access: principal`(기본)이면 principal 도 `owner.principal` 과 같아야 한다. 같은 테넌트의 다른 사용자가
   남의 세션 워크스페이스에 닿지 못하게 하려는 것이다. 팀이 한 워크스페이스를 같이 쓰는 애플리케이션은 `tenant` 로
   낮추고, 그 공유를 자기 정책(여러 세션에 걸치는 워크스페이스 id)으로 표현한다
 
@@ -604,10 +648,17 @@ owner 는 세션 소유자로 정해지고, 그 주체는 검사에서 막힌다
 
 **주체가 없거나 시스템 주체인 실행.** 코어에서 `Principal` 은 선택값이고, Spring 스타터의 기본 진입점은 요청을
 `Principal.system()` 으로 제출한다. 그래서 `require-principal: true` 는 "주체가 있다"가 아니라 **"`USER` 또는 `GROUP`
-주체다"** 를 뜻한다. 주체가 없거나 `SYSTEM` · `SERVICE` 인 실행은 바인딩 단계에서 거부한다. 시스템 작업(스케줄 루틴
+주체다"** 를 뜻한다. 주체가 없거나 `SYSTEM` · `SERVICE` 인 실행은 바인딩 단계에서 거부한다. 이 주체 검사는 바인딩만이 아니라 `Principal` 을 받는
+매니저의 진입점(`close` · `reopen`)에도 같은 규칙(`CallerResolver`)으로 걸린다. 시스템 작업(스케줄 루틴
 등)에 샌드박스가 필요한 애플리케이션은 `allowed-system-principals` 에 그 주체 id 를 명시하고, `SandboxTenantResolver` 가
 그 주체의 테넌트를 돌려줘야 한다(돌려주지 못하면 거부). 끄고 쓰는 단일 테넌트
 배포에서는 주체 없는 실행을 `anonymous` 로 취급한다.
+
+**주체는 타입과 id 로 식별한다.** 코어의 `Principal` 은 타입 + id 로 같음을 판단한다(`Principal#equals`). owner 도
+principal 을 `TYPE:id`(`USER:alice`, `GROUP:eng`, `SYSTEM:system`)로 기록하고 그대로 비교한다. id 만 비교하면 같은
+테넌트에서 USER `eng` 가 GROUP `eng` 의 워크스페이스를, USER `system` 이 `allowed-system-principals` 에 올린 SYSTEM
+`system` 의 워크스페이스를 통과한다. 주체 없는 실행의 owner 는 타입 없는 `anonymous` 여서, 이름이 `anonymous` 인
+USER(`USER:anonymous`)와도 다르다. 저장소가 owner 를 영속하면 이 형태를 그대로 쓴다(`WorkspaceOwner.parse` 가 되읽는다).
 
 **슬롯의 프로파일은 호출 순서로 바뀌지 않는다.** 정의가 `sandbox.profile` 을 **명시한** 바인딩은 그 프로파일을
 요구하고, 이미 있는 슬롯의 프로파일이 다르면 `connect` 는 사용 불가로 답한다. 그렇지 않으면 오케스트레이터가
@@ -677,18 +728,58 @@ disk · pids)이 호출자 이하여야 한다. 모델이 고르는 경로(`Sand
   state        cwd + exported variables that differ from the base environment
   lock         flock target — one command per shellKey, across nodes
   owner        "{nodeId} {pid} {pidStartTime}" of the wrapper holding the lock
-  heartbeat    touched by the owning node every activityWriteInterval while it holds the lock (§5.3)
+  heartbeat    rewritten by the owning node every activityWriteInterval while it holds the lock (§5.3)
+  run-{id}.cmd / .out / .err / .in / .timedout / .cwd    one command's text, output, stdin and flags; the wrapper
+                                                         deletes them before its trailer, SandboxShell only when
+                                                         there is no trailer (timeout, wrapper failure)
 
-run(ExecSpec{ command: WRAPPER, workingDirectory: root, timeout: commandTimeout + lockWait, maxCaptureBytes }):
-  base = snapshot of the environment execd gave us            # profile env, execd variables
+run(ExecSpec{ command: OUTER, workingDirectory: /workspace, timeout: commandTimeout + lockWait + 5s,
+              maxCaptureBytes: max + 1 KiB }):
+OUTER (its fds 1/2 are the exec's pipes and are never redirected):
+  printf '%s' '{model's command, every ' as '\''}' > run.cmd  # data, never script syntax; a builtin, no argv
+                                                              # (over 64 KiB: uploaded as run.cmd, not embedded)
   exec 9>lock; flock -w {lockWait} 9 || exit 75               # busy -> see below
   write owner
-  . state 2>/dev/null                                         # restore cwd and exported variables
-  trap 'save cwd + (export -p minus unchanged base) atomically (tmp + mv)' EXIT
-  { {model's command} ; } 9>&-                                # same bash process: cd / export persist;
-                                                              # the lock fd is not inherited by children
+  watchdog: sleep {commandTimeout}; touch run.timedout; kill -KILL 0   (started after the lock: waits don't count)
+  bash -c INNER dir run fg root 9>&- >run.out 2>run.err <run.in
+  rc=$?; stop the watchdog
+  run.out gone? -> "the command removed ...; its output is lost" >&2; exit 71
+  head -c {max} run.out; head -c {max} run.err >&2           # truncated inside the sandbox
+  rm -f run.out run.err run.in run.cmd run.cwd run.timedout   # nothing reads them after the trailer
+  printf '\n{nonce} exit=%d out=%d err=%d cwd=%d\n' ... >&2   # trailer: the command's own exit code, byte counts
+INNER:
+  base = export -p                                            # profile env, execd variables
+  read cmd < run.cmd
+  . state, or cd root for a new shell                         # restore cwd and exported variables
+  readonly __aimon_*                                          # the wrapper's own state, out of the command's reach
+  trap 'save cwd + (exported variables minus unchanged base) atomically (tmp + mv)' EXIT   # fg only
+  eval "$cmd"                                                 # same process: cd / export persist
 ```
 
+래퍼는 **두 bash 프로세스**다. 바깥(outer)은 exec 의 stdout/stderr 를 쥔 채 락 · 워치독 · 트레일러를 맡고, 안쪽(inner)이
+상태를 복원하고 명령을 돌리고 상태를 저장한다. 명령이 `exit 3` · `set -e` 로 셸을 끝내도 끝나는 것은 안쪽뿐이므로 바깥은
+출력과 그 exit code 를 그대로 싣는다. 모델 명령의 출력은 exec 파이프가 아니라 **실행마다의 파일**로 간다. 그래서
+`npm run dev &` 처럼 명령이 남긴 자손은 파일을 쥘 뿐 파이프를 붙잡지 않고, 다음 명령이 기다리지 않는다. 결과는 파일에서
+`head -c` 로 상한만큼 내보내고, 마지막에 무작위 nonce 가 붙은 트레일러(`exit=N out=BYTES err=BYTES cwd=0|1|2`)를 stderr 에
+적는다. `cwd` 는 저장된 작업 디렉터리를 되살리지 못했을 때 root 로 갔으면 1, root 도 없어 `/workspace` 로 갔으면 2 다. `SandboxShell` 은 트레일러를 떼어 내고 바이트 수로 잘림을 판단한다. 트레일러가 없으면 명령이 끝까지 가지 못한
+것이다 — `.timedout` 이 있으면 타임아웃, exit 75 면 락 대기 실패, 그 밖은 래퍼 실패다(명령이 `.aimon-shell` 을 지워 실행
+파일이 사라진 경우는 exit 71 과 그 이유 — 빈 성공으로 보고하지 않는다). 트레일러를 찍기 전에 래퍼가 실행 파일을
+스스로 지운다. 정상 경로에서는 아무도 그 파일을 읽지 않으므로, 명령마다 files API 로 stat · delete 를 부르지 않는다(원격
+프로바이더에서는 명령마다 HTTP 왕복 여러 번이다). JVM 쪽 정리는 트레일러가 없는 경로 — `.out`/`.err` 를 읽는 타임아웃과
+래퍼 실패 — 에만 남는다. JVM 이 스스로 `kill()` 한
+경우(인터럽트, 최후 방어선, 샌드박스 소실)는 무엇이 돌아왔든 그 판정이 먼저다. 래퍼는 bash 3.2 와 POSIX 도구만 쓴다.
+
+- **모델 명령은 데이터다.** 명령 문자열은 작은따옴표로 감싸(`'` 는 `'\''`) 래퍼 스크립트에 값으로만 들어가고, 바깥이
+  `printf` 내장 명령으로 `run.cmd` 에 적으면 안쪽 bash 가 읽어 `eval` 한다. 명령은 어느 프로세스의 인자(argv)로도
+  넘어가지 않는다 — Linux 는 인자 하나를 128 KiB(MAX_ARG_STRLEN)로 제한하고, exec 의 스크립트 자체가 인자 하나다. 따옴표를
+  친 명령이 64 KiB 를 넘으면 스크립트에 넣지 않고 files API 로 `run.cmd` 를 올린다. 명령별 환경 변수와 작업 디렉터리는 늘 스크립트에 들어가므로, 따옴표를 친 합이 32 KiB 를 넘으면 실행 전에 잘못된
+인자로 거부한다 — 그대로 보내면 exec 가 인자 한도에 걸려 "샌드박스에 닿을 수 없다"로 보인다. 그래서 끝의 `# 주석`, heredoc, 짝이 안 맞는 따옴표가 래퍼 문법을 깨지 않고 그 명령 자신의 오류가
+  된다. NUL 이 든 명령은 실행 전에 거부한다. 래퍼 자신의 상태는 `readonly` 인 `__aimon_*` 변수에 두고 저장·복원에서
+  뺀다 — **`__aimon_` 접두어는 예약되어 있다.** 명령이 `set --` 이나 같은 이름의 변수로 저장 위치를 바꿀 수 없다.
+  저장은 내장 명령과 `command -p mv` 만 쓰므로 명령이 바꾼 `PATH`(비워도)나 도구 이름의 함수가 저장을 깨지 않고, 저장이
+  실패하면 임시 파일을 지운다. `__aimon_save` · `builtin` · `command` 를 재정의하거나 trap 을 지우는 명령은 저장을 막을 수
+  있지만, 셸 상태는 최선 노력이다. 명령이 켠 `set -x` · `set -v` · DEBUG/RETURN trap 은 저장 과정을 출력에 흘리지 않는다 —
+  `set -v` 에서만 한 줄짜리 EXIT trap 문자열이 명령의 stderr 에 남는다
 - **이어지는 것은 cwd 와 export 된 환경 변수뿐이다.** export 하지 않은 셸 변수 · alias · 함수 · `set -o` 는 다음 명령으로
   넘어가지 않는다. 서술자 notes 에 "shell state persists cwd and exported variables only" 를 넣어 모델에게 알린다
 - **상태는 샌드박스와 수명이 같다.** 레코드에 셸 참조가 없으므로 노드가 바뀌어도 같은 파일을 읽어 cwd 가 이어지고,
@@ -706,22 +797,34 @@ run(ExecSpec{ command: WRAPPER, workingDirectory: root, timeout: commandTimeout 
   노드는 죽은 것으로 보고 래퍼의 프로세스 그룹을 끝낸 뒤 락을 가져오며 notice("previous command from another node was
   terminated")를 붙인다. heartbeat 가 살아 있으면(다른 노드가 아직 명령을 돌리는 중) 기다리지 않고 "셸이 다른 노드의
   명령에 쓰이고 있다" 에러를 돌려준다. 같은 셸에 두 노드가 동시에 쓰는 일은 없다. `nodeId` 는 프로세스 기동마다 새로
-  뽑으므로(호스트명 + 기동 UUID) 재시작한 노드가 옛 자기 명령을 "지금 내 명령"으로 오인하지 않는다
+  뽑으므로(호스트명 + 기동 UUID) 재시작한 노드가 옛 자기 명령을 "지금 내 명령"으로 오인하지 않는다. 3단계(단일 노드)는
+  `owner` 와 heartbeat 를 기록하고 락이 풀리지 않으면 "다른 노드의 명령에 쓰이고 있다" 로 답하는 데까지다. 죽은 노드의
+  그룹을 끝내고 넘겨받는 쪽은 멀티 노드 시나리오와 함께 6단계에 들어간다(단계 3 구현 설계 §12-10). heartbeat 파일은
+  락을 쥔 포그라운드 명령의 노드가 files API 로 다시 쓰고, 래퍼는 건드리지 않는다
 - **락 대기는 명령 타임아웃에 넣지 않는다.** 모델이 준 타임아웃은 락을 얻은 뒤부터 센다. 그래서 `ExecSpec` 의 타임아웃은
-  명령 타임아웃에 `lockWait` 를 더한 값이고, 래퍼가 락을 얻은 시각부터 명령 타임아웃을 스스로 잰다
+  명령 타임아웃에 `lockWait` 를 더한 값이고, 래퍼가 락을 얻은 시각부터 명령 타임아웃을 스스로 잰다. 타임아웃이 `null`
+  이면 코어의 정의대로 타임아웃이 없다 — 워치독을 두지 않고, `ExecSpec` 에는 프로바이더가 요구하는 최후 방어선으로 하루를
+  준다
+- **exec 는 `/workspace` 에서 돈다.** seed 가 보장하고 명령이 지울 수 없는 마운트 지점이다. 작업 root 로 들어가는 것은
+  래퍼다 — 명령이 `rm -rf` 로 root 를 지워도 다음 exec 가 "없는 작업 디렉터리" 로 거부되지 않고, 래퍼가 `/workspace` 로
+  물러나며 notice 를 붙인다
 - `ExecutionOptions.workingDirectory` 가 주어지면 그 명령만 서브셸(`(cd X && cmd)`)에서 돌려 상태 파일의 cwd 를 바꾸지
   않는다. `environment` 도 같다 — 서브셸 안의 `export` 로 넣고 `ExecSpec.environment` 로 넘기지 않는다. 상태를 바꾸는
   것은 모델이 직접 친 `cd` 와 `export` 뿐이다. 상태 파일에는 기본 환경(프로파일 `env`, execd 가 준 변수)과 **달라진**
   변수만 저장하므로 기본 환경이 명령마다 상태 파일로 복사되지 않는다
 - 데드라인이나 스레드 인터럽트가 오면 `RunningCommand.kill()` 로 **그 명령의 프로세스 그룹만** 끝낸다. 기다리던 쪽만
   포기하고 명령은 계속 도는 상태를 만들지 않는다 — `tools.bash` 패키지 문서가 금지한 바로 그 동작이다. SIGKILL 로
-  끝나면 `trap` 이 돌지 않으므로 그 명령의 `cd`/`export` 는 반영되지 않고 직전 상태가 남는다. 셸을 통째로 잃지
-  않으며, 결과에 notice 를 붙인다
+  끝나면 `trap` 이 돌지 않고, `kill()` 의 SIGTERM 은 안쪽 bash 의 TERM trap 이 저장을 끈 채 끝내므로, 어느 쪽이든 그
+  명령의 `cd`/`export` 는 반영되지 않고 직전 상태가 남는다. 셸을 통째로 잃지 않으며, 결과에 notice 를 붙인다. 워치독은
+  자기 `sleep` 까지 거두므로 짧은 명령이 이어져도 프로세스가 남지 않는다. 타임아웃 kill 은 최선 노력이다 — 워치독은
+  래퍼의 프로세스 그룹을 끝내므로, 명령이 `set -m` · `setsid` 로 자기 그룹에 둔 작업은 샌드박스가 사라질 때까지 남는다.
+  세션이나 cgroup 단위로 끝내려면 exec 서버의 도움이 필요하다(4단계에서 execd 로 확인)
 - **백그라운드 명령은 락을 잡지 않는다.** 코어가 `ExecutionOptions.background` 를 켜서 넘긴 명령(코어 §5.3 —
   `Bash(run_in_background=true)`)은 상태 파일을 **읽기만** 하고(시작 시점의 cwd·환경 변수) 락 없이 돈다. 그래서 같은
   shellKey 의 다음 명령이 기다리지 않는다. 도는 동안은 heartbeat 가 활동을 기록한다(§5.3, 상한 `backgroundHeartbeatLimit`)
-- `maxCaptureBytes` 는 샌드박스 쪽에서 자른다. 래퍼가 stdout·stderr 를 각각 상한까지만 내보내고 나머지는 세기만 한 뒤
-  버린다. 수십 MB 로그를 JVM 까지 끌고 와서 자르지 않는다
+- `maxCaptureBytes` 는 샌드박스 쪽에서 자른다. 래퍼가 실행 파일에서 stdout·stderr 를 각각 상한까지만 내보내고 크기는
+  트레일러로 알린다. 수십 MB 로그를 JVM 까지 끌고 와서 자르지 않는다. `ExecSpec.maxCaptureBytes` 는 그 상한에 1 KiB 를
+  더한 값이라 프로바이더 쪽 잘림이 트레일러를 자르는 일이 없다
 - `exec:` shellKey 의 상태 디렉터리는 노드 로컬 캐시가 기억한다. 코어 계약상 환경은 실행 끝을 알리지 않으므로,
   마지막 명령이 **끝난** 뒤 `execShellIdle`(기본 10분) 동안 다음 명령이 없는 `exec:` 디렉터리를 캐시가 지운다. 락이
   잡힌 디렉터리는 지우지 않는다. 노드가 죽어 남은 디렉터리는 수 KB 이고
@@ -740,9 +843,10 @@ run(ExecSpec{ command: WRAPPER, workingDirectory: root, timeout: commandTimeout 
 ```
 loop (up to casRetries; StaleVersionException -> re-read and start over):
 1. record = store.find(ws) or store.createIfAbsent(new OPEN workspace, owner from binding)
-2. CLOSED with closeCause=idle -> CAS: reopen (new incarnation), notice "/workspace was reset" (§10.5)
+2. owner check (§8.3) -- before anything that depends on the record's state
+3. CLOSED with closeCause=idle -> CAS: reopen (new incarnation), notice "/workspace was reset" (§10.5)
    otherwise record.state != OPEN -> unavailable ("workspace closed")
-3. owner check (§8.3); slot profile check (§8.3)
+   slot profile check (§8.3)
 4. slot = record.slots[binding.slot]
      absent / TERMINATED  -> admission + quota -> CAS: PROVISIONING(generation+1, since=now, node=self)
                              -> provider.create(key, expiresAt=now+terminateAfter)
@@ -763,12 +867,26 @@ loop (up to casRetries; StaleVersionException -> re-read and start over):
 6. connectionCache.get(providerRef)
 ```
 
+**owner 검사는 상태 분기보다 먼저다.** idle close 의 레코드는 흔하고(§10.5) `connect` 가 그것을 자동으로 reopen 한다.
+검사가 뒤에 있으면 남의 주체가 reopen CAS 를 일으켜 소유자가 받을 "/workspace was reset" notice 를 가져가고, 다른
+테넌트에게 그 워크스페이스가 닫혀 있다는 사실을 알린다. 그래서 테넌트·principal 검사를 통과하기 전에는 레코드의 상태를
+보지 않는다 — 실패 메시지는 "not permitted" 뿐이다(§15).
+
 **실패는 두 종류다.** 재시도해도 결과가 같은 실패 — 선언과 다른 platform, root 실행, 서비스 계정 토큰 마운트,
 라벨 불일치, 이미지 계약 위반, 서버 엔드포인트에 닿는 네트워크(§11.3) — 는 `permanent` 다. 설정이나 인프라를 고쳐야
 풀리므로, 프로파일 내용이 바뀌거나(레코드의 `profileHash` 와 달라지거나) 슬롯이 terminate 될 때까지 재시도하지 않는다.
 그렇지 않으면 활성 세션마다 `failureBackoff` 간격으로 샌드박스를 만들고 버리는 순환이 생긴다. 그 밖의 실패(프로바이더
 5xx, 타임아웃, clone 실패)는 `transient` 이고, 재시도 간격이 `failureBackoff` 에서 시작해 두 배씩 늘어 `maxFailureBackoff`
 (기본 15분)에서 멈춘다.
+
+**`create` 뒤의 검증이 실패하면 그 샌드박스를 지운다.** `create` 가 돌려준 샌드박스의 `status` 가 실패하거나 보이지
+않으면 FAILED CAS 를 걸고, 그 CAS 를 이겼을 때만 destroy 한다 — 이 generation 의 키로 이 claim 이 만든 것이고, CAS 를
+이겼으므로 넘겨받은 쪽도 없다. 라벨이 맞지 않는 샌드박스는 우리 것이 아닐 수 있으므로 지우지 않는다.
+
+**`connect` 가 실패로 끝나면 그 호출이 모은 notice 를 에러에 싣는다.** idle reopen 이나 소실 뒤의 재생성이 실패하면 다음
+호출은 TERMINATED 가 아니라 FAILED 슬롯을 보므로 "/workspace 초기화" 를 알릴 근거가 없다 — 모델이 그것을 들을 곳은
+실패한 그 호출의 에러뿐이다. 저장소나 애플리케이션의 admission 이 던진 예외도 `SandboxUnavailableException` 으로 바꿔
+코어 도구가 "사용 불가" 로 보고하게 한다.
 
 **프로바이더 호출 뒤 CAS 가 실패하면 처음부터 다시 판단한다.** `create` 나 `resume` 을 마친 뒤 RUNNING CAS 가 지면
 (그 사이 janitor 나 `SandboxStop` 이 TERMINATED 로 바꿨거나, 인계한 노드가 이겼거나) 방금 만든 자원을 직접 치우지
@@ -803,7 +921,9 @@ DUPLICATE 로 회수된다(§10.4).
 
 프로파일마다 `pauseAfter`(선택, `PAUSE_RESUME` 필요)와 `terminateAfter`(**필수**)를 둔다. 워크스페이스에는
 `closeAfter`(RUNNING · PAUSED · PROVISIONING 슬롯이 하나도 없는 채로 지난 시간, 기본 24시간)가 있다. 기준을 "모든 슬롯이
-TERMINATED" 로 두면 재시도하지 않는 FAILED 슬롯 하나가 워크스페이스를 영원히 열어 둔다.
+TERMINATED" 로 두면 재시도하지 않는 FAILED 슬롯 하나가 워크스페이스를 영원히 열어 둔다. 같은 이유로 claim 한 노드가
+죽어 남은 PROVISIONING 슬롯은 janitor 가 회수한다(§10.4 첫째) — 그러지 않으면 그 세션에 누가 다시 접속할 때까지 idle
+close 를 막고 admission 자리를 차지한다.
 
 | 기본 프로파일 예 | pauseAfter | terminateAfter |
 |-----------------|-----------|----------------|
@@ -835,10 +955,14 @@ OpenSandbox 의 만료는 idle 타임아웃이 아니라 **절대 시각**이고
 
 ### 10.4 `SandboxJanitor`
 
-application-scoped 단일 루프(기본 30초)이며 세 일을 한다.
+application-scoped 단일 루프(기본 30초)이며 세 일을 한다. 3단계는 첫째(idle 집행)만 하고, 노드 로컬로 `execShellIdle`
+동안 쓰이지 않은 `exec:` 셸 디렉터리를 지운다(§9). 조정(둘째·셋째)은 4·5단계에 들어온다.
 
 1. **idle 집행** — `store.scan` 으로 `pauseAfter`/`terminateAfter`/`closeAfter` 를 넘긴 대상, `closeResumeAfter`
-   (기본 5분) 넘게 CLOSING 에 머문 워크스페이스, 기한이 지난 툼스톤을 찾는다. 전이 CAS 는 **방금 다시 읽은 레코드에서
+   (기본 5분) 넘게 CLOSING 에 머문 워크스페이스, 기한이 지난 툼스톤을 찾는다. `provisioning.since` 에서
+   `2 × provisionTimeout` 이 지나도록 아무도 넘겨받지 않은 PROVISIONING 슬롯은 버려진 claim 이다 — 같은 claim 인지 다시 읽어
+   확인한 뒤 TERMINATED 로 CAS 하고, 죽은 claimer 가 그 키로 만들었을 샌드박스를 destroy 한다. `connect` 의 넘겨받기
+   (`provisionTimeout`, §10.1)보다 늦게 잡아, 느리지만 살아 있는 claimer 와 다음 접속이 먼저 처리하게 한다. 전이 CAS 는 **방금 다시 읽은 레코드에서
    idle 조건을 다시 확인한 뒤** 걸고(그 사이 heartbeat 가 밀었으면 건너뛴다), 성공한 뒤에 프로바이더를 호출한다. 멈춘
    CLOSING 은 §10.5 의 close 를 처음부터 이어서 돈다
 2. **샌드박스 조정** — `store.scan` 을 **먼저** 하고 `provider.list(managed=true, deployment={자기 deployment})` 를
@@ -889,17 +1013,23 @@ generation · `providerRef` · 상태가 판정 때와 같을 때만 다시 쓴�
 `SandboxWorkspaceManager.close(id, caller)` (janitor 는 같은 절차를 내부 경로로 부른다):
 
 ```
-1. CAS: CLOSING(stateSince=now, closeCause)  -- from here connect answers unavailable (§10.1 step 2)
+1. CAS: CLOSING(stateSince=now, closeCause)  -- from here connect answers unavailable (§10.1 step 3)
 2. every slot: CAS TERMINATED -> provider.destroy
+   then destroy every providerRef the record holds (idempotent: a resumed close may find slots already
+   TERMINATED whose destroy never ran)
 3. wait until provider.list(workspace=h(id)) is empty (up to closeWait), else leave it to the janitor
 4. retain-on-close ? record retainVolumeUntil = now + retainFor
                    : sharedVolumes.delete (VolumeInUseException -> leave it to the janitor)
-5. explicit close: CAS CLOSED(stateSince=now)            -- tombstone
-   idle close:     retained volume ? CAS CLOSED(stateSince=now, closeCause=idle)   -- keeps retainVolumeUntil
-                                   : delete the record    -- no tombstone (below)
+5. CAS CLOSED(stateSince=now, closeCause kept)
+   explicit: a tombstone that blocks connect until reopen
+   idle:     a record that never blocks connect (below)
+every step after 1 acts only while the record is still CLOSING with the same incarnation; step 3 also destroys
+whatever the provider still lists for the workspace (a sandbox whose creator lost its RUNNING CAS to the close)
 ```
 
-각 단계는 멱등이라 도중에 노드가 죽어도 janitor 가 CLOSING 을 처음부터 이어서 돈다(§10.4). 슬롯 전이 CAS 는
+각 단계는 멱등이라 도중에 노드가 죽어도 janitor 가 CLOSING 을 처음부터 이어서 돈다(§10.4). 이어받은 쪽이 느려 그 사이
+다른 쪽이 close 를 끝내고 애플리케이션이 reopen 했더라도, CLOSING 과 incarnation 을 매 단계 다시 확인하므로 새 incarnation 의
+샌드박스를 건드리지 않는다. 슬롯 전이 CAS 는
 워크스페이스 레코드 전체에 걸리므로, CLOSING 전이 뒤에 다른 노드가 PROVISIONING 으로 올리려는 CAS 는 version 충돌로
 지고, 다시 읽으면 CLOSING 을 보고 멈춘다. close 가 destroy 하는 동안 새 슬롯이 생겨 CLOSED 뒤에 남는 일은 없다.
 
@@ -910,17 +1040,19 @@ generation · `providerRef` · 상태가 판정 때와 같을 때만 다시 쓴�
 조용히 만들면, 애플리케이션이 끝낸 작업이 빈 환경에서 이어진다. 계속 쓰려면 애플리케이션이 `reopen(id, caller)` 를
 부른다 — CLOSED → OPEN, 새 incarnation, owner 는 그대로다. 슬롯은 모두 TERMINATED 이므로 다음 사용이 generation 을 올려
 새로 만들고, 공유 볼륨은 새 incarnation 의 이름으로 새로 만든다(옛 볼륨이 아직 지워지는 중이어도 겹치지 않는다).
-`closedRetention` 이 지나면 janitor 가 레코드를 지우고, 그 뒤의 `connect` 는 새 incarnation 으로 새 워크스페이스를 만들며
-첫 결과에 "/workspace 가 초기화되었다" notice 를 붙인다. 이것은 받아들이는 결정이다 — 툼스톤을 영원히 두면 레코드가
-끝없이 쌓인다. `retain-for` 는 `closed-retention` 이하여야 한다(기동 시 검사) — 보존 기한이 툼스톤보다 길면 기한을
+`closedRetention` 이 지나면 janitor 가 레코드를 지우고(`delete(id, version)`, §5.3), 그 뒤의 `connect` 는 새 incarnation 으로
+새 워크스페이스를 만든다. **이때는 notice 가 없다** — 레코드가 사라진 id 는 처음 보는 세션과 구별할 근거가 남지 않는다.
+이것은 받아들이는 결정이다 — 툼스톤을 영원히 두면 레코드가 끝없이 쌓인다(단계 3 구현 설계 §10 Q1). `retain-for` 는 `closed-retention` 이하여야 한다(기동 시 검사) — 보존 기한이 툼스톤보다 길면 기한을
 기억할 레코드가 먼저 사라진다.
 
-**idle close 는 툼스톤을 남기지 않는다.** `closeAfter` 로 닫힌 워크스페이스는 애플리케이션이 작업을 끝낸 것이 아니다.
-하루 쉬었다 돌아온 사용자의 같은 세션을 "workspace closed" 로 막으면 애플리케이션은 `reopen` 할 계기도 모른다. 그래서
-idle close 는 레코드를 지우고, 다음 `connect` 는 새 incarnation 으로 만들며 "/workspace 가 초기화되었다" notice 를 붙인다.
-보존할 볼륨이 있으면(`retain-on-close`) 기한을 기억해야 하므로 레코드를 `CLOSED(closeCause=idle)` 로 남기되, 이 레코드는
-`connect` 를 막지 않는다 — `connect` 는 그것을 자동으로 reopen(새 incarnation, owner 그대로)하고 같은 notice 를 붙인다.
-볼륨 기한이 지나면 janitor 가 볼륨과 레코드를 함께 지운다.
+**idle close 의 레코드는 `connect` 를 막지 않는다.** `closeAfter` 로 닫힌 워크스페이스는 애플리케이션이 작업을 끝낸 것이
+아니다. 하루 쉬었다 돌아온 사용자의 같은 세션을 "workspace closed" 로 막으면 애플리케이션은 `reopen` 할 계기도 모른다.
+그래서 idle close 는 레코드를 `CLOSED(closeCause=idle)` 로 남기고, 다음 `connect` 는 그것을 자동으로 reopen(새 incarnation,
+owner 그대로)하며 "/workspace 가 초기화되었다" notice 를 붙인다. 레코드를 지워 버리면 다음 `connect` 가 "초기화"와 "처음
+보는 세션"을 구별하지 못해 이 notice 를 줄 수 없다. 이 레코드는 막는 툼스톤이 아니고, 명시적 close 의 것과 같이
+`closedRetention` 뒤(보존 볼륨이 있으면 그 기한과 함께) janitor 가 지운다(단계 3 구현 설계 §10 Q1). idle close 로 닫혔거나
+닫히는 중인 워크스페이스를 애플리케이션이 명시적으로 close 하면 원인이 `explicit` 으로 바뀌어 막는 툼스톤이 된다 — 그렇지
+않으면 세션을 끝낸 뒤의 다음 턴이 조용히 자동 reopen 된다.
 
 `InMemory` 저장소는 재시작하면 툼스톤도 잃는다. 단일 노드 기본 구성에서는 재시작 뒤 닫힌 세션의 다음 턴이 새
 워크스페이스를 만든다 — 툼스톤을 지켜야 하는 애플리케이션은 영속 저장소를 쓴다(§5.3).
@@ -975,12 +1107,27 @@ worktree 를 만든 뒤에 환경을 돌려준다.
 - **렌더하는 모든 경로에서 불린다.** `Skill` 도구만이 아니라 스킬 포크와 스킬 기반 슬래시 커맨드도 같은 경로로
   `stage()` 를 부른다. 활성화 시점을 이 모듈이 따로 가정하지 않는다
 - **생략은 샌드박스 안의 사본으로 판단한다.** 복사를 마친 뒤 마지막에 `.staged` 마커를 쓴다. 다음 `stage()` 는 마커가
-  있으면 샌드박스 안에서 사본의 파일별 해시를 한 번 구해(셸 상태 없이 one-shot 으로, `PATH` 를 고정하고
-  `/usr/bin/sha256sum` 절대 경로로 — 모델이 export 한 `PATH` 가 가짜 `sha256sum` 을 부르지 않게), `StagedResource` 의 파일 목록으로 JVM 쪽에서 계산한
-  해시와 모두 맞을 때만(파일이 더 있어도 안 된다) 건너뛰고, 다르면 지우고 다시 복사한다. 마커만 보면 셸로 `/workspace/.aimon-staged/` 에 쓸 수 있는 실행이 `contentKey`
-  를 예측해 스크립트와 마커를 미리 심을 수 있고, 다른 에이전트가 그 스킬을 활성화할 때 심어 둔 내용이 돈다. "이
-  generation 에 이미 올렸다"를 노드 메모리나 레코드에 기억하지 않는다 — 소실 후 재생성(§10.4)이나 다른 노드에서 온
-  요청이 그 기록을 믿으면 없는 경로를 모델에게 준다
+  있으면 샌드박스 안에서 한 번의 exec(셸 상태 없이 one-shot 으로, `PATH` 를 고정하고 `/usr/bin/sha256sum` 절대 경로로 —
+  모델이 export 한 `PATH` 가 가짜 `sha256sum` 을 부르지 않게)로 **`StagedResource` 의 파일 목록 순서대로 코어와 같은
+  알고리즘(`relPath\0bytes\0` 의 SHA-256)으로 content key 를 다시 계산하고** 사본의 파일 목록을 받는다. 키가
+  `contentKey` 와 같고 파일 집합이 정확히 목록 + 마커일 때만(파일이 더 있어도 안 된다) 건너뛰고, 다르면 지우고 다시
+  복사한다. JVM 쪽에 파일별 해시를 두지 않는 것은 `StagedResource` 가 그것을 들고 있지 않아 `stage()` 마다 스킬을 다시
+  읽어야 하기 때문이다. 이 검사는 **코어의 content key 만큼 강하다** — 파일별 해시보다는 약하다. 코어 키의 틀은 한
+  파일의 바이트가 `\0{다음 relPath}\0` 를 담으면 파일 경계를 넘어 옮긴 내용이 같은 스트림을 만들 수 있고, 파일 집합
+  검사가 그 여지를 좁힌다. 코어 자신이 믿는 키이고 위험은 이론적이다. 마커만 보면 셸로 `/workspace/.aimon-staged/` 에
+  쓸 수 있는 실행이 `contentKey` 를 예측해 스크립트와 마커를 미리 심을 수 있고, 다른 에이전트가 그 스킬을 활성화할 때
+  심어 둔 내용이 돈다. "이 generation 에 이미 올렸다"를 노드 메모리나 레코드에 기억하지 않는다 — 소실 후
+  재생성(§10.4)이나 다른 노드에서 온 요청이 그 기록을 믿으면 없는 경로를 모델에게 준다
+- **동시 활성화에도 완성된 사본만 보인다.** 한 슬롯의 두 실행(메인 턴과 포크, 병렬 워크플로 단계 — §8.4)이 같은 스킬을
+  처음 활성화하면 둘 다 마커를 못 본다. 그래서 검사와 복사는 `(providerRef, target)` 마다의 **노드 로컬 락** 안에서 하고,
+  복사는 `.tmp-{contentKey}-{nonce}` 임시 디렉터리에 받은 뒤 마커를 마지막에 쓰고 제자리로 옮긴다(`move`). 락을 기다린
+  쪽은 락 안에서 다시 검사해 먼저 끝난 사본을 돌려준다 — 코어 `LocalStaging` 이 `synchronized` 와 마커 재확인으로 하는
+  일이다. 대상은 늘 완성된 채로만 나타나고, 중단된 복사의 임시 디렉터리는 다음 `stage()` 가 지운다. 다른 노드의 동시
+  복사(6단계)는 `move` 의 "이미 있음" 을 받고 대상을 다시 검사하는 것으로 충분하다
+- **읽힌 뒤 바뀐 스킬은 올리지 않는다.** 복사하며 읽은 바이트로 content key 를 다시 계산하고, `contentKey` 와 다르면
+  임시 디렉터리를 지우고 코어와 같은 "changed on disk after it was loaded" `StagingException` 을 낸다. 그렇지 않으면 바뀐
+  내용이 옛 키의 경로로 올라가고, 이후의 모든 `stage()` 가 키 검사에 실패해 다시 복사하며 바뀐 내용을 돌린다. 이름 ·
+  키 · 파일 경로의 모양과 크기 상한(코어의 50 MiB)도 코어와 같게, 샌드박스에 닿기 전에 검사한다
 - **worktree 와 공유한다.** `.aimon-staged/` 는 `repo/` 와 `.worktrees/` 밖에 있으므로 `isolate()` 가 만든
   환경도 같은 사본을 쓰고, git 병합에 섞이지 않는다
 
@@ -1061,6 +1208,13 @@ provision(slot, gen) seed:                                   (every step idempot
 developer slot:  git push origin HEAD:refs/heads/dev/<topic>
 review slot:     git fetch origin && git checkout dev/<topic>        (no external network needed)
 ```
+
+**3단계의 seed 는 이 절차의 부분집합이다.** 이미지 계약(`command -v git rg flock sha256sum`, seed 락보다 먼저 — `flock`
+이 없는 이미지는 락 오류가 아니라 이미지 계약 위반으로 보고된다), `uname -s` 와 선언한 platform, 선언했을 때만
+`uname -sr` 와 osVersion(글롭으로, `Linux 6.x` 의 `x` 는 `*`), `HARDENED_SECURITY_CONTEXT` 를 면제하지 않았으면 uid 와
+서비스 계정 토큰, `.tmp-*` 정리, `mkdir -p` 까지다. 실패한 검사는 `permanent` 이고 그 샌드박스는 지운다(라벨 대조를
+통과한 자기 샌드박스다). 제어면 네트워크 점검은 프로바이더 엔드포인트가 필요해 4단계에, git 으로 받는 seed(직접 clone
+포함)는 5단계에 들어간다. 그 전까지 `seed` 를 가진 프로파일은 기동 시 거부한다(§13.2, §20).
 
 bare 저장소와 작업 트리는 모두 매번 다른 임시 경로에 받은 뒤 rename 으로 올린다. 두 슬롯(또는 같은 슬롯을 인계받은 두
 노드)이 동시에 seed 를 돌아도 `mv -T` 는 한쪽만 성공하고, clone 이 중간에 끊겨도 반쯤 받은 디렉터리가 `repo.git` 이나
@@ -1300,18 +1454,29 @@ aimon:
 - `deployment` 가 있고 라벨 규칙(§6.3)을 만족한다
 - `orphan-grace > provision-timeout`
 - 모든 프로파일에 `terminate-after` 가 있고, `pause-after < terminate-after ≤ max-expiry`
+- `terminate-after ≥ 3 × activity-write-interval` — heartbeat 기록 하나가 늦거나 실패해도 도는 명령의 샌드박스가 두 기록
+  사이에 만료되지 않게
 - `retain-for ≤ closed-retention`
 - 한 프로파일의 자격 증명 바인딩끼리 host · 경로 범위가 겹치지 않는다(§12.1)
 - 프로파일이 요구하는 capability 를 프로바이더가 광고한다(§6.4)
 - `require-principal: true` 이면 `SandboxTenantResolver` 와 `SessionOwnerLookup` 빈이 있다
 - `default-profile` 과 `allowed-profiles` 가 모두 정의된 프로파일이다
+- `insecure-allow` 는 `HARDENED_SECURITY_CONTEXT` · `RUNTIME_CLASS` · `NETWORK_ISOLATION` 만 면제한다
+- `admission.max-running-per-tenant` 는 1 이상이거나 명시한 `unlimited` 다 — 값이 없어서 전부 허용이 되는 경로는 없다
+
+아직 구현되지 않은 기능을 쓰는 프로파일은 조용히 무시하지 않고 **거부한다.** 3단계에서는 `pause-after`(`PAUSE_RESUME`,
+7단계), `shared-access` 가 `none` 이 아닌 것(5단계), `seed`(5단계), 비어 있지 않은 `credentials`(4단계 — 위의 자격 증명
+겹침 검사에 프로바이더의 vault 정의가 필요하고, 검사하지 못한 바인딩으로 시작하면 이 절이 필수로 둔 검사를 건너뛰게
+된다)가 그렇다. 해당 단계가 들어오면 이 거부가 풀린다(§20).
 
 ### 13.3 이미지와 배포 계약
 
 샌드박스 이미지가 지켜야 하는 것: `bash` · coreutils(`sha256sum`) · util-linux `flock` · `git` · `rg`(ripgrep) · uid 1000
 `sandbox` 사용자 · 그 사용자 소유의 `/workspace`. OpenSandbox 가 execd 를 주입하므로 이미지가 execd 를 포함할 필요는
 없다(구현 시 확인). 계약을 벗어난 이미지는 첫 프로비저닝의 seed 단계에서 `command -v git rg flock sha256sum` 검사로 실패시킨다.
-실패를 늦게 발견하면 `Grep` 이 원인 모를 에러를 낸다.
+실패를 늦게 발견하면 `Grep` 이 원인 모를 에러를 낸다. `/workspace` 가 없거나 쓸 수 없거나 그 안의 seed 락을 열 수 없는
+것도 같은 계약 위반이다. seed 는 락을 잡기 전에 이를 확인하고 FAILED(영구, step `workspace`)로 끝낸다 — 락 경합(일시
+장애)으로 보고해 매 호출마다 다시 시도하지 않는다.
 
 **실행 uid 는 execd 의 uid 다.** OpenSandbox 의 files API 와 명령은 execd 프로세스의 사용자로 돈다. 그래서 "uid 1000 으로
 돈다"는 이미지와 SecurityContext(`runAsUser: 1000`, `runAsNonRoot`)가 함께 지켜야 하고, seed 의 `id -u` 검사가 그 결과를
@@ -1383,10 +1548,13 @@ orphan-destroyed · duplicate-destroyed · volume-deleted · workspace-closed ·
 | 프로비저닝·seed 가 오래 걸림 | 명령 타임아웃에 넣지 않는다. `provisionTimeout` 안이면 명령을 실행하고 걸린 시간을 notice 로 붙인다(§10.1) |
 | seed 의 clone 실패 | 슬롯은 RUNNING 이지만 `seeded=false`. 에러에 실패한 단계를 적는다. 늘어나는 backoff 가 지난 뒤의 호출만 seed 를 다시 돈다 — 매 호출이 같은 실패를 되풀이하지 않게. seed 의 검사 실패는 위의 결정적 실패 행이다 |
 | 워크스페이스가 CLOSING · CLOSED(`closeCause=explicit`) | 사용 불가 — "workspace closed". 애플리케이션이 `reopen` 해야 한다(§10.5) |
-| idle close 나 툼스톤 만료 뒤의 같은 id | 새 워크스페이스로 실행하고 "/workspace 가 초기화되었다" notice(§10.5) |
+| idle close 뒤의 같은 id | 자동 reopen 으로 새 incarnation 에서 실행하고 "/workspace 가 초기화되었다" notice(§10.5). 그 뒤의 재생성이 실패하면 notice 를 그 에러에 싣는다(§10.1) |
+| `closedRetention` 이 지나 레코드가 지워진 뒤의 같은 id | 새 워크스페이스로 실행한다. notice 없음 — 구별할 레코드가 남지 않는다(§10.5) |
 | 포크의 부모가 없거나 사용 불가 | 포크도 사용 불가. 부모가 있으면 그 원인을 그대로 싣는다(§8.2) |
 | 세션도 실행 id 도 없는 요청 | 사용 불가 — 워크스페이스를 정할 수 없다(§8.2) |
-| owner 검사 실패(다른 테넌트·다른 사용자) | 사용 불가 · 도구 에러. 워크스페이스가 있다는 사실 외에는 알리지 않는다(§8.3) |
+| owner 검사 실패(다른 테넌트·다른 사용자) | 사용 불가 · 도구 에러. 워크스페이스가 있다는 사실 외에는 알리지 않는다(§8.3). 없는 id 의 `close` 는 멱등이라 성공이므로, 남의 주체도 "not permitted" 와 성공으로 id 의 존재만은 알 수 있다 — id(`ws:{sessionId}`)는 추측할 수 없다 |
+| CLOSING 중인 워크스페이스의 `reopen` | 에러 — 닫힌 뒤에 reopen 하라. 첫 읽기 뒤 CAS 사이에 CLOSING 이 되어도 같다 |
+| 명령이 `.aimon-shell` 을 지워 실행 파일이 사라짐 | 래퍼 실패 에러 — 출력을 잃었다고 적는다. 빈 성공(exit 0)으로 보고하지 않는다(§9) |
 | 슬롯이 이미 다른 프로파일로 있음 | 사용 불가 — 요구한 프로파일과 실제 프로파일을 적는다(§8.3) |
 | `SandboxStart` 가 호출자보다 넓은 프로파일 · `primary` 를 요구 | 도구 에러(§8.5) |
 | 격리 브랜치의 작업 트리를 잃음(generation 변경) | 에러 — 파생 환경은 이어 가지 않는다(§11.2) |
@@ -1406,19 +1574,29 @@ orphan-destroyed · duplicate-destroyed · volume-deleted · workspace-closed ·
 프로바이더가 통과해야 한다: 같은 키 순차 생성 → 하나 · destroy 멱등 · exec 의 stdout/stderr **구분**/exit code · cwd·env
 전달 · 출력 상한 truncation(stdout·stderr 각각) · `kill()` 이 그 호출의 프로세스 그룹만 끝냄 · files
 read/write/stat/list/move · `stat` 의 변경 감지 계약(같은 크기로 1초 안에 다시 써도 mtime 또는 etag 가 바뀜) ·
-`list(labels)` 가 모든 페이지를 돌려줌 · `status` 가 라벨을 돌려줌 · `extendExpiry`/`resume` 이 없는 샌드박스에
-`SandboxNotFoundException` · `SharedVolumes.delete` 멱등과 마운트 중 `VolumeInUseException` · capability 가 광고한
+`list(labels)` 가 모든 페이지를 돌려줌 · `status` 가 라벨(`EXPIRY` 를 광고하면 만료 시각도)을 돌려줌 · 출력이 `OutputSink`
+로도 전달됨 · `kill()` 뒤 그 그룹의 자손도 끝남 · `extendExpiry`/`resume` 이 없는 샌드박스에, 그리고 destroy 전에 연 연결의
+exec · files 호출에 `SandboxNotFoundException` · `SharedVolumes.delete` 멱등과 마운트 중 `VolumeInUseException` · capability 가 광고한
 기능만 동작. 셸 상태(§9)는 SPI 가 아니라 `SandboxShell` 의 일이므로 매니저 통합 테스트에서 덮는다.
 
 **저장소 계약 스위트** — `SandboxWorkspaceStoreContract`. `InMemory` 가 3단계부터 통과하고, JDBC 구현(6단계)이 같은
-스위트를 통과한다: `createIfAbsent` 경합 → 하나 · stale version → `StaleVersionException` · scan 필터와 페이징 · 툼스톤
-보존과 삭제. 스위트가 JDBC 와 함께 늦게 생기면 `InMemory` 와 의미가 갈린다.
+스위트를 통과한다: `createIfAbsent` 경합 → 하나 · stale version, 지운 뒤의 `update` → `StaleVersionException` · 지웠다가 다시 만든
+레코드가 옛 version 을 다시 쓰지 않음(ABA) · `update` 가 `next` 의 version 을 무시하고 다른 id 를 거부함 · 돌려준 레코드와
+`find` 가 같음(밀리초 이상의 정밀도) · scan 필터와, 걸러진 레코드가 끼어 있는 페이징 · 툼스톤 보존과 삭제. 스위트가 JDBC 와 함께 늦게 생기면 `InMemory` 와 의미가 갈린다.
 
 **`LocalProcessSandboxProvider`** — testkit 에만 있는 프로바이더. 임시 디렉터리 + 로컬 프로세스로 계약을
 흉내 낸다. 격리가 없으므로 운영용이 아니며, 이름과 javadoc 에 그렇게 적는다(`HARDENED_SECURITY_CONTEXT` 등을
 광고하지 않으므로 테스트 프로파일은 `insecureAllow` 를 쓴다). 매니저·바인딩·환경 제공자·코어 도구 통합 테스트를
-Docker 없이 돌리기 위한 것이다. **장애 주입 래퍼**(`FaultInjectingSandboxProvider`)를 함께 둔다 — 호출별로 지연·5xx·
-타임아웃·not found·"생성은 됐지만 응답 유실"을 주입한다.
+Docker 없이 돌리기 위한 것이다. 샌드박스 하나는 디렉터리 하나이고 **경로를 글자로 바꿔 흉내 낸다** — 명령·작업 디렉터리의
+`/workspace` 와 files API 의 절대 경로를 그 디렉터리 아래로, 출력은 거꾸로 바꾼다. 실행 중에 조립된 경로는 바뀌지 않고
+호스트에 닿는다는 한계를 javadoc 에 적는다. 호스트에 `flock`(macOS)이나 `rg` 가 없으면 자기 `PATH` 에만 perl `flock` 과,
+검색을 하는 대신 크게 실패하는 `rg` 대역을 둔다 — 운영 이미지 계약(§13.3)은 그대로다. 명령은 perl `setpgrp` 로 자기 프로세스
+그룹에서 돈다. 실제 exec 서버처럼 없는 작업 디렉터리는 다른 곳으로 옮겨 돌리지 않고 거부하고, destroy 된 샌드박스는 이미
+열린 연결로도 not found 이며, destroy 는 명령이 남긴 백그라운드 프로세스(그 명령의 그룹)까지 끝낸다. **장애 주입
+래퍼**(`FaultInjectingSandboxProvider`)를 함께 둔다 — 호출별로 지연·5xx·타임아웃·not
+found·"생성은 됐지만 응답 유실"·노드 종료(호출 경로를 그 자리에서 멈추는 `Error`)를 주입하고 호출 수를 센다.
+한 호출에 규칙이 여럿 맞으면 한 번짜리 규칙(`injectOnce` · `injectAt`)이 상시 규칙(`inject`)보다 먼저다.
+`ManualClock`·`ManualScheduler` 로 idle·heartbeat·backoff 시나리오를 실제 시간을 기다리지 않고 돈다.
 
 **통합 테스트**(`@Tag("docker")`) — Testcontainers 로 OpenSandbox 서버(Docker 런타임)를 띄워 `OpenSandboxProvider` 에
 계약 스위트를 돌린다. 서버는 Docker 소켓 마운트가 필요하고, egress 시나리오는 사이드카에 `NET_ADMIN`/nft 권한이
@@ -1452,14 +1630,14 @@ Docker 없이 돌리기 위한 것이다. **장애 주입 래퍼**(`FaultInjecti
 | 백그라운드 명령 실행 중 같은 세션의 다음 `Bash` | 기다리지 않고 바로 돈다 | 3 |
 | 백그라운드 명령이 `backgroundHeartbeatLimit` 넘게 돔 | 그 뒤 idle 정책대로 전이. 백그라운드 명령은 셸 락 heartbeat 를 갱신하지 않음 | 3 |
 | 첫 턴에 명령을 치지 않는 세션 | 프로비저닝 없음. 프롬프트의 환경 블록은 프로파일 선언값이다 | 3 |
-| 슬래시 커맨드(`/skill`)로 부른 스킬의 `Bash` | 샌드박스에서 돈다 (호스트 아님) | 3 |
+| 슬래시 커맨드(`/skill`)로 부른 스킬의 `Bash` (INLINE · FORK 모두) | 샌드박스에서 돈다 (호스트 아님). FORK 는 같은 워크스페이스 | 3 |
 | 셸 액션 훅을 선언한 스킬 | 로드 거부, 호스트에서 아무것도 실행되지 않음 | 3 |
 | `Write /workspace/.aimon-staged/…` · `.aimon-shell/…` | "Access denied" 에러. 같은 경로에 `Bash` 로 쓰는 것은 된다 | 3 |
 | 셸로 `.aimon-staged/{name}/{contentKey}/` 에 다른 스크립트와 마커를 심은 뒤 스킬 활성화 | 해시 불일치로 다시 복사, 심은 내용은 돌지 않음 | 3 |
 | 닫힌(CLOSED) 워크스페이스로 `connect` | "workspace closed". `reopen` 뒤에는 새 generation 으로 동작 | 3 |
 | close 도중 다른 실행의 `connect` | CLOSED 뒤에 남는 슬롯 없음 | 3 |
 | close 도중 노드 종료 | janitor 가 이어서 CLOSED 까지 | 3 |
-| `closeAfter` 로 닫힌 뒤 같은 세션의 다음 턴 | 새 워크스페이스로 실행, "/workspace 초기화" notice (툼스톤 없음) | 3 |
+| `closeAfter` 로 닫힌 뒤 같은 세션의 다음 턴 | 같은 워크스페이스를 새 incarnation 으로 자동 reopen 해 빈 `/workspace` 에서 실행, "/workspace 초기화" notice (막지 않는 CLOSED(idle) 레코드) | 3 |
 | `default-profile` 을 바꿔 재배포 → 진행 중인 워크스페이스 | 기존 `primary` 슬롯을 계속 쓴다 | 3 |
 | 다른 테넌트 principal 로 같은 workspaceId (`connect` · `close` · `reopen`) | 모두 거부 | 3 |
 | 다른 테넌트 워크스페이스에 대한 `SandboxStop` · `SandboxList` | 거부 | 5 |
@@ -1548,7 +1726,8 @@ Docker 없이 돌리기 위한 것이다. **장애 주입 래퍼**(`FaultInjecti
    SecurityContext 적용, credential vault 의 범위 지정, RWX 볼륨과 삭제 경로, 라벨 인코딩, execd 주입 여부, CI 에서
    서버를 띄우는 방법(§16). 산출물은 채운 §6.4 표와 실서버에 대한 최소 계약 테스트 몇 개다. 결과가 SPI 모양을 바꾸면
    이 문서를 먼저 고친다
-3. **aimon-sandbox — 도메인과 로컬 경로.** 레코드·`InMemory` 저장소와 저장소 계약 스위트·매니저(owner 검사, CLOSED
+3. **aimon-sandbox — 도메인과 로컬 경로.** **구현되었다** — 구현 설계와 거기서 벗어난 점은
+   [`workspace-sandbox-step3.md`](workspace-sandbox-step3.md) 에 있고, 이 문서는 그 결과를 담았다. 레코드·`InMemory` 저장소와 저장소 계약 스위트·매니저(owner 검사, CLOSED
    툼스톤, CAS 재시도 포함)·프로바이더 SPI·기본 바인딩 정책과 테넌트 해석·환경 제공자(선언 서술자, 스테이징 읽기
    전용, 셸 상태 파일)·활동 heartbeat·janitor 의 idle 집행(terminate · close · 멈춘 CLOSING 이어받기 · 툼스톤 삭제)·
    기본 admission·스킬 셸 훅 거부·기동 시 설정 검사·testkit(계약 + 로컬 프로바이더 + 장애 주입). 슬롯은 `primary`
@@ -1556,7 +1735,8 @@ Docker 없이 돌리기 위한 것이다. **장애 주입 래퍼**(`FaultInjecti
    worktree 로 바뀐다). `PAUSE_RESUME` 이 없으므로 `pauseAfter` 를 가진 프로파일은 기동 거부된다(§6.4). 코어를 실행 환경
    SPI 가 있는 버전으로 올리는 것도 이 단계다. 옛 도구 넷과 백엔드 모듈은 이 단계에 앞서 **이미 지웠다** — `aimon-sandbox`
    는 빈 모듈로 이 단계를 기다린다
-4. **aimon-sandbox-opensandbox.** 프로바이더·만료 연장·라벨 인코딩과 대조·`deployment` 라벨·janitor 의 샌드박스
+4. **aimon-sandbox-opensandbox.** 프로바이더·만료 연장·라벨 인코딩과 대조(매니저 쪽 계산과 대조는 3단계에 들어갔고, 여기서는
+   실서버가 그 라벨을 받아들이는지 확인한다)·`deployment` 라벨·자격 증명 바인딩과 그 겹침 검사·seed 의 제어면 네트워크 점검·janitor 의 샌드박스
    조정(STALE·ORPHAN·DUPLICATE·LOST 확인)·계약 스위트 통합 테스트·K8s 런타임 검증(이 단계 항목, §16). 조정은
    `InMemory` 저장소의 재시작 뒤 고아를 치우는 유일한 장치이므로 여기서 들어간다. **3단계와 한 릴리스로 낸다** — 옛 백엔드는 이미 없고 `LocalProcessSandboxProvider`
    는 운영용이 아니므로, 3단계만 내면 운영에 쓸 프로바이더가 없다
@@ -1643,8 +1823,31 @@ Docker 없이 돌리기 위한 것이다. **장애 주입 래퍼**(`FaultInjecti
   명령은 계속 돌지만 결과를 받을 쪽이 없다. 프로바이더 쪽 명령 id 를 레코드에 남겨 다른 노드가 다시 붙게
   할지는 6단계(영속 저장소) 이후에 판단한다. 그때까지는 heartbeat 가 노드와 함께 멈추므로, 결과를 받을 쪽이
   없는 명령은 idle 정책에 따라 샌드박스와 함께 정리된다
+- **principal 없는 포크의 대체 경로** *(코어 수정이 지원 범위의 모든 코어에 들어가면 닫는다)* — principal 이 없는 포크
+  요청은 부모의 `caller` 를 물려받는다(§8.2). 그 경로가 필요한 이유는 코어 브랜치 `fix/skill-fork-forward-principal` 이전
+  코어의 스킬 포크가 principal 을 넘기지 않기 때문이다. 그 수정이 코어 main 에 들어가고 지원하는 최소 코어가 그 버전이
+  되면, 대체 경로를 없애고 principal 없는 포크를 루트 요청처럼 주체 검사에 맡길지(부모 상속이 조용히 남지 않게) 다시 정한다
 - **스트리밍 도구 출력** — SPI 는 `OutputSink` 로 준비되어 있지만 코어 `BashTool` 이 부분 출력을 이벤트로
   내보내는 경로가 없다
+- **`sharedAccess: none` 슬롯의 git 직접 clone** *(5단계에서 닫는다)* — §18 은 git seed 를 5단계에 두었고 직접 clone 은
+  어느 단계인지 말하지 않는다. 3단계는 `seed` 를 가진 프로파일을 기동 시 거부한다(§11.3, §13.2). 구현되지 않은 경로가
+  조용히 아무것도 하지 않는 것보다 낫다. 넣을 때는 bare 저장소 seed 와 함께 `SandboxSeeder` 에 넣는다(단계 3 구현 설계
+  §10 Q2)
+- **자격 증명 바인딩의 겹침 검사** *(4단계에서 닫는다)* — §13.2 의 검사는 vault 쪽 정의(host · 경로 prefix · 메서드)가
+  필요한데 그것은 OpenSandbox 프로바이더 설정만 안다. 프로바이더 쪽 검증 훅의 모양을 4단계가 정하고, 그 전까지
+  `credentials` 를 가진 프로파일은 기동 시 거부한다(단계 3 구현 설계 §10 Q3)
+- **seed 의 네트워크 격리 점검** *(4단계에서 닫는다)* — seed 가 제어면 엔드포인트에 닿지 못하는지 스스로 확인하려면
+  프로바이더가 그 엔드포인트를 SPI 로 알려 줘야 한다. 그 모양이 4단계의 일이다. 그 전까지 `NETWORK_ISOLATION` 은 필수
+  capability 로 남으므로, 모든 프로파일은 그것을 광고하는 프로바이더 위에서 돌거나 `insecure-allow` 로 면제하고 기동 경고를
+  남긴다 — 빈틈이 조용히 생기지 않는다(단계 3 구현 설계 §10 Q4)
+- **§14 의 span 과 메트릭을 어느 단계가 가지는가** *(3·4단계 릴리스 전에 닫는다)* — §18 은 관측성을 어느 단계에도 두지
+  않았다. 3단계는 `SandboxEventListener` 의 수명 이벤트(§14 의 감사 쪽)만 넣었다. 메트릭은 Micrometer 의존성과 라벨
+  설계가 따라오므로 소비처가 생길 때 정한다(단계 3 구현 설계 §10 Q6)
+- **aimon-core SNAPSHOT 고정** *(3·4단계 릴리스 전에 닫는다)* — 3단계는 `aimon-core 0.3.1-SNAPSHOT` 을 `mavenLocal()` 에서
+  받는다(그룹과 스냅숏으로 걸러 둔다). aimon-core 0.3.1 이 Central 에 나오고, 고정을 올리고, `mavenLocal()` 을 지우기
+  전에는 이 저장소의 어떤 것도 릴리스하지 않는다(단계 3 구현 설계 §10 Q8)
+- **`aimon-sandbox-testkit` 의 발행** *(3·4단계 릴리스에서 닫는다)* — 계약 스위트를 이 저장소 밖의 구현도 통과해야 하므로
+  발행하기로 했다(`aimon.publishable`). 첫 릴리스 전까지는 되돌릴 수 있다(단계 3 구현 설계 §10 Q5)
 
 ---
 
@@ -1684,7 +1887,7 @@ Docker 없이 돌리기 위한 것이다. **장애 주입 래퍼**(`FaultInjecti
 - **egress 를 생략해서 "전부 차단"을 표현하지 말 것.** OpenSandbox 는 생략을 전부 허용으로 읽는다. `defaultAction: deny` 를 명시한다(§6.4)
 - **`terminateAfter` 없는 프로파일을 받아들이지 말 것.** 프로바이더 만료가 최후 방어선이다(§10.2)
 - **프로바이더 목록에서 한 번 빠졌다고 LOST 로 확정하지 말 것.** `status` 로 다시 확인한다(§10.4)
-- **명시적으로 닫힌 워크스페이스에 조용히 새 샌드박스를 만들지 말 것.** `reopen` 을 거친다. idle close 에는 툼스톤을 남기지 않는다(§10.5)
+- **명시적으로 닫힌 워크스페이스에 조용히 새 샌드박스를 만들지 말 것.** `reopen` 을 거친다. idle close 의 레코드는 `connect` 를 막지 않는다(§10.5)
 - **모델 명령에 셸 락 fd 를 넘기지 말 것.** 명령이 남긴 자손이 락을 쥔다(§9)
 - **결정적 실패를 backoff 로 재시도하지 말 것.** 프로파일이 바뀔 때까지 멈춘다(§10.1)
 - **janitor 가 scan 스냅숏만 보고 샌드박스를 지우지 말 것.** destroy 직전에 레코드를 다시 읽는다(§10.4)
@@ -1697,6 +1900,7 @@ Docker 없이 돌리기 위한 것이다. **장애 주입 래퍼**(`FaultInjecti
 
 ## 관련 문서
 
+- [`workspace-sandbox-step3.md`](workspace-sandbox-step3.md) — 3단계(도메인과 로컬 경로)의 구현 설계, 결정(§10)과 구현이 벗어난 점(§12)
 - [`sandbox.md` @ `704013c`](https://github.com/kangwoo/aimon-sandbox/blob/704013c02cb14f16ec37ebf8c07f90d7e107db73/docs/design/sandbox.md) — 이 설계가 대체한 identifier 기반 설계(삭제됨)
 - [`scope-model.md`](https://github.com/kangwoo/aimon-core/blob/main/docs/overview/scope-model.md) — 수명과 소멸 책임
 - [`glossary.md`](https://github.com/kangwoo/aimon-core/blob/main/docs/overview/glossary.md) §4 — 턴 · iteration · execution
