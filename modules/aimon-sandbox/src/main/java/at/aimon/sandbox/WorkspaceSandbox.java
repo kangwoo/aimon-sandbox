@@ -1,0 +1,259 @@
+package at.aimon.sandbox;
+
+import java.time.Clock;
+import java.util.Objects;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import at.aimon.core.skill.hook.declarative.NoOpShellActionExecutor;
+import at.aimon.core.skill.parser.MarkdownSkillParser;
+import at.aimon.core.skill.parser.SkillHookSetParser;
+import at.aimon.core.skill.render.ShellArgumentTokenizer;
+import at.aimon.sandbox.binding.CallerResolver;
+import at.aimon.sandbox.binding.DefaultSandboxBindingPolicy;
+import at.aimon.sandbox.binding.SandboxBindingPolicy;
+import at.aimon.sandbox.binding.SandboxTenantResolver;
+import at.aimon.sandbox.binding.SessionOwnerLookup;
+import at.aimon.sandbox.environment.SandboxExecutionEnvironmentProvider;
+import at.aimon.sandbox.profile.SandboxProfileRegistry;
+import at.aimon.sandbox.provider.SandboxConnectionCache;
+import at.aimon.sandbox.provider.SandboxProvider;
+import at.aimon.sandbox.workspace.DefaultSandboxAdmission;
+import at.aimon.sandbox.workspace.InMemorySandboxWorkspaceStore;
+import at.aimon.sandbox.workspace.SandboxAdmission;
+import at.aimon.sandbox.workspace.SandboxEventListener;
+import at.aimon.sandbox.workspace.SandboxJanitor;
+import at.aimon.sandbox.workspace.SandboxScheduler;
+import at.aimon.sandbox.workspace.SandboxWorkspaceManager;
+import at.aimon.sandbox.workspace.SandboxWorkspaceStore;
+
+/**
+ * The assembly: builds, validates and closes the application-scoped singletons of docs/design/workspace-sandbox.md
+ * §3.2 in one place, since this module does not assume a DI container.
+ *
+ * <pre>{@code
+ * WorkspaceSandbox sandbox = WorkspaceSandbox.builder()
+ *         .settings(settings).provider(provider)       // provider borrowed unless ownProvider(true)
+ *         .tenantResolver(...).sessionOwnerLookup(...)  // required with require-principal
+ *         .build();                                     // SandboxConfigurationException on any §13.2 violation
+ * runtimeBuilder.executionEnvironmentProvider(sandbox.environmentProvider());
+ * sandbox.janitor().start();
+ * }</pre>
+ *
+ * <p>
+ * Skills must be parsed with {@link #markdownSkillParser()} (or {@link #skillHookSetParser()}) in sandbox mode: a
+ * skill that declares a shell-action hook is then refused at load time, instead of running its hook on the host while
+ * its {@code Bash} runs in the sandbox (§12.1). The assembly also recommends against registering core's
+ * {@code GitStatusContextProvider} and {@code DirectorySummaryContextProvider}: they read the filesystem every turn
+ * and so would provision a sandbox for turns that run no command (§11.1).
+ */
+public final class WorkspaceSandbox implements AutoCloseable {
+
+    private static final Logger log = LoggerFactory.getLogger(WorkspaceSandbox.class);
+
+    private final SandboxSettings settings;
+    private final SandboxProvider provider;
+    private final boolean ownProvider;
+    private final SandboxScheduler scheduler;
+    private final boolean ownScheduler;
+    private final SandboxWorkspaceStore store;
+    private final SandboxProfileRegistry profiles;
+    private final SandboxConnectionCache connections;
+    private final SandboxWorkspaceManager manager;
+    private final SandboxJanitor janitor;
+    private final SandboxExecutionEnvironmentProvider environmentProvider;
+
+    private WorkspaceSandbox(Builder builder) {
+        this.settings = Objects.requireNonNull(builder.settings, "settings must not be null");
+        this.provider = Objects.requireNonNull(builder.provider, "provider must not be null");
+        SandboxStartupValidator.validate(settings, new SandboxStartupValidator.Wiring(provider.capabilities(),
+                builder.tenantResolver != null, builder.sessionOwnerLookup != null));
+        this.ownProvider = builder.ownProvider;
+        this.ownScheduler = builder.scheduler == null;
+        this.scheduler = ownScheduler ? SandboxScheduler.daemon() : builder.scheduler;
+        this.store = builder.store != null ? builder.store : new InMemorySandboxWorkspaceStore();
+        this.profiles = new SandboxProfileRegistry(settings.profiles(), settings.defaultProfile());
+        final Clock clock = builder.clock;
+        this.connections = new SandboxConnectionCache(provider, clock);
+        final CallerResolver callers = new CallerResolver(settings,
+                builder.tenantResolver != null ? builder.tenantResolver : SandboxTenantResolver.SINGLE_TENANT);
+        final SandboxAdmission admission = builder.admission != null
+                ? builder.admission
+                : settings.maxRunningPerTenant() == SandboxSettings.UNLIMITED
+                        ? SandboxAdmission.UNLIMITED
+                        : new DefaultSandboxAdmission(store, settings.maxRunningPerTenant());
+        this.manager = SandboxWorkspaceManager.builder().settings(settings).profiles(profiles).provider(provider)
+                .store(store).connections(connections).admission(admission).events(builder.eventListener)
+                .callers(callers).clock(clock).scheduler(scheduler).build();
+        this.janitor = new SandboxJanitor(manager, scheduler);
+        final SandboxBindingPolicy policy = builder.bindingPolicy != null
+                ? builder.bindingPolicy
+                : new DefaultSandboxBindingPolicy(callers, profiles, builder.sessionOwnerLookup);
+        this.environmentProvider = SandboxExecutionEnvironmentProvider.builder().policy(policy).callers(callers)
+                .manager(manager).connections(connections).profiles(profiles).store(store).settings(settings)
+                .clock(clock).build();
+        log.info("Workspace sandbox ready: deployment={}, node={}, profiles={}, default={}", settings.deployment(),
+                settings.nodeId(), profiles.all().keySet(), settings.defaultProfile());
+    }
+
+    /** @return a new builder */
+    public static Builder builder() {
+        return new Builder();
+    }
+
+    /**
+     * The hook parser for sandbox mode: shell actions are refused at parse time, so a skill declaring one does not
+     * load and nothing it declares runs on the host (§12.1).
+     *
+     * @return a parser wired to {@link NoOpShellActionExecutor}
+     */
+    public static SkillHookSetParser skillHookSetParser() {
+        return new SkillHookSetParser(NoOpShellActionExecutor.INSTANCE);
+    }
+
+    /** @return a skill parser wired with {@link #skillHookSetParser()} */
+    public static MarkdownSkillParser markdownSkillParser() {
+        return new MarkdownSkillParser(new ShellArgumentTokenizer(), skillHookSetParser());
+    }
+
+    /** @return the provider to hand to aimon-core's runtime */
+    public SandboxExecutionEnvironmentProvider environmentProvider() {
+        return environmentProvider;
+    }
+
+    /** @return the manager ({@code close} and {@code reopen} for the application) */
+    public SandboxWorkspaceManager manager() {
+        return manager;
+    }
+
+    /** @return the janitor; call {@link SandboxJanitor#start()} to run it */
+    public SandboxJanitor janitor() {
+        return janitor;
+    }
+
+    /** @return the workspace store */
+    public SandboxWorkspaceStore store() {
+        return store;
+    }
+
+    /** @return the configured profiles */
+    public SandboxProfileRegistry profiles() {
+        return profiles;
+    }
+
+    /** @return the settings */
+    public SandboxSettings settings() {
+        return settings;
+    }
+
+    /** @return the node-local connection cache */
+    public SandboxConnectionCache connections() {
+        return connections;
+    }
+
+    /**
+     * Stops the janitor, closes cached connections, and closes the scheduler and provider when this assembly owns
+     * them. Sandboxes are not touched: they live as long as their workspaces (§3.2).
+     */
+    @Override
+    public void close() {
+        janitor.close();
+        connections.close();
+        if (ownScheduler) {
+            scheduler.close();
+        }
+        if (ownProvider) {
+            provider.close();
+        }
+    }
+
+    /** Builder for {@link WorkspaceSandbox}. */
+    public static final class Builder {
+        private SandboxSettings settings;
+        private SandboxProvider provider;
+        private boolean ownProvider;
+        private SandboxWorkspaceStore store;
+        private SandboxTenantResolver tenantResolver;
+        private SessionOwnerLookup sessionOwnerLookup;
+        private SandboxAdmission admission;
+        private SandboxEventListener eventListener = SandboxEventListener.NOOP;
+        private SandboxBindingPolicy bindingPolicy;
+        private Clock clock = Clock.systemUTC();
+        private SandboxScheduler scheduler;
+
+        private Builder() {
+        }
+
+        public Builder settings(SandboxSettings settings) {
+            this.settings = settings;
+            return this;
+        }
+
+        public Builder provider(SandboxProvider provider) {
+            this.provider = provider;
+            return this;
+        }
+
+        /** Whether {@link WorkspaceSandbox#close()} closes the provider too (default: borrowed). */
+        public Builder ownProvider(boolean ownProvider) {
+            this.ownProvider = ownProvider;
+            return this;
+        }
+
+        /** Default: a new {@link InMemorySandboxWorkspaceStore} (single node only). */
+        public Builder store(SandboxWorkspaceStore store) {
+            this.store = store;
+            return this;
+        }
+
+        /** Required with {@code require-principal}; default: everyone in one tenant. */
+        public Builder tenantResolver(SandboxTenantResolver tenantResolver) {
+            this.tenantResolver = tenantResolver;
+            return this;
+        }
+
+        /** Required with {@code require-principal}; default: none, a main turn's caller owns its workspace. */
+        public Builder sessionOwnerLookup(SessionOwnerLookup sessionOwnerLookup) {
+            this.sessionOwnerLookup = sessionOwnerLookup;
+            return this;
+        }
+
+        /** Default: {@link DefaultSandboxAdmission} with {@code max-running-per-tenant} — never allow-all. */
+        public Builder admission(SandboxAdmission admission) {
+            this.admission = admission;
+            return this;
+        }
+
+        public Builder eventListener(SandboxEventListener eventListener) {
+            this.eventListener = Objects.requireNonNull(eventListener, "eventListener must not be null");
+            return this;
+        }
+
+        /** Default: {@link DefaultSandboxBindingPolicy}. */
+        public Builder bindingPolicy(SandboxBindingPolicy bindingPolicy) {
+            this.bindingPolicy = bindingPolicy;
+            return this;
+        }
+
+        public Builder clock(Clock clock) {
+            this.clock = Objects.requireNonNull(clock, "clock must not be null");
+            return this;
+        }
+
+        /** Default: a daemon scheduler owned (and closed) by the assembly. */
+        public Builder scheduler(SandboxScheduler scheduler) {
+            this.scheduler = scheduler;
+            return this;
+        }
+
+        /**
+         * @return the assembly
+         * @throws SandboxConfigurationException
+         *             listing every startup violation (§13.2)
+         */
+        public WorkspaceSandbox build() {
+            return new WorkspaceSandbox(this);
+        }
+    }
+}
