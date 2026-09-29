@@ -94,15 +94,18 @@ public final class SandboxContentSearch implements ContentSearch {
         // Absolute and normalised: rg echoes the path as given, so "./sub//" or "../repo/sub" would otherwise come back
         // spelled differently from what the file tools list for the same files.
         args.add(ProviderFileSystem.absolute(fileSystem.resolve(query.getPath())));
-        final StringBuilder command = new StringBuilder("cd -- ").append(ShellWrapper.quote(binding.root()))
-                .append(" || exit 2\nexec");
+        // No cd into the root: the path is absolute, and a command that removed the root must not fail every search.
+        final StringBuilder command = new StringBuilder("exec");
         for (String arg : args) {
             command.append(' ').append(ShellWrapper.quote(arg));
         }
-        final ExecSpec spec = ExecSpec.builder().command(command.toString()).environment(slot.profile().environment())
+        final ExecSpec spec = ExecSpec.builder().command(command.toString())
+                .workingDirectory(ShellWrapper.EXEC_DIRECTORY).environment(slot.profile().environment())
                 .timeout(TIMEOUT).maxCaptureBytes(MAX_OUTPUT).build();
-        final ExecOutcome outcome = await(
-                ProviderCalls.guarded(slot, () -> slot.connection().run(spec, OutputSink.DISCARD)), query);
+        final RunningCommand running = ProviderCalls.guarded(slot,
+                () -> slot.connection().run(spec, OutputSink.DISCARD));
+        // The await too: a sandbox lost while rg runs is marked lost here, not left to the fallback walk's first call.
+        final ExecOutcome outcome = ProviderCalls.guarded(slot, () -> await(running, query));
         if (outcome.exitCode() == 1) {
             return ContentSearchResult.of(List.of());
         }

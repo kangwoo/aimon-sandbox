@@ -39,8 +39,11 @@ import at.aimon.sandbox.provider.ProviderSandboxRef;
 import at.aimon.sandbox.provider.RunningCommand;
 import at.aimon.sandbox.provider.SandboxConnection;
 import at.aimon.sandbox.provider.SandboxFiles;
+import at.aimon.sandbox.provider.SandboxNotFoundException;
 import at.aimon.sandbox.provider.SandboxProvider;
 import at.aimon.sandbox.testkit.LocalProcessSandboxProvider;
+import at.aimon.sandbox.workspace.SandboxUnavailableException;
+import at.aimon.sandbox.workspace.SandboxWorkspaceManager;
 
 /** {@code rg --json} inside the sandbox (§7). Real searches need ripgrep on the host; the stub must fail loudly. */
 class SandboxContentSearchIT {
@@ -222,6 +225,102 @@ class SandboxContentSearchIT {
                 Thread.sleep(50);
             }
             assertThat(ProcessHandle.of(pid).map(ProcessHandle::isAlive).orElse(false)).as("rg was killed").isFalse();
+        }
+    }
+
+    @Test
+    void aRemovedRootDoesNotFailASearchOfAnotherAbsolutePath() throws Exception {
+        assumeTrue(LocalProcessSandboxProvider.hostHasRipgrep(), "ripgrep is not installed on this host");
+        SandboxHarness.bash(env, "mkdir -p /workspace/other && echo needle > /workspace/other/n.txt; "
+                + "cd /workspace && rm -rf /workspace/repo");
+
+        final ContentSearchResult result = env.contentSearch().orElseThrow()
+                .search(ContentQuery.builder().pattern("needle").path("/workspace/other").build());
+
+        assertThat(result.getFiles()).extracting(ContentSearchResult.FileMatches::getPath)
+                .containsExactly("/workspace/other/n.txt");
+    }
+
+    @Test
+    void aRemovedRootDoesNotFailTheSearchCommandItself() throws Exception {
+        final RecordingProvider[] recording = new RecordingProvider[1];
+        try (SandboxHarness h = SandboxHarness.builder()
+                .decorate((provider, clock) -> recording[0] = new RecordingProvider(provider)).build()) {
+            final ExecutionEnvironment e = h.mainTurn(SessionId.generate(), ALICE);
+            SandboxHarness.bash(e, "cd /workspace && rm -rf /workspace/repo");
+            // rg itself answers "no matches": whatever runs before it in the command must not need the root.
+            recording[0].rewrite(spec -> spec.command().contains("'rg' '--json'")
+                    ? ExecSpec.builder().command(spec.command().replaceFirst("exec 'rg'[\\s\\S]*", "exit 1"))
+                            .workingDirectory(spec.workingDirectory().orElse(null)).timeout(spec.timeout())
+                            .maxCaptureBytes(spec.maxCaptureBytes()).build()
+                    : spec);
+
+            assertThat(e.contentSearch().orElseThrow()
+                    .search(ContentQuery.builder().pattern("x").path("/workspace").build()).getFiles()).isEmpty();
+        }
+    }
+
+    @Test
+    void rgRunsInTheWorkspaceWithoutChangingIntoTheRoot() {
+        final RecordingProvider[] recording = new RecordingProvider[1];
+        try (SandboxHarness canned = SandboxHarness.builder()
+                .decorate((provider,
+                        clock) -> recording[0] = new RecordingProvider(new CannedRg(provider, null, new ArrayList<>())))
+                .build()) {
+            canned.mainTurn(SessionId.generate(), ALICE).contentSearch().orElseThrow()
+                    .search(ContentQuery.builder().pattern("x").path("src").build());
+
+            assertThat(recording[0].runs).filteredOn(spec -> spec.command().contains("'rg' '--json'")).singleElement()
+                    .satisfies(spec -> {
+                        assertThat(spec.command()).startsWith("exec 'rg'").doesNotContain("cd --");
+                        assertThat(spec.workingDirectory()).contains(ShellWrapper.EXEC_DIRECTORY);
+                    });
+        }
+    }
+
+    @Test
+    void aSandboxLostWhileRgRunsIsReportedAsLost() {
+        try (SandboxHarness lost = SandboxHarness.builder()
+                .decorate((provider, clock) -> new DelegatingProvider(provider) {
+                    @Override
+                    public SandboxConnection connect(ProviderSandboxRef ref) {
+                        final SandboxConnection real = super.connect(ref);
+                        return new SandboxConnection() {
+                            @Override
+                            public RunningCommand run(ExecSpec spec, OutputSink sink) {
+                                final RunningCommand command = real.run(spec, sink);
+                                if (!spec.command().contains("'rg' '--json'")) {
+                                    return command;
+                                }
+                                return new RunningCommand() {
+                                    @Override
+                                    public ExecOutcome await(Duration timeout) {
+                                        throw new SandboxNotFoundException(ref);
+                                    }
+
+                                    @Override
+                                    public void kill() {
+                                        command.kill();
+                                    }
+                                };
+                            }
+
+                            @Override
+                            public SandboxFiles files() {
+                                return real.files();
+                            }
+
+                            @Override
+                            public void close() {
+                                real.close();
+                            }
+                        };
+                    }
+                }).build()) {
+            final ContentSearch search = lost.mainTurn(SessionId.generate(), ALICE).contentSearch().orElseThrow();
+
+            assertThatThrownBy(() -> search.search(ContentQuery.builder().pattern("x").path(".").build()))
+                    .isInstanceOf(SandboxUnavailableException.class).hasMessage(SandboxWorkspaceManager.LOST_MESSAGE);
         }
     }
 
