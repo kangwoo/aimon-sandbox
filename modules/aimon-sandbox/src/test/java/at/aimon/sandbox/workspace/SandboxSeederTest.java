@@ -105,7 +105,9 @@ class SandboxSeederTest {
             try (SandboxConnection connection = local.connect(ref)) {
                 return seeder.seed(connection, profile, "/workspace/repo");
             } finally {
-                Files.setPosixFilePermissions(workspace, PosixFilePermissions.fromString("rwxr-xr-x"));
+                if (Files.exists(workspace)) {
+                    Files.setPosixFilePermissions(workspace, PosixFilePermissions.fromString("rwxr-xr-x"));
+                }
             }
         }
     }
@@ -115,6 +117,19 @@ class SandboxSeederTest {
     void aWorkspaceThatIsNotWritableIsAPermanentFailure() throws Exception {
         final Optional<SandboxSeeder.Failure> failure = seedLocal(
                 workspace -> Files.setPosixFilePermissions(workspace, PosixFilePermissions.fromString("r-xr-xr-x")));
+
+        assertThat(failure).hasValueSatisfying(f -> {
+            assertThat(f.step()).isEqualTo("workspace");
+            assertThat(f.reason()).isEqualTo("/workspace is missing or not writable");
+        });
+    }
+
+    @Test
+    @DisplayName("§13.3: a missing /workspace reaches the seed's own check and is a permanent failure")
+    void aMissingWorkspaceIsAPermanentFailureNotAProviderError() throws Exception {
+        // The local provider refuses a missing working directory, as a real exec server may: the seed must not run
+        // in /workspace, or this would be a transient provider error.
+        final Optional<SandboxSeeder.Failure> failure = seedLocal(Files::delete);
 
         assertThat(failure).hasValueSatisfying(f -> {
             assertThat(f.step()).isEqualTo("workspace");

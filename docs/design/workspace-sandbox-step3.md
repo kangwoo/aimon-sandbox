@@ -1157,3 +1157,11 @@ document says. WS is updated in the same change; the section named in brackets i
     `ProviderFileSystem.search` calls core's `SearchPatterns.sanitize` instead of a copy of it. The timeout window in
     which a command that finished just in time is reported as timed out (the watchdog fires between the inner bash
     returning and the outer stopping it) is documented on `ShellWrapper` rather than closed.
+
+### Fixed after PR review 2
+
+57. **Review-2 follow-ups.** `SessionOwnerLookup`'s javadoc states that the owner is compared by type and id, so a
+    lookup must return the principal as the runtime presents it. The seed exec runs in `/` rather than `/workspace`,
+    so a provider that refuses a missing working directory cannot turn a missing `/workspace` into a transient error
+    before the script's own check (`SandboxSeederTest#aMissingWorkspaceIsAPermanentFailureNotAProviderError`).
+    `WorkspaceOwner.parse` refuses a blank id (`USER: `), which `of()` can never produce.

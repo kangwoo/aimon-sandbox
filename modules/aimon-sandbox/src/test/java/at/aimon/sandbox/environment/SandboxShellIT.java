@@ -405,6 +405,7 @@ class SandboxShellIT {
 
     @Test
     void aTimedOutCommandsRunFilesAreRemovedFromTheJvm() throws Exception {
+        harness.faults.resetCounts();
         assertThatThrownBy(() -> bash(env, "echo partial; sleep 10", timeout(Duration.ofSeconds(1))))
                 .isInstanceOfSatisfying(ShellTimeoutException.class,
                         e -> assertThat(e.stdout()).isEqualTo("partial\n"));

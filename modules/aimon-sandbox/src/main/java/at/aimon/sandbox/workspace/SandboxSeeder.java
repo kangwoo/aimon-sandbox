@@ -75,8 +75,10 @@ final class SandboxSeeder {
      *             (transient) when the seed could not run at all
      */
     Optional<Failure> seed(SandboxConnection connection, SandboxProfile profile, String root) {
+        // Run in "/", not /workspace: a provider that refuses a missing working directory would otherwise fail the
+        // exec as a transient error before the script's own /workspace check could report it as permanent.
         final RunningCommand command = connection.run(ExecSpec.builder().command(script(profile, root))
-                .workingDirectory("/workspace").environment(profile.environment()).timeout(provisionTimeout)
+                .workingDirectory("/").environment(profile.environment()).timeout(provisionTimeout)
                 .maxCaptureBytes(64 * 1024).build(), OutputSink.DISCARD);
         final ExecOutcome outcome;
         try {

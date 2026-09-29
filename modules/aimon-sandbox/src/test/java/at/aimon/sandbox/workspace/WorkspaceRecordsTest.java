@@ -150,7 +150,7 @@ class WorkspaceRecordsTest {
                 .isEqualTo(WorkspaceOwner.parse(t, WorkspaceOwner.ANONYMOUS));
         assertThat(WorkspaceOwner.of(t, Principal.group("eng", "Eng")).principal()).isEqualTo("GROUP:eng");
         assertThat(WorkspaceOwner.parse(t, "SERVICE:a:b").principal()).isEqualTo("SERVICE:a:b");
-        for (String bare : new String[]{"alice", ":alice", "USER:", "ROBOT:alice"}) {
+        for (String bare : new String[]{"alice", ":alice", "USER:", "USER: ", "GROUP:\t", "ROBOT:alice"}) {
             assertThatThrownBy(() -> WorkspaceOwner.parse(t, bare)).as(bare)
                     .isInstanceOf(IllegalArgumentException.class).hasMessageContaining("TYPE:id");
         }

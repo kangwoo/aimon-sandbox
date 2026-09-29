@@ -58,13 +58,13 @@ public final class WorkspaceOwner {
      *            the principal as {@link #principal()} returned it — {@code TYPE:id}, or {@link #ANONYMOUS}
      * @return the owner
      * @throws IllegalArgumentException
-     *             when {@code principal} is neither form
+     *             when {@code principal} is neither form, or its id is blank (core refuses a blank id)
      */
     public static WorkspaceOwner parse(TenantId tenant, String principal) {
         Objects.requireNonNull(principal, "principal must not be null");
         if (!principal.equals(ANONYMOUS)) {
             final int colon = principal.indexOf(':');
-            if (colon <= 0 || colon == principal.length() - 1 || !isType(principal.substring(0, colon))) {
+            if (colon <= 0 || principal.substring(colon + 1).isBlank() || !isType(principal.substring(0, colon))) {
                 throw new IllegalArgumentException(
                         "a recorded principal is TYPE:id or '" + ANONYMOUS + "', not '" + principal + "'");
             }
