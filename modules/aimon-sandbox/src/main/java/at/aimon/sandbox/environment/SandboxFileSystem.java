@@ -1,7 +1,10 @@
 package at.aimon.sandbox.environment;
 
+import java.io.FilterOutputStream;
+import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.io.UncheckedIOException;
 import java.util.List;
 import java.util.Objects;
 import java.util.function.Consumer;
@@ -55,12 +58,19 @@ public final class SandboxFileSystem implements VirtualFileSystem {
     }
 
     private <T> T call(Function<VirtualFileSystem, T> operation) {
+        final ConnectedSlot slot = connect();
+        return ProviderCalls.guarded(slot, () -> operation.apply(view(slot)));
+    }
+
+    private ConnectedSlot connect() {
         final ConnectedSlot slot = manager.connect(binding);
         pending.addAll(slot.notices());
         slot.activity().record(false);
-        final VirtualFileSystem view = VirtualFileSystems
-                .withPathRules(new ProviderFileSystem(slot.connection().files()), RULES);
-        return ProviderCalls.guarded(slot, () -> operation.apply(view));
+        return slot;
+    }
+
+    private static VirtualFileSystem view(ConnectedSlot slot) {
+        return VirtualFileSystems.withPathRules(new ProviderFileSystem(slot.connection().files()), RULES);
     }
 
     private void run(Consumer<VirtualFileSystem> operation) {
@@ -149,9 +159,35 @@ public final class SandboxFileSystem implements VirtualFileSystem {
         run(fs -> fs.move(resolve(sourcePath), resolve(destinationPath), overwrite));
     }
 
+    /**
+     * The bytes reach the sandbox when the stream is closed, so the close is a provider call too: it fails the way
+     * every other call here does ("lost", "unavailable"), never with a raw provider exception.
+     */
     @Override
     public OutputStream openOutputStream(String path) {
-        return call(fs -> fs.openOutputStream(resolve(path)));
+        final ConnectedSlot slot = connect();
+        final OutputStream out = ProviderCalls.guarded(slot, () -> view(slot).openOutputStream(resolve(path)));
+        return new FilterOutputStream(out) {
+            @Override
+            public void write(byte[] bytes, int offset, int length) throws IOException {
+                out.write(bytes, offset, length);
+            }
+
+            @Override
+            public void close() throws IOException {
+                try {
+                    ProviderCalls.guarded(slot, () -> {
+                        try {
+                            out.close();
+                        } catch (IOException e) {
+                            throw new UncheckedIOException(e);
+                        }
+                    });
+                } catch (UncheckedIOException e) {
+                    throw e.getCause();
+                }
+            }
+        };
     }
 
     @Override

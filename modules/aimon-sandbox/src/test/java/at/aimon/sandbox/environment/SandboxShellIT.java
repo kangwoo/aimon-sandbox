@@ -27,6 +27,7 @@ import at.aimon.core.shell.ExecutionOptions;
 import at.aimon.core.shell.ShellCommandResult;
 import at.aimon.core.shell.exception.ShellExecutionException;
 import at.aimon.core.shell.exception.ShellTimeoutException;
+import at.aimon.sandbox.RecordingProvider;
 import at.aimon.sandbox.SandboxHarness;
 import at.aimon.sandbox.binding.ShellKey;
 import at.aimon.sandbox.testkit.FaultInjectingSandboxProvider.Operation;
@@ -111,24 +112,30 @@ class SandboxShellIT {
     @Test
     @DisplayName("§16: a command leaving `sleep 600 &` behind does not hold the next command")
     void leftoverDescendantDoesNotHoldTheLock() throws Exception {
-        final ShellCommandResult first = bash(env, "sleep 600 >/dev/null 2>&1 & echo $!");
+        // No redirection: the leftover keeps every descriptor the command gave it — the hazard itself. The sandbox's
+        // destroy (the harness's close) ends it.
+        final ShellCommandResult first = bash(env, "sleep 600 & echo $!");
         final long leftover = Long.parseLong(first.stdout().strip());
-        try {
-            final long started = System.nanoTime();
-            final ShellCommandResult next = bash(env, "echo next");
+        assertThat(ProcessHandle.of(leftover).map(ProcessHandle::isAlive)).as("the leftover still runs").contains(true);
 
-            assertThat(next.stdout()).isEqualTo("next\n");
-            assertThat(Duration.ofNanos(System.nanoTime() - started)).isLessThan(Duration.ofSeconds(2));
-        } finally {
-            ProcessHandle.of(leftover).ifPresent(ProcessHandle::destroyForcibly);
-        }
+        final long started = System.nanoTime();
+        final ShellCommandResult next = bash(env, "echo next");
+
+        assertThat(next.stdout()).isEqualTo("next\n");
+        assertThat(Duration.ofNanos(System.nanoTime() - started)).isLessThan(Duration.ofSeconds(2));
     }
 
     @Test
     @DisplayName("§16: time waiting for the shell lock is not counted in the command timeout")
     void lockWaitIsNotCountedInCommandTimeout() throws Exception {
-        final Future<ShellCommandResult> holder = executor
-                .submit(() -> bash(env, ": > /workspace/holding; sleep 1.5; echo held"));
+        // The holder is not a command of this node: it takes the in-sandbox lock directly, so the only thing that
+        // makes the next command wait is the wrapper's `flock -w`, never the node-local lock.
+        final String lock = ShellWrapper.directory(ShellKey.session(session).directoryName()) + "/lock";
+        final var connection = harness.local.connect(harness.primary(session).providerRef().orElseThrow());
+        final var holder = connection.run(
+                at.aimon.sandbox.provider.ExecSpec.builder()
+                        .command("exec 9>" + lock + "; flock 9; : > /workspace/holding; sleep 1.5").build(),
+                at.aimon.sandbox.provider.OutputSink.DISCARD);
         awaitHostFile("/workspace/holding");
 
         final long started = System.nanoTime();
@@ -136,7 +143,7 @@ class SandboxShellIT {
 
         assertThat(waited.stdout()).isEqualTo("ran\n");
         assertThat(Duration.ofNanos(System.nanoTime() - started)).isGreaterThan(Duration.ofMillis(2000));
-        assertThat(holder.get(10, TimeUnit.SECONDS).stdout()).isEqualTo("held\n");
+        assertThat(holder.await(Duration.ofSeconds(10)).exitCode()).isZero();
     }
 
     @Test
@@ -306,11 +313,15 @@ class SandboxShellIT {
 
     @Test
     void quickCommandsLeaveNoWatchdogBehind() throws Exception {
-        final ExecutionOptions options = timeout(Duration.ofMillis(17_321));
+        // A timeout no other run picks: pgrep sees the whole host, where other worktrees may run this very test.
+        final long millis = 1_000_000 + java.util.concurrent.ThreadLocalRandom.current().nextLong(8_000_000);
+        final ExecutionOptions options = timeout(Duration.ofMillis(millis));
         for (int i = 0; i < 10; i++) {
             bash(env, "true", options);
         }
-        final Process pgrep = new ProcessBuilder("pgrep", "-f", "sleep 17.321").start();
+        final String watchdog = "sleep " + (millis / 1000) + "."
+                + String.format(java.util.Locale.ROOT, "%03d", millis % 1000);
+        final Process pgrep = new ProcessBuilder("pgrep", "-f", watchdog).start();
         pgrep.waitFor(5, TimeUnit.SECONDS);
 
         assertThat(new String(pgrep.getInputStream().readAllBytes()).strip()).isEmpty();
@@ -371,6 +382,151 @@ class SandboxShellIT {
         final Path shellDir = harness.host(session, ShellWrapper.directory(ShellKey.session(session).directoryName()));
         try (var files = Files.list(shellDir)) {
             assertThat(files.map(p -> p.getFileName().toString())).noneMatch(name -> name.startsWith("run-"));
+        }
+    }
+
+    @Test
+    void anExportedPathWithoutMvOrNoPathAtAllKeepsTheState() throws Exception {
+        final ShellCommandResult broken = bash(env,
+                "mkdir -p /workspace/p && cd /workspace/p; export BAR=2; export PATH=/nonexistent");
+        final ShellCommandResult next = bash(env, "pwd; echo \"$BAR|$PATH\"");
+        final ShellCommandResult unset = bash(env,
+                "export PATH=/usr/bin:/bin; cd /workspace; export BAZ=3; unset PATH");
+        final ShellCommandResult after = bash(env, "pwd; echo \"$BAZ|${PATH-unset}\"");
+
+        assertThat(broken.stderr()).doesNotContain("command not found");
+        assertThat(next.stdout()).isEqualTo("/workspace/p\n2|/nonexistent\n");
+        assertThat(unset.stderr()).doesNotContain("command not found");
+        // The save still ran: cd and BAZ persist, and an unset PATH is simply not saved, so the base one returns.
+        assertThat(after.stdout()).startsWith("/workspace\n3|").doesNotContain("/nonexistent").doesNotContain("unset");
+        final Path shellDir = harness.host(session, ShellWrapper.directory(ShellKey.session(session).directoryName()));
+        try (var files = Files.list(shellDir)) {
+            assertThat(files.map(p -> p.getFileName().toString())).noneMatch(name -> name.startsWith("state."));
+        }
+    }
+
+    @Test
+    void aDebugTrapInTheCommandDoesNotTraceTheSave() throws Exception {
+        final ShellCommandResult traced = bash(env,
+                "set -T; trap 'echo \"DBG $BASH_COMMAND\" >&2' DEBUG RETURN; export T=1");
+
+        assertThat(traced.stderr()).contains("DBG export T=1").doesNotContain("__aimon").doesNotContain("set +");
+        assertThat(bash(env, "echo $T").stdout()).isEqualTo("1\n");
+    }
+
+    @Test
+    void verboseModeLeaksAtMostTheOneLineExitTrap() throws Exception {
+        final ShellCommandResult verbose = bash(env, "set -v; export V=1");
+
+        assertThat(verbose.stderr().lines().filter(line -> line.contains("__aimon"))).hasSizeLessThanOrEqualTo(1);
+        assertThat(verbose.stderr()).doesNotContain("declare").doesNotContain("compgen");
+        assertThat(bash(env, "echo $V").stdout()).isEqualTo("1\n");
+    }
+
+    @Test
+    void aCommandThatRemovesTheShellDirectoryIsReportedNotAnEmptySuccess() throws Exception {
+        assertThatThrownBy(() -> bash(env, "echo x; rm -rf /workspace/.aimon-shell"))
+                .isInstanceOf(ShellExecutionException.class).hasMessageContaining("output is lost");
+
+        assertThat(bash(env, "echo again").stdout()).isEqualTo("again\n");
+    }
+
+    @Test
+    void aCommandRemovingTheWorkingRootLeavesTheNextCommandRunnable() throws Exception {
+        bash(env, "rm -rf /workspace/repo");
+
+        final ShellCommandResult next = bash(env, "pwd");
+
+        // The exec itself runs in /workspace, so an exec server that refuses a missing directory never sees one.
+        assertThat(next.stdout()).isEqualTo("/workspace\n");
+        assertThat(next.notices()).anyMatch(notice -> notice.contains("/workspace/repo no longer exist")
+                && notice.contains("the command ran in /workspace"));
+    }
+
+    @Test
+    void aVanishedWorkingDirectoryWithAPerCommandDirectorySaysWhereTheShellContinues() throws Exception {
+        bash(env, "mkdir -p /workspace/gone /workspace/elsewhere && cd /workspace/gone");
+        bash(env, "rm -rf /workspace/gone");
+
+        final ShellCommandResult scoped = bash(env, "pwd", ExecutionOptions.builder().timeout(Duration.ofSeconds(20))
+                .workingDirectory("/workspace/elsewhere").build());
+
+        assertThat(scoped.stdout()).isEqualTo("/workspace/elsewhere\n");
+        assertThat(scoped.notices())
+                .anyMatch(notice -> notice.contains("no longer exists")
+                        && notice.contains("the shell continues in /workspace/repo"))
+                .noneMatch(notice -> notice.contains("ran in"));
+    }
+
+    @Test
+    void nulInAVariableValueOrTheWorkingDirectoryIsRejectedBeforeAnythingRuns() {
+        final int runs = harness.faults.calls(Operation.RUN);
+
+        assertThatThrownBy(() -> bash(env, "true",
+                ExecutionOptions.builder().timeout(Duration.ofSeconds(20)).environment(java.util.Map.of("BAD", "a\0b"))
+                        .build()))
+                .isInstanceOf(ShellExecutionException.class).hasMessageContaining("NUL").hasMessageContaining("BAD");
+        assertThatThrownBy(() -> bash(env, "true",
+                ExecutionOptions.builder().timeout(Duration.ofSeconds(20)).workingDirectory("/workspace/a\0b").build()))
+                .isInstanceOf(ShellExecutionException.class).hasMessageContaining("NUL");
+        assertThat(harness.faults.calls(Operation.RUN)).isEqualTo(runs);
+    }
+
+    @Test
+    void theCommandNeverTravelsAsAnArgumentAndALargeOneIsUploaded() throws Exception {
+        final RecordingProvider[] recording = new RecordingProvider[1];
+        try (SandboxHarness recorded = SandboxHarness.builder()
+                .decorate((provider, clock) -> recording[0] = new RecordingProvider(provider)).build()) {
+            final SessionId other = SessionId.generate();
+            final ExecutionEnvironment otherEnv = recorded.mainTurn(other, ALICE);
+            final String payload = "x".repeat(200 * 1024);
+
+            final ShellCommandResult large = bash(otherEnv,
+                    "cat > big.txt <<'EOF'\n" + payload + "\nEOF\nwc -c < big.txt");
+            final ShellCommandResult small = bash(otherEnv, "echo small");
+
+            assertThat(large.stdout().strip()).isEqualTo(String.valueOf(payload.length() + 1));
+            assertThat(small.stdout()).isEqualTo("small\n");
+            // Linux refuses one argument over 128 KiB (MAX_ARG_STRLEN); the exec's script is one.
+            assertThat(recording[0].runs).allSatisfy(
+                    spec -> assertThat(spec.command().length()).as("exec argument length").isLessThan(128 * 1024));
+            assertThat(recording[0].runs).noneMatch(spec -> spec.command().contains("\"$r\" \"$__aimon_cmd\""));
+        }
+    }
+
+    @Test
+    void aNullTimeoutIsNoTimeoutNotTwoMinutes() throws Exception {
+        final RecordingProvider[] recording = new RecordingProvider[1];
+        try (SandboxHarness recorded = SandboxHarness.builder()
+                .decorate((provider, clock) -> recording[0] = new RecordingProvider(provider)).build()) {
+            final ExecutionEnvironment otherEnv = recorded.mainTurn(SessionId.generate(), ALICE);
+            bash(otherEnv, "true");
+            recording[0].runs.clear();
+
+            final ShellCommandResult untimed = bash(otherEnv, "echo untimed", ExecutionOptions.builder().build());
+
+            assertThat(untimed.stdout()).isEqualTo("untimed\n");
+            assertThat(recording[0].runs).singleElement().satisfies(spec -> {
+                assertThat(spec.timeout()).isGreaterThanOrEqualTo(SandboxShell.NO_TIMEOUT_BACKSTOP);
+                assertThat(spec.command()).as("no watchdog").doesNotContain("kill -KILL 0");
+            });
+        }
+    }
+
+    @Test
+    void aFilesystemErrorPassingStdinIsTheCommandsFailure() {
+        final RecordingProvider[] recording = new RecordingProvider[1];
+        try (SandboxHarness failing = SandboxHarness.builder().decorate((provider, clock) -> {
+            recording[0] = new RecordingProvider(provider);
+            recording[0].files(files -> new at.aimon.sandbox.FailingFiles(files, path -> path.endsWith(".in")));
+            return recording[0];
+        }).build()) {
+            final ExecutionEnvironment failingEnv = failing.mainTurn(SessionId.generate(), ALICE);
+
+            assertThatThrownBy(() -> bash(failingEnv, "cat",
+                    ExecutionOptions.builder().timeout(Duration.ofSeconds(20)).stdin("input").build()))
+                    .isInstanceOf(ShellExecutionException.class).hasMessageContaining("could not pass stdin")
+                    .hasMessageContaining("No space left on device");
         }
     }
 }

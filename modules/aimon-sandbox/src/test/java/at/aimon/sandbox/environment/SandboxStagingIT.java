@@ -28,6 +28,8 @@ import at.aimon.core.environment.ExecutionEnvironment;
 import at.aimon.core.environment.StagedResource;
 import at.aimon.core.environment.exception.StagingException;
 import at.aimon.core.filesystem.VirtualFileSystems;
+import at.aimon.sandbox.FailingFiles;
+import at.aimon.sandbox.RecordingProvider;
 import at.aimon.sandbox.SandboxHarness;
 import at.aimon.sandbox.testkit.FaultInjectingSandboxProvider.Fault;
 import at.aimon.sandbox.testkit.FaultInjectingSandboxProvider.Operation;
@@ -216,5 +218,50 @@ class SandboxStagingIT {
                 .hasMessageContaining("could not be read");
         assertThat(Files.exists(harness.host(session, target()))).isFalse();
         assertThat(leftovers()).isEmpty();
+    }
+
+    @Test
+    void aSkillWithAPathListTooLargeForOneArgumentIsVerifiedThroughAListFile() throws Exception {
+        final Path many = Files.createDirectories(source.resolve("many"));
+        for (int i = 0; i < 700; i++) {
+            Files.writeString(many.resolve(String.format("file-with-a-rather-long-descriptive-name-%04d.txt", i)),
+                    "content " + i + "\n");
+        }
+        final StagedResource large = StagedResource.scan(VirtualFileSystems.readOnlyLocal(source), "many", "many");
+        final RecordingProvider[] recording = new RecordingProvider[1];
+        try (SandboxHarness recorded = SandboxHarness.builder()
+                .decorate((provider, clock) -> recording[0] = new RecordingProvider(provider)).build()) {
+            final SessionId other = SessionId.generate();
+            final ExecutionEnvironment otherEnv = recorded.mainTurn(other, ALICE);
+
+            final String first = otherEnv.stage(large);
+            recorded.faults.resetCounts();
+            final String second = otherEnv.stage(large);
+
+            assertThat(second).isEqualTo(first);
+            assertThat(recorded.faults.calls(Operation.FILES_MOVE)).as("the verified copy is reused").isZero();
+            assertThat(recording[0].runs).allSatisfy(spec -> assertThat(spec.command().length())
+                    .as("exec argument length").isLessThan(SandboxStaging.INLINE_PATHS_LIMIT));
+            try (Stream<Path> root = Files.list(recorded.host(other, SandboxStaging.STAGING_ROOT))) {
+                assertThat(root.map(p -> p.getFileName().toString())).as("the list file is removed")
+                        .noneMatch(name -> name.startsWith(".aimon-verify-"));
+            }
+        }
+    }
+
+    @Test
+    void aFilesystemErrorWhileCopyingIsAStagingException() {
+        final RecordingProvider[] recording = new RecordingProvider[1];
+        try (SandboxHarness failing = SandboxHarness.builder().decorate((provider, clock) -> {
+            recording[0] = new RecordingProvider(provider);
+            recording[0].files(files -> new FailingFiles(files, path -> path.contains("/.tmp-")));
+            return recording[0];
+        }).build()) {
+            final ExecutionEnvironment failingEnv = failing.mainTurn(SessionId.generate(), ALICE);
+
+            // Core's SkillTool reports StagingException; a raw filesystem exception would read as a generic error.
+            assertThatThrownBy(() -> failingEnv.stage(skill)).isInstanceOf(StagingException.class)
+                    .hasMessageContaining("Cannot stage 'demo'").hasMessageContaining("No space left on device");
+        }
     }
 }

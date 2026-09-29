@@ -22,11 +22,13 @@ import at.aimon.core.environment.exception.StagingException;
 import at.aimon.core.environment.impl.LocalExecutionEnvironmentProvider;
 import at.aimon.core.filesystem.exception.FileAlreadyExistsException;
 import at.aimon.core.filesystem.exception.FileNotFoundException;
+import at.aimon.core.filesystem.exception.VirtualFileSystemException;
 import at.aimon.sandbox.binding.SandboxBinding;
 import at.aimon.sandbox.provider.ExecOutcome;
 import at.aimon.sandbox.provider.ExecSpec;
 import at.aimon.sandbox.provider.FileStat;
 import at.aimon.sandbox.provider.OutputSink;
+import at.aimon.sandbox.provider.RunningCommand;
 import at.aimon.sandbox.provider.SandboxConnectionCache;
 import at.aimon.sandbox.provider.SandboxFiles;
 import at.aimon.sandbox.provider.WriteMode;
@@ -54,6 +56,12 @@ final class SandboxStaging {
 
     static final String STAGING_ROOT = "/workspace/.aimon-staged";
     static final String MARKER = ".staged";
+    /**
+     * The longest quoted file list the verification script embeds. A longer one — a skill with thousands of files —
+     * is uploaded as a NUL-separated list file instead: the exec's script is a single argument, which Linux limits to
+     * 128 KiB (MAX_ARG_STRLEN).
+     */
+    static final int INLINE_PATHS_LIMIT = 32 * 1024;
 
     private static final Logger log = LoggerFactory.getLogger(SandboxStaging.class);
     private static final Pattern CONTENT_KEY = Pattern
@@ -98,6 +106,10 @@ final class SandboxStaging {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new StagingException("Cannot stage '" + resource.getName() + "': interrupted", e);
+        } catch (VirtualFileSystemException e) {
+            // Core's SkillTool reports StagingException (and an unavailable environment); anything else would reach
+            // the model as a generic error.
+            throw new StagingException("Cannot stage '" + resource.getName() + "': " + e.getMessage(), e);
         }
     }
 
@@ -144,22 +156,37 @@ final class SandboxStaging {
         if (files.stat(target + "/" + MARKER).isEmpty()) {
             return false;
         }
-        final StringBuilder script = new StringBuilder("cd -- ").append(ShellWrapper.quote(target))
-                .append(" || exit 3\nh=$( (for f in");
+        final StringBuilder inline = new StringBuilder();
         for (String relPath : resource.getFiles()) {
-            script.append(' ').append(ShellWrapper.quote(relPath));
+            inline.append(' ').append(ShellWrapper.quote(relPath));
         }
-        script.append("; do printf '%s\\0' \"$f\"; cat -- \"$f\" 2>/dev/null; printf '\\0'; done) "
-                + "| /usr/bin/sha256sum) || exit 4\nprintf '%s\\n' \"${h%% *}\"\nfind . ! -type d -print0\n");
+        final String listFile = inline.length() > INLINE_PATHS_LIMIT
+                ? STAGING_ROOT + "/.aimon-verify-" + HexFormat.of().formatHex(nonce())
+                : null;
+        final StringBuilder script = new StringBuilder("cd -- ").append(ShellWrapper.quote(target))
+                .append(" || exit 3\nh=$( (");
+        if (listFile == null) {
+            script.append("for f in").append(inline).append("; do");
+        } else {
+            final StringBuilder list = new StringBuilder();
+            resource.getFiles().forEach(relPath -> list.append(relPath).append('\0'));
+            final byte[] bytes = list.toString().getBytes(StandardCharsets.UTF_8);
+            files.write(listFile, new ByteArrayInputStream(bytes), bytes.length, WriteMode.CREATE_OR_REPLACE);
+            script.append("while IFS= read -r -d '' f; do");
+        }
+        script.append(" printf '%s\\0' \"$f\"; cat -- \"$f\" 2>/dev/null; printf '\\0'; done")
+                .append(listFile == null ? "" : " < " + ShellWrapper.quote(listFile))
+                .append(") | /usr/bin/sha256sum) || exit 4\nprintf '%s\\n' \"${h%% *}\"\nfind . ! -type d -print0\n");
         final ExecOutcome outcome;
         try {
-            outcome = slot.connection()
+            outcome = await(slot.connection()
                     .run(ExecSpec.builder().command(script.toString()).environment(Map.of("PATH", "/usr/bin:/bin"))
-                            .timeout(VERIFY_TIMEOUT).maxCaptureBytes(4L * 1024 * 1024).build(), OutputSink.DISCARD)
-                    .await(VERIFY_TIMEOUT);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new StagingException("Cannot stage '" + resource.getName() + "': interrupted", e);
+                            .timeout(VERIFY_TIMEOUT).maxCaptureBytes(4L * 1024 * 1024).build(), OutputSink.DISCARD),
+                    resource);
+        } finally {
+            if (listFile != null) {
+                discard(files, listFile);
+            }
         }
         if (outcome.exitCode() != 0 || outcome.stdoutTruncated()) {
             log.debug("Staging verification of {} failed (exit {})", target, outcome.exitCode());
@@ -186,15 +213,30 @@ final class SandboxStaging {
         return valid;
     }
 
+    /** Awaits a verification exec; an interrupt kills it, as {@link RunningCommand#await} asks of the caller. */
+    private static ExecOutcome await(RunningCommand command, StagedResource resource) {
+        try {
+            return command.await(VERIFY_TIMEOUT);
+        } catch (InterruptedException e) {
+            command.kill();
+            Thread.currentThread().interrupt();
+            throw new StagingException("Cannot stage '" + resource.getName() + "': interrupted", e);
+        }
+    }
+
+    private static byte[] nonce() {
+        final byte[] nonce = new byte[6];
+        RANDOM.nextBytes(nonce);
+        return nonce;
+    }
+
     /** Copies the resource into a fresh temp directory next to the target and returns it. */
     private String copy(ConnectedSlot slot, StagedResource resource) {
         final SandboxFiles files = slot.connection().files();
         final String parent = STAGING_ROOT + "/" + resource.getName();
         final String prefix = ".tmp-" + resource.getContentKey() + "-";
         removeLeftovers(files, parent, prefix);
-        final byte[] nonce = new byte[6];
-        RANDOM.nextBytes(nonce);
-        final String tmp = parent + "/" + prefix + HexFormat.of().formatHex(nonce);
+        final String tmp = parent + "/" + prefix + HexFormat.of().formatHex(nonce());
         final StagedResource.ContentKeyBuilder hasher = new StagedResource.ContentKeyBuilder();
         for (String relPath : resource.getFiles()) {
             final byte[] bytes;

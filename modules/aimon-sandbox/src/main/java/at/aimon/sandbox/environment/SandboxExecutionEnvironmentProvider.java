@@ -25,6 +25,7 @@ import at.aimon.sandbox.profile.SandboxProfileRegistry;
 import at.aimon.sandbox.provider.SandboxConnectionCache;
 import at.aimon.sandbox.workspace.SandboxWorkspaceManager;
 import at.aimon.sandbox.workspace.SandboxWorkspaceStore;
+import at.aimon.sandbox.workspace.WorkspaceOwner;
 
 /**
  * aimon-core's {@link ExecutionEnvironmentProvider}, answered with sandboxes (docs/design/workspace-sandbox.md §7).
@@ -39,7 +40,8 @@ import at.aimon.sandbox.workspace.SandboxWorkspaceStore;
  * <p>
  * A fork — {@code request.fork().isPresent()}, never judged by {@code parent} (§8.1) — inherits its parent's
  * workspace, owner and root, gets {@code exec:{executionId}} as its shell key, and asks only the policy's
- * {@code forkSlot}. A fork without a parent environment, of an unavailable one or of another provider's is
+ * {@code forkSlot}. Its caller is its own principal, or its parent's caller when the request carries none. A fork
+ * without a parent environment, of an unavailable one or of another provider's is
  * unavailable too, carrying the parent's cause where there is one (§8.2).
  */
 public final class SandboxExecutionEnvironmentProvider implements ExecutionEnvironmentProvider {
@@ -66,7 +68,13 @@ public final class SandboxExecutionEnvironmentProvider implements ExecutionEnvir
         this.clock = Objects.requireNonNull(builder.clock, "clock must not be null");
     }
 
-    /** @return a new builder */
+    /**
+     * For tests and custom assemblies. <b>Runs no startup validation</b>: build through {@code WorkspaceSandbox}, which
+     * refuses the settings this version cannot honour (§13.2) — a hand-wired provider would silently ignore
+     * {@code pause-after}, {@code seed}, shared access and credentials.
+     *
+     * @return a new builder
+     */
     public static Builder builder() {
         return new Builder();
     }
@@ -117,7 +125,13 @@ public final class SandboxExecutionEnvironmentProvider implements ExecutionEnvir
         final String root = choice.slot().equals(parentBinding.slot())
                 ? parentBinding.root()
                 : SandboxBinding.DEFAULT_ROOT;
-        return parentBinding.toBuilder().caller(callers.callerOf(request.principal())).slot(choice.slot())
+        // The fork's own principal when it carries one. Without one — aimon-core's skill-fork path does not forward it
+        // (SubagentBackedSkillForkExecutor) — the fork acts for its parent, whose caller already passed the gate: the
+        // parent environment it was handed is what entitles it to this workspace.
+        final WorkspaceOwner caller = request.principal().isPresent()
+                ? callers.callerOf(request.principal())
+                : parentBinding.caller();
+        return parentBinding.toBuilder().caller(caller).slot(choice.slot())
                 .requiredProfile(choice.requiredProfile().orElse(null)).shellKey(ShellKey.execution(executionId))
                 .root(root).build();
     }

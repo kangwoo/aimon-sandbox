@@ -17,11 +17,31 @@ class ShellWrapperTest {
     }
 
     @Test
-    void theCommandIsSingleQuotedDataNeverSyntax() {
+    void theCommandIsSingleQuotedDataWrittenByABuiltinNeverAnArgument() {
         final String script = ShellWrapper.foreground(invocation("echo 'x' # it's; exit 3"));
 
-        assertThat(script).startsWith("__aimon_cmd='echo '\\''x'\\'' # it'\\''s; exit 3'\n");
-        assertThat(script).contains("/bin/bash -c \"$__aimon_inner\" aimon \"$d\" \"$r\" \"$__aimon_cmd\" fg");
+        assertThat(script).contains("printf '%s' 'echo '\\''x'\\'' # it'\\''s; exit 3' > \"$r.cmd\" || exit 70\n");
+        assertThat(script).contains("/bin/bash -c \"$__aimon_inner\" aimon \"$d\" \"$r\" fg")
+                .doesNotContain("\"$r\" \"$__aimon_cmd\"");
+        assertThat(ShellWrapper.INNER).contains("IFS= read -r -d '' __aimon_cmd < \"$__aimon_run.cmd\"");
+    }
+
+    @Test
+    void anUploadedCommandIsNotInTheScriptAtAll() {
+        final String script = ShellWrapper.foreground(invocation("echo secret-payload").commandUploaded(true));
+
+        assertThat(script).doesNotContain("secret-payload").doesNotContain("> \"$r.cmd\"");
+        assertThat(ShellWrapper.embeddable("x".repeat(ShellWrapper.INLINE_COMMAND_LIMIT - 2))).isTrue();
+        assertThat(ShellWrapper.embeddable("x".repeat(ShellWrapper.INLINE_COMMAND_LIMIT))).isFalse();
+        // Quoting counts: every ' becomes four bytes.
+        assertThat(ShellWrapper.embeddable("'".repeat(ShellWrapper.INLINE_COMMAND_LIMIT / 3))).isFalse();
+    }
+
+    @Test
+    void noTimeoutMeansNoWatchdog() {
+        final String script = ShellWrapper.foreground(invocation("true").timeout(null));
+
+        assertThat(script).contains("flock -w").doesNotContain("kill -KILL 0").doesNotContain("$r.timedout");
     }
 
     @Test

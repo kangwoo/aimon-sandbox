@@ -257,6 +257,52 @@ class SandboxEnvironmentProviderTest {
     }
 
     @Test
+    @DisplayName("§16: Principal.system() or no principal + require-principal is refused under a custom policy too")
+    void requirePrincipalHoldsWhateverCallerACustomPolicyNames() throws Exception {
+        final at.aimon.sandbox.workspace.WorkspaceOwner owner = at.aimon.sandbox.workspace.WorkspaceOwner
+                .of(at.aimon.sandbox.workspace.TenantId.of("acme"), "alice");
+        // A policy that hands out a valid owner and caller for every request, principal or not.
+        try (SandboxHarness custom = SandboxHarness.builder().settings(s -> s.requirePrincipal(true))
+                .tenantResolver(principal -> at.aimon.sandbox.workspace.TenantId.of("acme"))
+                .sessionOwnerLookup(
+                        session -> java.util.Optional.of(ALICE))
+                .bindingPolicy(context -> SandboxBinding.builder()
+                        .workspaceId(at.aimon.sandbox.workspace.SandboxWorkspaceId.of("ws:shared")).owner(owner)
+                        .caller(owner).shellKey(at.aimon.sandbox.binding.ShellKey
+                                .session(context.sessionId().orElse(SessionId.of("none"))))
+                        .build())
+                .build()) {
+            final ExecutionEnvironment system = custom
+                    .resolve(EnvironmentRequest.builder().agentRuntimeId(SandboxHarness.RUNTIME)
+                            .sessionId(SessionId.generate()).principal(at.aimon.core.base.Principal.system()).build());
+            final ExecutionEnvironment anonymous = custom.resolve(EnvironmentRequest.builder()
+                    .agentRuntimeId(SandboxHarness.RUNTIME).sessionId(SessionId.generate()).build());
+
+            assertThat(cause(system)).contains("require-principal is on");
+            assertThat(cause(anonymous)).contains("require-principal is on");
+            assertThat(bash(custom.mainTurn(SessionId.generate(), ALICE), "echo allowed").stdout())
+                    .isEqualTo("allowed\n");
+            assertThat(custom.faults.calls(Operation.CREATE)).as("only alice's call provisioned").isEqualTo(1);
+        }
+    }
+
+    @Test
+    void aForkWithoutAPrincipalActsForItsParentAndOneWithAPrincipalForThatPrincipal() throws Exception {
+        final ExecutionEnvironment main = harness.mainTurn(SessionId.generate(), ALICE);
+        bash(main, "true");
+
+        // aimon-core's skill-fork path forwards no principal: the fork keeps its parent's caller.
+        final ExecutionEnvironment anonymous = harness.resolve(
+                EnvironmentRequest.builder().agentRuntimeId(SandboxHarness.RUNTIME).executionId(ExecutionId.generate())
+                        .parent(main).fork(ForkDefinition.builder().name("skill").build()).build());
+        final ExecutionEnvironment bobs = harness.fork(main, at.aimon.core.base.Principal.user("bob"));
+
+        assertThat(binding(anonymous).caller()).isEqualTo(binding(main).caller());
+        assertThat(bash(anonymous, "echo fork").stdout()).isEqualTo("fork\n");
+        assertThat(binding(bobs).caller().principalId()).isEqualTo("bob");
+    }
+
+    @Test
     void forkWithoutAnExecutionIdIsUnavailable() {
         final ExecutionEnvironment main = harness.mainTurn(SessionId.generate(), ALICE);
 

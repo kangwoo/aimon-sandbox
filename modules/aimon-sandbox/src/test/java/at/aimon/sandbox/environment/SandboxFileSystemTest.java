@@ -140,4 +140,33 @@ class SandboxFileSystemTest {
         assertThat(env.isolate("branch_1")).isEmpty();
         assertThat(env.contentSearch()).isPresent();
     }
+
+    @Test
+    void aListingLargerThanTheLimitFailsInsteadOfTruncating() {
+        fs.write("big/a.txt", "a");
+        fs.write("big/b.txt", "b");
+        fs.write("big/c/d.txt", "d");
+        final ProviderFileSystem raw = new ProviderFileSystem(
+                harness.local.connect(harness.primary(session).providerRef().orElseThrow()).files(), 3);
+
+        // Three files and one directory: over a limit of three, so Glob and Grep would see an incomplete tree.
+        assertThatThrownBy(() -> raw.listRecursive("/workspace/repo/big"))
+                .isInstanceOf(VirtualFileSystemException.class).hasMessageContaining("More than 3 entries");
+        assertThatThrownBy(() -> raw.search("/workspace/repo/big", "*.txt", 10))
+                .isInstanceOf(VirtualFileSystemException.class);
+        assertThat(raw.list("/workspace/repo/big")).hasSize(3);
+    }
+
+    @Test
+    void aFailingWriteWhenAStreamClosesIsReportedLikeAnyProviderFailure() throws Exception {
+        final OutputStream out = fs.openOutputStream("streamed.txt");
+        out.write("bytes".getBytes(StandardCharsets.UTF_8));
+        harness.faults.injectOnce(at.aimon.sandbox.testkit.FaultInjectingSandboxProvider.Operation.FILES_WRITE,
+                at.aimon.sandbox.testkit.FaultInjectingSandboxProvider.Fault
+                        .fail(at.aimon.sandbox.provider.SandboxProviderException.Kind.TRANSIENT));
+
+        // The bytes travel on close: that is a provider call, and it fails as "unavailable", not raw.
+        assertThatThrownBy(out::close).isInstanceOf(at.aimon.sandbox.workspace.SandboxUnavailableException.class)
+                .hasMessageContaining("cannot be reached");
+    }
 }

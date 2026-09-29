@@ -32,17 +32,24 @@ import at.aimon.sandbox.provider.WriteMode;
  * {@code /} (docs/design/workspace-sandbox.md §6.6 of the step-3 design). Its working directory is {@code /} so that
  * core's path-rule wrapper, which resolves every path under the delegate's working directory, sees every absolute
  * sandbox path — {@code /workspace/.aimon-staged} and {@code /shared} included. Listings return paths relative to
- * {@code /}, as the VFS contract asks.
+ * {@code /}, as the VFS contract asks. A listing larger than {@value #LIST_LIMIT} entries fails rather than returning
+ * a silently truncated tree, which Glob and Grep would present as complete.
  */
 final class ProviderFileSystem implements VirtualFileSystem {
 
     static final BackendType SANDBOX = BackendType.of("SANDBOX");
-    private static final int LIST_LIMIT = 100_000;
+    static final int LIST_LIMIT = 100_000;
 
     private final SandboxFiles files;
+    private final int listLimit;
 
     ProviderFileSystem(SandboxFiles files) {
+        this(files, LIST_LIMIT);
+    }
+
+    ProviderFileSystem(SandboxFiles files, int listLimit) {
         this.files = Objects.requireNonNull(files, "files must not be null");
+        this.listLimit = listLimit;
     }
 
     /** The absolute, normalised sandbox path of a caller path (relative paths are relative to {@code /}). */
@@ -133,7 +140,13 @@ final class ProviderFileSystem implements VirtualFileSystem {
         if (!stat.directory()) {
             throw new InvalidPathException(directory, "is not a directory");
         }
-        return files.list(target, recursive, LIST_LIMIT);
+        // One more than the limit: exactly the limit is complete, more is not.
+        final List<FileStat> entries = files.list(target, recursive, listLimit + 1);
+        if (entries.size() > listLimit) {
+            throw new VirtualFileSystemException(
+                    "More than " + listLimit + " entries under " + directory + "; list or search a narrower directory");
+        }
+        return entries;
     }
 
     @Override

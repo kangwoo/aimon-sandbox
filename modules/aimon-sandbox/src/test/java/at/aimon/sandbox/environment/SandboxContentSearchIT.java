@@ -30,6 +30,7 @@ import at.aimon.core.tools.ToolContextKeys;
 import at.aimon.core.tools.file.GrepTool;
 import at.aimon.core.tools.file.ReadTool;
 import at.aimon.sandbox.DelegatingProvider;
+import at.aimon.sandbox.RecordingProvider;
 import at.aimon.sandbox.SandboxHarness;
 import at.aimon.sandbox.provider.ExecOutcome;
 import at.aimon.sandbox.provider.ExecSpec;
@@ -172,6 +173,55 @@ class SandboxContentSearchIT {
                     real.close();
                 }
             };
+        }
+    }
+
+    @Test
+    void theSearchPathIsNormalisedBeforeRgSeesIt() {
+        final List<String> commands = new CopyOnWriteArrayList<>();
+        try (SandboxHarness canned = SandboxHarness.builder()
+                .decorate((provider, clock) -> new CannedRg(provider, null, commands)).build()) {
+            final ContentSearch search = canned.mainTurn(SessionId.generate(), ALICE).contentSearch().orElseThrow();
+
+            search.search(ContentQuery.builder().pattern("x").path("./src//").build());
+            search.search(ContentQuery.builder().pattern("x").path("../repo/src/").build());
+
+            // rg echoes the path as given: only one spelling may reach it, the one listings use.
+            assertThat(commands).hasSize(2).allMatch(c -> c.endsWith("'--' '/workspace/repo/src'"));
+        }
+    }
+
+    @Test
+    void aCancelledQueryKillsRgAndStops() throws Exception {
+        final RecordingProvider[] recording = new RecordingProvider[1];
+        try (SandboxHarness slow = SandboxHarness.builder()
+                .decorate((provider, clock) -> recording[0] = new RecordingProvider(provider)).build()) {
+            final SessionId session = SessionId.generate();
+            final ExecutionEnvironment slowEnv = slow.mainTurn(session, ALICE);
+            slowEnv.fileSystem().exists("warm");
+            // An rg that would run far longer than the test: it records its pid, then sleeps.
+            recording[0].rewrite(spec -> spec.command().contains("'rg' '--json'")
+                    ? ExecSpec.builder()
+                            .command("echo $$ > /workspace/rg.tmp; mv /workspace/rg.tmp /workspace/rg.pid; "
+                                    + "exec sleep 60")
+                            .timeout(spec.timeout()).maxCaptureBytes(spec.maxCaptureBytes()).build()
+                    : spec);
+            final java.nio.file.Path pidFile = slow.host(session, "/workspace/rg.pid");
+            // Cancelled once rg is surely running.
+            final ContentQuery query = ContentQuery.builder().pattern("x").path(".")
+                    .cancellation(() -> java.nio.file.Files.exists(pidFile)).build();
+
+            final long started = System.nanoTime();
+            assertThatThrownBy(() -> slowEnv.contentSearch().orElseThrow().search(query))
+                    .isInstanceOf(IllegalStateException.class).hasMessageContaining("cancelled");
+
+            assertThat(Duration.ofNanos(System.nanoTime() - started)).isLessThan(Duration.ofSeconds(10));
+            final long pid = Long.parseLong(java.nio.file.Files.readString(pidFile).strip());
+            final long deadline = System.nanoTime() + Duration.ofSeconds(10).toNanos();
+            while (ProcessHandle.of(pid).map(ProcessHandle::isAlive).orElse(false) && System.nanoTime() < deadline) {
+                Thread.sleep(50);
+            }
+            assertThat(ProcessHandle.of(pid).map(ProcessHandle::isAlive).orElse(false)).as("rg was killed").isFalse();
         }
     }
 

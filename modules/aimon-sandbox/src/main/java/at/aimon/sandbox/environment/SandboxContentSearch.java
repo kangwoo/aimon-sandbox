@@ -11,6 +11,10 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.TreeMap;
 import java.util.TreeSet;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.FutureTask;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -22,6 +26,7 @@ import at.aimon.sandbox.binding.SandboxBinding;
 import at.aimon.sandbox.provider.ExecOutcome;
 import at.aimon.sandbox.provider.ExecSpec;
 import at.aimon.sandbox.provider.OutputSink;
+import at.aimon.sandbox.provider.RunningCommand;
 import at.aimon.sandbox.workspace.ConnectedSlot;
 import at.aimon.sandbox.workspace.SandboxWorkspaceManager;
 
@@ -29,13 +34,16 @@ import at.aimon.sandbox.workspace.SandboxWorkspaceManager;
  * {@code Grep} inside the sandbox: one {@code rg --json} exec (docs/design/workspace-sandbox.md §7) — the reason the
  * image contract requires ripgrep (§13.3). Matches core's local search: hidden files and ignored files are searched,
  * paths come back relative to the binding's root. A failure (rg missing, exit 2) throws, and core's {@code GrepTool}
- * then walks the filesystem instead; a multiline query is left to that walk too.
+ * then walks the filesystem instead; a multiline query is left to that walk too. The search path is normalised before
+ * rg sees it, so results use the same spelling as a listing of that path; a {@linkplain ContentQuery#isCancelled()
+ * cancelled} query kills rg and throws.
  */
 public final class SandboxContentSearch implements ContentSearch {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final Duration TIMEOUT = Duration.ofSeconds(120);
     private static final long MAX_OUTPUT = 32L * 1024 * 1024;
+    private static final long CANCEL_POLL_MILLIS = 100;
 
     private final SandboxBinding binding;
     private final SandboxWorkspaceManager manager;
@@ -83,21 +91,18 @@ public final class SandboxContentSearch implements ContentSearch {
         args.add("-e");
         args.add(query.getPattern());
         args.add("--");
-        args.add(fileSystem.resolve(query.getPath()));
+        // Absolute and normalised: rg echoes the path as given, so "./sub//" or "../repo/sub" would otherwise come back
+        // spelled differently from what the file tools list for the same files.
+        args.add(ProviderFileSystem.absolute(fileSystem.resolve(query.getPath())));
         final StringBuilder command = new StringBuilder("cd -- ").append(ShellWrapper.quote(binding.root()))
                 .append(" || exit 2\nexec");
         for (String arg : args) {
             command.append(' ').append(ShellWrapper.quote(arg));
         }
-        final ExecOutcome outcome;
-        try {
-            final ExecSpec spec = ExecSpec.builder().command(command.toString())
-                    .environment(slot.profile().environment()).timeout(TIMEOUT).maxCaptureBytes(MAX_OUTPUT).build();
-            outcome = ProviderCalls.guarded(slot, () -> slot.connection().run(spec, OutputSink.DISCARD)).await(TIMEOUT);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new IllegalStateException("interrupted while waiting for rg", e);
-        }
+        final ExecSpec spec = ExecSpec.builder().command(command.toString()).environment(slot.profile().environment())
+                .timeout(TIMEOUT).maxCaptureBytes(MAX_OUTPUT).build();
+        final ExecOutcome outcome = await(
+                ProviderCalls.guarded(slot, () -> slot.connection().run(spec, OutputSink.DISCARD)), query);
         if (outcome.exitCode() == 1) {
             return ContentSearchResult.of(List.of());
         }
@@ -109,6 +114,41 @@ public final class SandboxContentSearch implements ContentSearch {
             return parse(new String(outcome.stdout(), StandardCharsets.UTF_8), query);
         } catch (IOException e) {
             throw new IllegalStateException("could not read rg output: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Awaits rg while polling the query's cancellation, as core's local search does. {@link RunningCommand#await}
+     * kills on its own timeout, so it runs on a helper thread and this one polls; a cancellation or an interrupt kills
+     * rg — the caller that stops waiting must.
+     */
+    static ExecOutcome await(RunningCommand command, ContentQuery query) {
+        final FutureTask<ExecOutcome> awaiting = new FutureTask<>(() -> command.await(TIMEOUT));
+        final Thread waiter = new Thread(awaiting, "sandbox-rg-await");
+        waiter.setDaemon(true);
+        waiter.start();
+        try {
+            while (true) {
+                try {
+                    return awaiting.get(CANCEL_POLL_MILLIS, TimeUnit.MILLISECONDS);
+                } catch (TimeoutException e) {
+                    if (query.isCancelled()) {
+                        command.kill();
+                        throw new IllegalStateException("rg cancelled");
+                    }
+                }
+            }
+        } catch (InterruptedException e) {
+            command.kill();
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException("interrupted while waiting for rg", e);
+        } catch (ExecutionException e) {
+            if (e.getCause() instanceof RuntimeException runtime) {
+                throw runtime;
+            }
+            throw new IllegalStateException("waiting for rg failed: " + e.getCause(), e.getCause());
+        } finally {
+            waiter.interrupt();
         }
     }
 

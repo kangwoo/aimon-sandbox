@@ -11,7 +11,9 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.regex.Matcher;
@@ -20,6 +22,7 @@ import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import at.aimon.core.filesystem.exception.VirtualFileSystemException;
 import at.aimon.core.shell.ExecutionOptions;
 import at.aimon.core.shell.ShellCommand;
 import at.aimon.core.shell.ShellCommandResult;
@@ -51,10 +54,10 @@ import at.aimon.sandbox.workspace.SandboxWorkspaceManager;
  * <p>
  * Each call connects (lazy provisioning), records activity, takes the node-local lock of its shell (the in-sandbox
  * {@code flock} covers other nodes) and runs the wrapper with a heartbeat. The command timeout starts when the lock is
- * held; lock waits and provisioning do not count against it. A background command
- * ({@link ExecutionOptions#isBackground()})
- * takes no lock and saves no state. A timeout or interrupt kills the command's process group; the state from before
- * the command remains, and the result says so.
+ * held; lock waits and provisioning do not count against it, and a {@code null} timeout is none, as core defines it
+ * (only the exec's backstop of {@link #NO_TIMEOUT_BACKSTOP} applies). A background command
+ * ({@link ExecutionOptions#isBackground()}) takes no lock and saves no state. A timeout or interrupt kills the
+ * command's process group; the state from before the command remains, and the result says so.
  */
 public final class SandboxShell implements VirtualShell {
 
@@ -64,7 +67,8 @@ public final class SandboxShell implements VirtualShell {
     static final String KILLED_NOTICE = "the command was killed; its cd/export were not applied";
 
     private static final Logger log = LoggerFactory.getLogger(SandboxShell.class);
-    private static final Duration DEFAULT_TIMEOUT = Duration.ofMinutes(2);
+    /** The exec backstop of a command without a timeout: the provider still needs one. */
+    static final Duration NO_TIMEOUT_BACKSTOP = Duration.ofDays(1);
     private static final long DEFAULT_MAX_CAPTURE = 1024 * 1024;
     private static final Duration BACKSTOP_SLACK = Duration.ofSeconds(5);
     private static final Pattern TRAILER = Pattern
@@ -101,6 +105,16 @@ public final class SandboxShell implements VirtualShell {
         if (text == null || text.indexOf('\0') >= 0) {
             throw new ShellExecutionException("the command contains a NUL byte, which a shell cannot run");
         }
+        if (options.getWorkingDirectory() != null && options.getWorkingDirectory().indexOf('\0') >= 0) {
+            throw new ShellExecutionException("the working directory contains a NUL byte, which no path can hold");
+        }
+        final List<String> nul = options.getEnvironment().entrySet().stream()
+                .filter(variable -> variable.getValue() != null && variable.getValue().indexOf('\0') >= 0)
+                .map(Map.Entry::getKey).sorted().toList();
+        if (!nul.isEmpty()) {
+            throw new ShellExecutionException(
+                    "environment variables whose values contain a NUL byte, which a " + "shell cannot pass: " + nul);
+        }
         final List<String> invalid = ShellWrapper.invalidNames(options.getEnvironment().keySet());
         if (!invalid.isEmpty()) {
             throw new ShellExecutionException("invalid environment variable names: " + invalid);
@@ -134,7 +148,7 @@ public final class SandboxShell implements VirtualShell {
         final String directory = ShellWrapper.directory(binding.shellKey().directoryName());
         final String runPrefix = directory + "/run-" + randomHex(6);
         final String nonce = "AIMON-" + randomHex(16);
-        final Duration timeout = options.getTimeout() != null ? options.getTimeout() : DEFAULT_TIMEOUT;
+        final Duration timeout = options.getTimeout();
         final long max = options.getMaxCaptureBytes() != null ? options.getMaxCaptureBytes() : DEFAULT_MAX_CAPTURE;
         final SandboxFiles files = slot.connection().files();
         final boolean execKey = binding.shellKey().isExecution();
@@ -147,21 +161,27 @@ public final class SandboxShell implements VirtualShell {
                     .lockWait(settings.shellLockWait()).timeout(timeout).maxBytes(max)
                     .redirectErrorStream(options.isRedirectErrorStream())
                     .workingDirectory(options.getWorkingDirectory()).environment(options.getEnvironment());
+            if (!ShellWrapper.embeddable(text)) {
+                // Too large for one exec argument (MAX_ARG_STRLEN): the command goes in as a file instead.
+                upload(files, runPrefix + ".cmd", text.getBytes(StandardCharsets.UTF_8), "the command");
+                invocation.commandUploaded(true);
+            }
             if (options.getStdin() != null) {
-                final byte[] stdin = options.getStdin().getBytes(options.getCharset());
-                files.write(runPrefix + ".in", new ByteArrayInputStream(stdin), stdin.length,
-                        WriteMode.CREATE_OR_REPLACE);
+                upload(files, runPrefix + ".in", options.getStdin().getBytes(options.getCharset()), "stdin");
                 invocation.stdinPath(runPrefix + ".in");
             }
             final String script = foreground
                     ? ShellWrapper.foreground(invocation)
                     : ShellWrapper.background(invocation);
-            final Duration backstop = timeout.plus(foreground ? settings.shellLockWait() : Duration.ZERO)
-                    .plus(BACKSTOP_SLACK);
-            final ExecSpec spec = ExecSpec.builder().command(script).workingDirectory(binding.root())
+            final Duration backstop = (timeout != null ? timeout : NO_TIMEOUT_BACKSTOP)
+                    .plus(foreground ? settings.shellLockWait() : Duration.ZERO).plus(BACKSTOP_SLACK);
+            // Not binding.root(): a command may have removed it, and an exec server may refuse a missing directory
+            // before the wrapper could fall back. The wrapper moves into the root itself.
+            final ExecSpec spec = ExecSpec.builder().command(script).workingDirectory(ShellWrapper.EXEC_DIRECTORY)
                     .environment(slot.profile().environment()).timeout(backstop)
                     .maxCaptureBytes(max + TRAILER_ALLOWANCE).build();
-            return await(slot, spec, new Run(runPrefix, nonce, timeout, max, options.getCharset(), foreground));
+            return await(slot, spec, new Run(runPrefix, nonce, timeout != null ? timeout : backstop, max,
+                    options.getCharset(), foreground, options.getWorkingDirectory() != null));
         } catch (SandboxNotFoundException e) {
             slot.activity().markLost();
             throw new ShellExecutionException(SandboxWorkspaceManager.LOST_MESSAGE, e, "", "", false, pending.drain());
@@ -175,6 +195,19 @@ public final class SandboxShell implements VirtualShell {
         }
     }
 
+    /**
+     * Writes a run file through the files API. A filesystem error there (a full disk) is the command's failure, not a
+     * raw exception for the tool; a provider failure goes on to the caller's handling.
+     */
+    private static void upload(SandboxFiles files, String path, byte[] content, String what)
+            throws ShellExecutionException {
+        try {
+            files.write(path, new ByteArrayInputStream(content), content.length, WriteMode.CREATE_OR_REPLACE);
+        } catch (VirtualFileSystemException e) {
+            throw new ShellExecutionException("could not pass " + what + " into the sandbox: " + e.getMessage(), e);
+        }
+    }
+
     /** One invocation's identity and limits. */
     private static final class Run {
         private final String prefix;
@@ -183,14 +216,17 @@ public final class SandboxShell implements VirtualShell {
         private final long max;
         private final Charset charset;
         private final boolean foreground;
+        private final boolean ownWorkingDirectory;
 
-        private Run(String prefix, String nonce, Duration timeout, long max, Charset charset, boolean foreground) {
+        private Run(String prefix, String nonce, Duration timeout, long max, Charset charset, boolean foreground,
+                boolean ownWorkingDirectory) {
             this.prefix = prefix;
             this.nonce = nonce;
             this.timeout = timeout;
             this.max = max;
             this.charset = charset;
             this.foreground = foreground;
+            this.ownWorkingDirectory = ownWorkingDirectory;
         }
     }
 
@@ -243,9 +279,7 @@ public final class SandboxShell implements VirtualShell {
             final Matcher m = TRAILER.matcher(trailer);
             if (m.find()) {
                 final List<String> extra = new ArrayList<>();
-                if ("1".equals(m.group(4))) {
-                    extra.add("the saved working directory no longer exists; the command ran in " + binding.root());
-                }
+                cwdNotice(m.group(4), run).ifPresent(extra::add);
                 final boolean truncated = Long.parseLong(m.group(2)) > run.max || Long.parseLong(m.group(3)) > run.max;
                 return new ShellCommandResult(Integer.parseInt(m.group(1)), new String(outcome.stdout(), run.charset),
                         new String(stderr, 0, marker, run.charset), duration, truncated, notices(extra));
@@ -262,6 +296,24 @@ public final class SandboxShell implements VirtualShell {
                         + new String(stderr, run.charset).strip(),
                 null, new String(outcome.stdout(), run.charset), new String(stderr, run.charset),
                 outcome.stdoutTruncated() || outcome.stderrTruncated(), pending.drain());
+    }
+
+    /**
+     * The notice for a working directory the wrapper could not restore: {@code 1} the saved one is gone and the root
+     * was used, {@code 2} the root is gone too and {@code /workspace} was. A command given its own working directory
+     * ran there; only the shell's own directory moved.
+     */
+    private Optional<String> cwdNotice(String flag, Run run) {
+        final String fallback = "1".equals(flag) ? binding.root() : ShellWrapper.EXEC_DIRECTORY;
+        final String lost = "1".equals(flag)
+                ? "the saved working directory no longer exists"
+                : "the working directory and " + binding.root() + " no longer exist";
+        if (!"1".equals(flag) && !"2".equals(flag)) {
+            return Optional.empty();
+        }
+        return Optional.of(lost + (run.ownWorkingDirectory
+                ? "; the shell continues in " + fallback
+                : "; the command ran in " + fallback));
     }
 
     private ShellTimeoutException timeout(SandboxFiles files, Run run) {
@@ -307,7 +359,7 @@ public final class SandboxShell implements VirtualShell {
     }
 
     private static void cleanUp(SandboxFiles files, String prefix) {
-        for (String suffix : List.of(".out", ".err", ".in", ".timedout", ".cwd")) {
+        for (String suffix : List.of(".out", ".err", ".in", ".cmd", ".timedout", ".cwd")) {
             try {
                 if (files.stat(prefix + suffix).isPresent()) {
                     files.delete(prefix + suffix, false);
