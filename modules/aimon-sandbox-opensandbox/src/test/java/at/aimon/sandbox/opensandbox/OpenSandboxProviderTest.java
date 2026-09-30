@@ -16,6 +16,7 @@ import java.net.ServerSocket;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -467,6 +468,26 @@ class OpenSandboxProviderTest {
         }
 
         @Test
+        void aCommandThatIgnoresEvenTheKillIsGivenUpAndItsStreamClosed() throws Exception {
+            final CountDownLatch never = new CountDownLatch(1);
+            server.commands = body -> Reply.events(List.of(init("c8")), never);
+            try {
+                final RunningCommand command = connection.run(
+                        ExecSpec.builder().command("sleep 60").timeout(Duration.ofSeconds(60)).build(),
+                        OutputSink.DISCARD);
+
+                final ExecOutcome outcome = command.await(Duration.ofMillis(100));
+
+                assertThat(outcome.timedOut()).isTrue();
+                assertThat(outcome.exitCode()).isEqualTo(137);
+                assertThat(server.interrupted).containsExactly("c8");
+                assertThat(command.await(Duration.ZERO).exitCode()).as("settled, not polled again").isEqualTo(137);
+            } finally {
+                never.countDown();
+            }
+        }
+
+        @Test
         void aKillBeforeTheCommandIdArrivesIsSentWhenItDoes() throws Exception {
             final CountDownLatch gate = new CountDownLatch(1);
             final CountDownLatch hold = new CountDownLatch(1);
@@ -634,6 +655,18 @@ class OpenSandboxProviderTest {
             assertThat(read("/workspace/a.txt", 1, 3)).isEqualTo("ell");
             assertThat(read("/workspace/a.txt", 9, 3)).isEmpty();
             assertThat(read("/workspace/a.txt", 0, 0)).isEmpty();
+        }
+
+        @Test
+        void aRenameThatNeverRanRemovesTheUploadedTemporaryFile() {
+            server.overrides.put("POST /v1/sandboxes/",
+                    request -> request.path.endsWith("/command")
+                            ? Reply.error(500, "RUNTIME_ERROR", "execd is restarting")
+                            : null);
+
+            assertThatThrownBy(() -> write("/workspace/a.txt", "hello", WriteMode.CREATE_OR_REPLACE))
+                    .isInstanceOf(RuntimeException.class);
+            assertThat(server.fileNames()).noneMatch(p -> p.contains("aimon-tmp"));
         }
 
         @Test
@@ -809,6 +842,19 @@ class OpenSandboxProviderTest {
             final ProviderSandboxRef ref = vaulted.create(spec);
 
             assertThat(server.vault.path("bindings")).extracting(b -> b.path("name").asText()).containsExactly("gh");
+            assertThat(vaulted.verify(ref, Set.of(Capability.CREDENTIAL_INJECTION))).isEmpty();
+        }
+
+        @Test
+        void aSandboxCreatedForOtherCredentialsIsNotReused() {
+            final CreateSpec spec = spec("ws:v", 1).egress(List.of("github.com")).credentials(List.of("gh")).build();
+            final Map<String, String> labels = new LinkedHashMap<>(spec.labels());
+            labels.put(OpenSandboxProvider.CREDENTIALS_LABEL, OpenSandboxProvider.credentialsHash(List.of("other")));
+            server.add("old", "Running", labels, Instant.now().minusSeconds(60));
+
+            final ProviderSandboxRef ref = vaulted.create(spec);
+
+            assertThat(ref.sandboxId()).isNotEqualTo("old");
             assertThat(vaulted.verify(ref, Set.of(Capability.CREDENTIAL_INJECTION))).isEmpty();
         }
 

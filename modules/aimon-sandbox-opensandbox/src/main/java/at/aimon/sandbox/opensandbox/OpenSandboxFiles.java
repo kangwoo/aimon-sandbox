@@ -17,6 +17,9 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
@@ -46,6 +49,8 @@ import at.aimon.sandbox.provider.WriteMode;
  * </ul>
  */
 final class OpenSandboxFiles implements SandboxFiles {
+
+    private static final Logger log = LoggerFactory.getLogger(OpenSandboxFiles.class);
 
     /** execd's default mode is 755; files written here are not executables. */
     static final int FILE_MODE = 644;
@@ -111,7 +116,14 @@ final class OpenSandboxFiles implements SandboxFiles {
                 + (mode == WriteMode.CREATE_NEW
                         ? "ln -- \"$1\" \"$2\"; r=$?; rm -f -- \"$1\"; exit $r"
                         : "mv -f -- \"$1\" \"$2\" || { r=$?; rm -f -- \"$1\"; exit $r; }");
-        final ExecOutcome outcome = helper(script, temporary, path);
+        final ExecOutcome outcome;
+        try {
+            outcome = helper(script, temporary, path);
+        } catch (RuntimeException e) {
+            // The script removes the temporary file itself; a call that never ran it leaves the file behind.
+            deleteQuietly(temporary);
+            throw e;
+        }
         if (outcome.exitCode() == 0) {
             return;
         }
@@ -166,6 +178,15 @@ final class OpenSandboxFiles implements SandboxFiles {
             throw execd.notFound(e, () -> new FileNotFoundException(path));
         } catch (SandboxProviderException e) {
             throw vfs("cannot write " + path, e);
+        }
+    }
+
+    /** Best effort: a failure here must not hide the one that made the caller clean up. */
+    private void deleteQuietly(String path) {
+        try {
+            execd.send(ep -> ep.request("/files?path=" + q(path)).DELETE(), "delete temporary file");
+        } catch (RuntimeException e) {
+            log.debug("Could not remove the temporary file {}: {}", path, e.getMessage());
         }
     }
 

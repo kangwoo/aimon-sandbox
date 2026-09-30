@@ -9,6 +9,7 @@ import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.TreeSet;
@@ -124,19 +125,20 @@ public final class OpenSandboxProvider implements SandboxProvider {
     @Override
     public ProviderSandboxRef create(CreateSpec spec) {
         refuseUnservable(spec);
+        // One budget for the POST and the waits after it (§6.1): the POST alone may block ~60 s on Kubernetes.
+        final long deadline = System.nanoTime() + config.createTimeout().toNanos();
         final Optional<ProviderSandbox> existing = existing(spec);
         final String id;
         if (existing.isPresent()) {
             id = existing.get().ref().sandboxId();
         } else {
-            final JsonNode created = lifecycle.create(body(spec), config.createTimeout());
+            final JsonNode created = lifecycle.create(body(spec), remaining(deadline));
             id = created.path("id").asText("");
             if (id.isEmpty()) {
                 throw new SandboxProviderException("OpenSandbox created a sandbox without an id");
             }
         }
         final ProviderSandboxRef ref = ProviderSandboxRef.of(NAME, id);
-        final long deadline = System.nanoTime() + config.createTimeout().toNanos();
         awaitRunning(ref, deadline);
         if (spec.egress().isPresent()) {
             awaitEgressSidecar(ref, deadline);
@@ -193,9 +195,13 @@ public final class OpenSandboxProvider implements SandboxProvider {
         if (!selector.containsKey(SandboxLabels.SANDBOX_KEY)) {
             selector.put(SandboxLabels.SANDBOX_KEY, SandboxLabels.h(spec.key()));
         }
+        // verify() compares the vault with the credentials label the sandbox was created with, so a sandbox created
+        // for other credentials is not this spec's: a new one is created and reconciliation removes the duplicate.
+        final String credentials = spec.credentials().isEmpty() ? null : credentialsHash(spec.credentials());
         return list(selector).stream()
                 .filter(sandbox -> sandbox.state() != ProviderSandboxState.TERMINATED
                         && sandbox.state() != ProviderSandboxState.FAILED)
+                .filter(sandbox -> Objects.equals(sandbox.labels().get(CREDENTIALS_LABEL), credentials))
                 .min(Comparator.comparing((ProviderSandbox sandbox) -> sandbox.createdAt().orElse(Instant.MAX))
                         .thenComparing(sandbox -> sandbox.ref().sandboxId()));
     }
@@ -243,6 +249,12 @@ public final class OpenSandboxProvider implements SandboxProvider {
         final Duration until = Duration.between(clock.instant(), expiresAt);
         final long seconds = (until.toMillis() + 999) / 1000;
         return Math.min(config.maxExpiry().toSeconds(), Math.max(MIN_TIMEOUT.toSeconds(), seconds));
+    }
+
+    /** What is left of the create budget, at least a second so a late POST still gets a chance to answer. */
+    private static Duration remaining(long deadline) {
+        final long nanos = deadline - System.nanoTime();
+        return nanos < Duration.ofSeconds(1).toNanos() ? Duration.ofSeconds(1) : Duration.ofNanos(nanos);
     }
 
     static String credentialsHash(List<String> names) {

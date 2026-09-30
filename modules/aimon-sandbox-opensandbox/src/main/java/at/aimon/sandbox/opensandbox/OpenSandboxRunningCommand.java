@@ -67,6 +67,7 @@ final class OpenSandboxRunningCommand implements RunningCommand {
     private final long startedNanos = System.nanoTime();
     private final Object killLock = new Object();
     private volatile String commandId;
+    private volatile InputStream stream;
     private volatile boolean signalled;
     private boolean killRequested;
     private boolean killSent;
@@ -105,6 +106,7 @@ final class OpenSandboxRunningCommand implements RunningCommand {
             throw HttpErrors.failure(response.statusCode(), "run command", new String(error, StandardCharsets.UTF_8));
         }
         final OpenSandboxRunningCommand command = new OpenSandboxRunningCommand(execd, spec, sink);
+        command.stream = response.body();
         try {
             executor.execute(() -> command.read(response.body()));
         } catch (RejectedExecutionException e) {
@@ -247,6 +249,10 @@ final class OpenSandboxRunningCommand implements RunningCommand {
             try {
                 return outcome(exit.get(KILL_GRACE.toMillis(), TimeUnit.MILLISECONDS), true);
             } catch (TimeoutException | ExecutionException stillRunning) {
+                // Nothing answered even the kill (a half-open connection has no read timeout): give up on the
+                // stream so its reader thread and connection do not outlive the command.
+                exit.complete(SIGKILL_EXIT);
+                closeQuietly(stream);
                 return outcome(SIGKILL_EXIT, true);
             }
         } catch (ExecutionException e) {
