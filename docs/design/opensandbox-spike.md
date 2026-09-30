@@ -179,4 +179,6 @@ id 가 콜백으로만 오며, 내부가 Kotlin `internal` 이다. REST 표면�
 - K8s: 멈춘 샌드박스의 renew-expiration 이 원래 이미지로 파드를 다시 만들고 `Failed` 로 만든다(§4-2)
 - renew-expiration 이 만료를 줄이고 `max_sandbox_timeout_seconds` 를 넘기는 것을 허용한다 — 스펙은 연장이라고 적는다
 - 단일 테넌트 모드의 프록시 경로가 API 키를 건너뛴다 — 의도된 동작이지만 문서에 경고가 없다
-- 차트가 Namespace 를 렌더링해 `--create-namespace` 와 충돌한다
+- 문서의 umbrella 차트 설치 명령(`--create-namespace`)이 base 차트가 렌더링하는 Namespace 와 충돌한다
+
+초안은 [`spike/opensandbox/upstream-issues.md`](../../spike/opensandbox/upstream-issues.md) 에 있다.
