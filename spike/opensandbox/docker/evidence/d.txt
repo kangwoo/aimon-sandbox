@@ -1,0 +1,103 @@
+execd base=http://192.168.20.15:41439/proxy/44772 headers={}
+== d1 stdout/stderr separation, exit code, framing
+   events=[{'type': 'init', 'text': 'db377a9819b2453a95e1a5c5bb814f39', 'timestamp': 1790725056817}, {'type': 'stdout', 'text': 'out1', 'timestamp': 1790725056817}, {'type': 'stdout', 'text': 'out2', 'timestamp': 1790725056817}, {'type': 'ping', 'text': 'pong', 'timestamp': 1790725056817}, {'type': 'stderr', 'text': 'err1', 'timestamp': 1790725056817}, {'type': 'error', 'timestamp': 1790725056817, 'error': {'ename': 'CommandExecError', 'evalue': '7', 'traceback': ['exit status 7']}}]
+[PASS] stdout/stderr separated :: stdout='out1\nout2\n' stderr='err1\n'
+[OBSERVED] exit code 7 reported as :: error={'ename': 'CommandExecError', 'evalue': '7', 'traceback': ['exit status 7']}
+[OBSERVED] exit 0 reported as :: last event={'type': 'execution_complete', 'execution_time': 2, 'timestamp': 1790725057826}
+[OBSERVED] byte fidelity (\r, blank lines, trailing newline, NUL, 0xff) :: events=[{'type': 'stdout', 'text': 'no-newlineA', 'timestamp': 1790725058838}, {'type': 'stdout', 'text': 'B', 'timestamp': 1790725058838}, {'type': 'stdout', 'text': '\n', 'timestamp': 1790725058838}, {'type': 'stdout', 'text': '\n', 'timestamp': 1790725058838}, {'type': 'stdout', 'text': 'C\x00�', 'timestamp': 1790725058838}]
+[OBSERVED] interleaving order of events :: [('stdout', 'o1'), ('stdout', 'o2'), ('stdout', 'o3'), ('stderr', 'e1'), ('stderr', 'e2'), ('stderr', 'e3')]
+[OBSERVED] one 200000-byte line :: n_stdout_events=1 len=200001
+== d2 cwd
+[OBSERVED] default cwd (no cwd given) :: /
+[PASS] cwd=/tmp :: /tmp
+[OBSERVED] cwd that does not exist :: http=400 http_text='{"code":"INVALID_REQUEST_BODY","message":"invalid request, validation error working directory does not exist: /does/not/exist: stat /does/not/exist: no such file or directory"}' stdout='' error=None events=[]
+[OBSERVED] cwd=$HOME expansion :: 200 '/root' 
+== d3 env
+   env:
+      EXECD_ENVS=/opt/opensandbox/.env
+      FOO=bar baz
+      HOME=/root
+      HOSTNAME=a706de65b4e6
+      MULTI=l1
+      OPENSANDBOX_ID=55ea23c5-e234-4301-bcf9-00708aa0797a
+      PATH=/usr/bin:/bin
+      PWD=/
+      SHLVL=1
+      _=/usr/bin/env
+      l2
+      
+[PASS] envs injected; PATH overridable
+[OBSERVED] multi-line env value :: 0000000   l   1  \n   l   2  \n
+0000006
+[OBSERVED] 200 KB env value (> MAX_ARG_STRLEN 128 KiB) :: http=200 stdout='' error={'ename': 'CommandExecError', 'evalue': 'fork/exec /usr/bin/bash: argument list too long', 'traceback': ['fork/exec /usr/bin/bash: argument list too long']} 
+== d4 how the command is passed (argv vs stdin)
+   SELF=50
+   bash|-c|echo SELF=$$; tr '\0' '|' < /proc/$$/cmdline; echo; ls -l /proc/$$/fd/0; ps -o pid,ppid,pgid,sid,user,args -e|
+   lr-x------ 1 root root 64 Sep 29 23:37 /proc/50/fd/0 -> /dev/null
+       PID    PPID    PGID     SID USER     COMMAND
+         1       0       1       1 root     /bin/sh /opt/opensandbox/bootstrap.sh sleep infinity
+        20       1       1       1 root     /opt/opensandbox/execd
+        21       1       1       1 root     sleep infinity
+        50      20      50       1 root     ps -o pid,ppid,pgid,sid,user,args -e
+   
+[OBSERVED] command transport :: see cmdline above
+== d5 large command bodies
+[OBSERVED] command of 65536 bytes :: http=200 stdout='ok' error=None http_text='' 1.0s
+[OBSERVED] command of 130048 bytes :: http=200 stdout='ok' error=None http_text='' 1.0s
+[OBSERVED] command of 132096 bytes :: http=200 stdout='' error={'ename': 'CommandExecError', 'evalue': 'fork/exec /usr/bin/bash: argument list too long', 'traceback': ['fork/exec /usr/bin/bash: argument list too long']} http_text='' 1.1s
+[OBSERVED] command of 1048576 bytes :: http=200 stdout='' error={'ename': 'CommandExecError', 'evalue': 'fork/exec /usr/bin/bash: argument list too long', 'traceback': ['fork/exec /usr/bin/bash: argument list too long']} http_text='' 1.3s
+[OBSERVED] command of 8388608 bytes :: http=200 stdout='' error={'ename': 'CommandExecError', 'evalue': 'fork/exec /usr/bin/bash: argument list too long', 'traceback': ['fork/exec /usr/bin/bash: argument list too long']} http_text='' 2.9s
+== d6 kill a running foreground command (DELETE /command?id=) — process group, & children, setsid children
+   before kill (pid ppid pgid sid args):
+      59      20      59       1 sleep 700
+           60      59      59       1 sleep 701
+           61      59      61      61 sleep 702
+           62      59      59       1 sleep 703
+   DELETE /command?id=3d7d9a2501874c30b35964efab0df1d5 -> 200 '' (0.08s)
+   stream after kill: ['{"type":"error","timestamp":1790725077477,"error":{"ename":"CommandExecError","evalue":"-1","traceback":["signal: terminated"]}}']
+   status: 200 {"id":"3d7d9a2501874c30b35964efab0df1d5","content":"sleep 701 \u0026 setsid sleep 702 \u0026 nohup sleep 703 \u003e/dev/null 2\u003e\u00261 \u0026 echo started; exec sleep 700","running":false,"exit_code":-1,"error":"signal: terminated","started_at":"2026-09-29T23:37:56.299100846Z","finished_at":"20
+   after DELETE /command:
+      61      61      61 sleep 702
+[OBSERVED] survivors after interrupt :: 61      61      61 sleep 702
+== d6b client disconnect: does closing the SSE stream kill the command?
+[OBSERVED] after client disconnect :: 73      73 sleep 800 |      74      73 sleep 801 |      75      75 sleep 802
+   status: 200 {"id":"2659cc5aa7774c5d84c6aecefbe58df1","content":"sleep 801 \u0026 setsid sleep 802 \u0026 echo started; exec sleep 800","running":true,"started_at":"2026-09-29T23:38:01.587315293Z"}
+== d7 foreground command that leaves a background child: does the call return when the shell exits?
+[PASS] fg returns without waiting for '&' child :: 1.0s stdout='parent-done\n'
+[OBSERVED] same with child redirected :: 1.0s
+== d8 timeout param (ms)
+   3.0s events=[{'type': 'init', 'text': '931ea368486d42cc90c50bbaf669bea7', 'timestamp': 1790725088783}, {'type': 'ping', 'text': 'pong', 'timestamp': 1790725088784}, {'type': 'error', 'timestamp': 1790725090784, 'error': {'ename': 'CommandExecError', 'evalue': '-1', 'traceback': ['signal: killed']}}, {'type': 'ping', 'text': 'pong', 'timestamp': 1790725091784}]
+[OBSERVED] survivors after timeout :: 90      90 sleep 902
+== d9 background mode
+   events=[{'type': 'init', 'text': '0d40d0bfea5248d0a4403d6c4bb0f12c', 'timestamp': 1790725094824}, {'type': 'ping', 'text': 'pong', 'timestamp': 1790725094825}, {'type': 'execution_complete', 'timestamp': 1790725094826}]
+   status now: {"id":"0d40d0bfea5248d0a4403d6c4bb0f12c","content":"echo bg-start; echo bg-err \u003e\u00262; sleep 3; echo bg-end; exit 4","running":true,"started_at":"2026-09-29T23:38:14.825375299Z"}
+[OBSERVED] background status/logs :: status={"id":"0d40d0bfea5248d0a4403d6c4bb0f12c","content":"echo bg-start; echo bg-err \u003e\u00262; sleep 3; echo bg-end; exit 4","running":false,"exit_code":4,"error":"exit status 4","started_at":"2026-09-29T23:38:14.825375299Z","finished_at":"2026-09-29T23:38:17.829786134Z"} logs='bg-start\nbg-err\nbg-end\n' headers={'execd-commands-tail-cursor': '23'}
+[OBSERVED] logs with cursor=1 :: 'g-start\nbg-err\nbg-end\n'
+== d10 output volume: 50 MB on stdout
+[OBSERVED] 50 MB output :: received stdout chars=50000001 events=495050 sse_bytes=76734237 stderr='done\n' error=None 294.9s
+   Filesystem      Size  Used Avail Use% Mounted on
+   overlay         911G   22G  844G   3% /
+   overlay         911G   22G  844G   3% /
+   total 49132
+   drwxrwxrwt 1 root root     4096 Sep 29 23:43 .
+   drwxr-xr-x 1 root root     4096 Sep 29 23:37 ..
+   -rwxr-xr-x 1 root root        0 Sep 29 23:37 076eae5f2c1244619ecf6ef3ad6495a0.stderr
+   -rwxr-xr-x 1 root root       34 Sep 29 23:37 076eae5f2c1244619ecf6ef3ad6495a0.stdout
+   -rwxr-xr-x 1 root root       23 Sep 29 23:38 0d40d0bfea5248d0a4403d6c4bb0f12c.output
+   -rwxr-xr-x 1 root root        9 Sep 29 23:37 0fe1896f772544518ec1ed3864885d4d.stderr
+   -rwxr-xr-x 1 root root        9 Sep 29 23:37 0fe1896f772544518ec1ed3864885d4d.stdout
+   -rwxr-xr-x 1 root root        0 Sep 29 23:38 2659cc5aa7774c5d84c6aecefbe58df1.stderr
+   -rwxr-xr-x 1 root root        8 Sep 29 23:38 2659cc5aa7774c5d84c6aecefbe58df1.stdout
+   alternatives.log
+   apt
+   btmp
+   dpkg.log
+   faillog
+   lastlog
+   wtmp
+   
+== d11 uid of commands and of files written via files API
+[OBSERVED] command identity :: uid=0(root) gid=0(root) groups=0(root) | USER         PID COMMAND | root           1 /bin/sh /opt/opensandbox/bootstrap.sh sleep infinity | root     /opt/opensandbox/execd | root     bash -c id; ps -o user,pid,args -p 1; ps -o user,args -e | grep execd | head -3 | root     grep execd | 
+   upload -> 400 {"code":"INVALID_FILE_METADATA","message":"metadata file is missing"}
+[OBSERVED] owner of a file written via files API
+[OBSERVED] uid=1000 via /command uid :: uid=1000 gid=1000 groups=1000 None 

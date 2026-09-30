@@ -1,0 +1,3 @@
+created c5ab8dfa-50e7-4734-9610-4cc651e28f72 volume: spike-docker-vol3
+DELETE /v1/sandboxes/c5ab8dfa-50e7-4734-9610-4cc651e28f72 -> 204 
+[OBSERVED] deleteOnSandboxTermination=true, sole user deleted :: gone: Error response from daemon: get spike-docker-vol3: no such volume

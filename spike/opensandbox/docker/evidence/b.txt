@@ -1,0 +1,31 @@
+== b1 create timeout=60
+POST /v1/sandboxes -> 202 {"id":"9a75685c-7c75-4eef-b687-1750d961989c","status":{"state":"Running","reason":"CONTAINER_RUNNING","message":"Sandbox container started successfully.","lastTransitionAt":"2026-09-29T23:34:51.703446Z"},"metadata":{"spike-run":"b1790724891"},"expiresAt":"2026-09-29T23:35:51.703446Z","createdAt":"2026-09-29T23:34:51.703446Z","entrypoint":["sleep","infinity"]}
+[OBSERVED] expiresAt - createdAt :: 60.0s
+== b2 renew forward +60s
+POST /v1/sandboxes/9a75685c-7c75-4eef-b687-1750d961989c/renew-expiration -> 200 {"expiresAt":"2026-09-29T23:36:51.703446Z"}
+[PASS] renew forward
+== b3 renew backward (earlier than current expiresAt but still in the future)
+POST /v1/sandboxes/9a75685c-7c75-4eef-b687-1750d961989c/renew-expiration -> 200 {"expiresAt":"2026-09-29T23:36:21.703446Z"}
+[OBSERVED(accepted: backward renew allowed)] renew backward :: status=200
+   now: GET /v1/sandboxes/9a75685c-7c75-4eef-b687-1750d961989c -> 200 {"id":"9a75685c-7c75-4eef-b687-1750d961989c","image":{"uri":"spike-docker-base:1"},"status":{"state":"Running","reason":"CONTAINER_RUNNING","message":"Sandbox container is running.","lastTransitionAt":"2026-09-29T23:34:51.716474Z"},"metadata":{"spike-run":"b1790724891"},"entrypoint":["sleep","infinity"],"expiresAt":"2026-09-29T23:36:21.703446Z","createdAt":"2026-09-29T23:34:51.716474Z"}
+== b4 renew to the past
+POST /v1/sandboxes/9a75685c-7c75-4eef-b687-1750d961989c/renew-expiration -> 400 {"code":"DOCKER::INVALID_EXPIRATION","message":"New expiration time must be in the future."}
+[PASS(rejected)] renew to the past :: status=400
+== b5 renew beyond max_sandbox_timeout_seconds (3600) from now
+POST /v1/sandboxes/9a75685c-7c75-4eef-b687-1750d961989c/renew-expiration -> 200 {"expiresAt":"2026-09-30T04:34:52.231015Z"}
+[OBSERVED(accepted: renew is NOT capped by max timeout)] renew +5h :: status=200
+   restore short expiry: POST /v1/sandboxes/9a75685c-7c75-4eef-b687-1750d961989c/renew-expiration -> 200 {"expiresAt":"2026-09-29T23:36:21.703446Z"}
+== b6 create timeout above max (3601) / 59 / null
+[PASS(rejected)] create timeout=3601 :: POST /v1/sandboxes -> 400 {"code":"SANDBOX::INVALID_PARAMETER","message":"Sandbox timeout 3601s exceeds configured maximum of 3600s."}
+[PASS(rejected)] create timeout=59 :: POST /v1/sandboxes -> 422 {"detail":[{"type":"greater_than_equal","loc":["body","timeout"],"msg":"Input should be greater than or equal to 60","input":59,"ctx":{"ge":60}}]}
+[OBSERVED] create without timeout while max is configured :: POST /v1/sandboxes -> 202 {"id":"1641aba5-4538-48c2-8be0-d3ad3acc3ba3","status":{"state":"Running","reason":"CONTAINER_RUNNING","message":"Sandbox container started successfully.","lastTransitionAt":"2026-09-29T23:34:52.257000Z"},"metadata":{"spike-run":"b1790724891","kind":"no-timeout"},"createdAt":"2026-09-29T23:34:52.257000Z","entrypoint":["sleep","infinity"]}
+== b7 renew with timezone offset / no fraction
+   POST /v1/sandboxes/9a75685c-7c75-4eef-b687-1750d961989c/renew-expiration -> 200 {"expiresAt":"2026-09-29T23:44:52Z"}
+   back: POST /v1/sandboxes/9a75685c-7c75-4eef-b687-1750d961989c/renew-expiration -> 200 {"expiresAt":"2026-09-29T23:36:21.703446Z"}
+== b8 observe expiry of the 60s sandbox (poll GET + list)
+   expiresAt=2026-09-29T23:36:21.703446+00:00
+   t-exp=-88.9s state=Running inList=True {'state': 'Running', 'reason': 'CONTAINER_RUNNING', 'message': 'Sandbox container is running.', 'lastTransitionAt': '2026-09-29T23:34:51.716474Z'}
+   t-exp=1.0s state=404 inList=False GET /v1/sandboxes/9a75685c-7c75-4eef-b687-1750d961989c -> 404 {"code":"DOCKER::SANDBOX_NOT_FOUND","message":"Sandbox 9a75685c-7c75-4eef-b687-1750d961989c not found."}
+   docker ps -a for container: 
+[OBSERVED] DELETE after expiry :: DELETE /v1/sandboxes/9a75685c-7c75-4eef-b687-1750d961989c -> 404 {"code":"DOCKER::SANDBOX_NOT_FOUND","message":"Sandbox 9a75685c-7c75-4eef-b687-1750d961989c not found."}
+[OBSERVED] renew after expiry :: POST /v1/sandboxes/9a75685c-7c75-4eef-b687-1750d961989c/renew-expiration -> 404 {"code":"DOCKER::SANDBOX_NOT_FOUND","message":"Sandbox 9a75685c-7c75-4eef-b687-1750d961989c not found."}

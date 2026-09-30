@@ -1,0 +1,64 @@
+== a1 create with aimon labels (lower-case base32) {'aimon.at/managed': 'true', 'aimon.at/sandbox-key': '2o7l2id7upeaxxhvhsnjnkv5h5zd6bcg', 'aimon.at/generation': '3', 'aimon.at/deployment': 'spike-docker', 'spike-run': 'r1790724856'}
+POST /v1/sandboxes -> 202 {"id":"81262d8a-d73c-44a2-a243-05456b810846","status":{"state":"Running","reason":"CONTAINER_RUNNING","message":"Sandbox container started successfully.","lastTransitionAt":"2026-09-29T23:34:16.479690Z"},"metadata":{"aimon.at/managed":"true","aimon.at/sandbox-key":"2o7l2id7upeaxxhvhsnjnkv5h5zd6bcg","aimon.at/generation":"3","aimon.at/deployment":"spike-docker","spike-run":"r1790724856"},"expiresAt":"2026-09-29T23:44:16.479690Z","createdAt":"2026-09-29T23:34:16.479690Z","entrypoint":["sleep","infinity"]}
+[PASS] lower-case base32 sandbox-key accepted and echoed back
+== a2 create with UPPER-case base32 sandbox-key 2O7L2ID7UPEAXXHVHSNJNKV5H5ZD6BCG
+POST /v1/sandboxes -> 202 {"id":"23569d9c-740d-4f37-9dbf-2d99bfff9e72","status":{"state":"Running","reason":"CONTAINER_RUNNING","message":"Sandbox container started successfully.","lastTransitionAt":"2026-09-29T23:34:16.889750Z"},"metadata":{"aimon.at/managed":"true","aimon.at/sandbox-key":"2O7L2ID7UPEAXXHVHSNJNKV5H5ZD6BCG","aimon.at/generation":"3","aimon.at/deployment":"spike-docker","spike-run":"r1790724856"},"expiresAt":"2026-09-29T23:44:16.889750Z","createdAt":"2026-09-29T23:34:16.889750Z","entrypoint":["sleep","infinity"]}
+[OBSERVED] upper-case base32 value :: status=202
+== a3 invalid? value with ':': {'aimon.at/workspace': 'ws:abc'}
+   POST /v1/sandboxes -> 400 {"code":"SANDBOX::INVALID_METADATA_LABEL","message":"Metadata value 'ws:abc' is invalid: must be 63 characters or less, start/end with an alphanumeric character, and contain only alphanumeric, '-', '_', or '.' characters."}
+[PASS(rejected)] label value with ':' :: status=400
+== a3 invalid? value with '/': {'aimon.at/sandbox-key': 'dep/ws/1'}
+   POST /v1/sandboxes -> 400 {"code":"SANDBOX::INVALID_METADATA_LABEL","message":"Metadata value 'dep/ws/1' is invalid: must be 63 characters or less, start/end with an alphanumeric character, and contain only alphanumeric, '-', '_', or '.' characters."}
+[PASS(rejected)] label value with '/' :: status=400
+== a3 invalid? 64-char value: {'aimon.at/sandbox-key': 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'}
+   POST /v1/sandboxes -> 400 {"code":"SANDBOX::INVALID_METADATA_LABEL","message":"Metadata value 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' is invalid: must be 63 characters or less, start/end with an alphanumeric character, and contain only alphanumeric, '-', '_', or '.' characters."}
+[PASS(rejected)] label 64-char value :: status=400
+== a3 invalid? 63-char value: {'aimon.at/sandbox-key': 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'}
+   POST /v1/sandboxes -> 202 {"id":"518ba192-3312-4e6e-9c64-32080a1ee5de","status":{"state":"Running","reason":"CONTAINER_RUNNING","message":"Sandbox container started successfully.","lastTransitionAt":"2026-09-29T23:34:17.370071Z"},"metadata":{"aimon.at/sandbox-key":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","spike-run":"r1790724856"},"expiresAt":"2026-09-29T23:44:17.370071Z","createdAt":"2026-09-29T23...(+50 chars)
+[OBSERVED(accepted)] label 63-char value :: status=202
+== a3 invalid? empty value: {'aimon.at/x': ''}
+   POST /v1/sandboxes -> 202 {"id":"cb3fe2d2-ec03-4858-8d7e-b016dd9475dd","status":{"state":"Running","reason":"CONTAINER_RUNNING","message":"Sandbox container started successfully.","lastTransitionAt":"2026-09-29T23:34:17.789508Z"},"metadata":{"aimon.at/x":"","spike-run":"r1790724856"},"expiresAt":"2026-09-29T23:44:17.789508Z","createdAt":"2026-09-29T23:34:17.789508Z","entrypoint":["sleep","infinity"]}
+[OBSERVED(accepted)] label empty value :: status=202
+== a3 invalid? key prefix 'opensandbox.io/': {'opensandbox.io/id': 'spoof'}
+   POST /v1/sandboxes -> 400 {"code":"SANDBOX::INVALID_METADATA_LABEL","message":"Metadata key 'opensandbox.io/id' uses the reserved prefix 'opensandbox.io/'. Keys under this prefix are managed by the system and cannot be set via metadata."}
+[PASS(rejected)] label key prefix 'opensandbox.io/' :: status=400
+== a3 invalid? key without prefix, 64-char name: {'kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk': 'v'}
+   POST /v1/sandboxes -> 400 {"code":"SANDBOX::INVALID_METADATA_LABEL","message":"Metadata key 'kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk' is invalid: must be either a name or a DNS-subdomain prefix and name separated by /, where the name is up to 63 characters and matches [A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?, and the optional prefix is a valid DNS subdomain up to 253 characters."}
+[PASS(rejected)] label key without prefix, 64-char name :: status=400
+== a3 invalid? value starting with '-': {'aimon.at/x': '-abc'}
+   POST /v1/sandboxes -> 400 {"code":"SANDBOX::INVALID_METADATA_LABEL","message":"Metadata value '-abc' is invalid: must be 63 characters or less, start/end with an alphanumeric character, and contain only alphanumeric, '-', '_', or '.' characters."}
+[PASS(rejected)] label value starting with '-' :: status=400
+== a4 idempotency: second create with identical labels
+POST /v1/sandboxes -> 202 {"id":"6d0f8dc1-446d-4ac7-8b08-2d64e8127fac","status":{"state":"Running","reason":"CONTAINER_RUNNING","message":"Sandbox container started successfully.","lastTransitionAt":"2026-09-29T23:34:18.227858Z"},"metadata":{"aimon.at/managed":"true","aimon.at/sandbox-key":"2o7l2id7upeaxxhvhsnjnkv5h5zd6bcg",...(+208 chars)
+[OBSERVED] same labels twice :: ids differ=True (81262d8a-d73c-44a2-a243-05456b810846 vs 6d0f8dc1-446d-4ac7-8b08-2d64e8127fac) -> no server-side idempotency
+== a5 list filtered by AND of two labels
+GET /v1/sandboxes?metadata=aimon.at%252Fsandbox-key%3D2o7l2id7upeaxxhvhsnjnkv5h5zd6bcg%26spike-run%3Dr1790724856 -> 200 {"items":[{"id":"6d0f8dc1-446d-4ac7-8b08-2d64e8127fac","image":{"uri":"spike-docker-base:1"},"status":{"state":"Running","reason":"CONTAINER_RUNNING","message":"Sandbox container is running.","lastTransitionAt":"2026-09-29T23:34:18.255943Z"},"metadata":{"aimon.at/deployment":"spike-docker","aimon.at/generation":"3","aimon.at/managed":"true","aimon.at/sandbox-key":"2o7l2id7upeaxxhvhsnjnkv5h5zd6bcg","spike-run":"r1790724856"},"entrypoint":["sleep","infinity"],"expiresAt":"2026-09-29T23:44:18.227858Z","createdAt":"2026-09-29T23:34:18.255943Z"},{"id":"81262d8a-d73c-44a2-a243-05456b810846","image":{"uri":"spike-docker-base:1"},"status":{"state":"Running","reason":"CONTAINER_RUNNING","message":"Sandbox container is running.","lastTransitionAt":"2026-09-29T23:34:16.504668Z"},"metadata":{"aimon.at/deployment":"spike-docker","aimon.at/generation":"3","aimon.at/managed":"true","aimon.at/sandbox-key":"2o7l2id7upeaxxhvhsnjnkv5h5zd6bcg","spike-run":"r1790724856"},"entrypoint":["sleep","infinity"],"expiresAt":"2026-09-29T23:44:16.479690Z","createdAt":"2026-09-29T23:34:16.504668Z"}],"pagination":{"page":1,"pageSize":20,"totalItems":2,"totalPages":1,"hasNextPage":false}}
+[PASS] AND filter returns both :: ids=['6d0f8dc1-446d-4ac7-8b08-2d64e8127fac', '81262d8a-d73c-44a2-a243-05456b810846']
+[PASS] AND filter with a non-matching 2nd label is empty :: GET /v1/sandboxes?metadata=aimon.at%252Fsandbox-key%3D2o7l2id7upeaxxhvhsnjnkv5h5zd6bcg%26spike-run%3Dnope -> 200 {"items":[],"pagination":{"page":1,"pageSize":20,"totalItems":0,"totalPages":0,"hasNextPage":false}}
+[OBSERVED] metadata filter sent as single param 'k=v&k=v' :: n=3 GET /v1/sandboxes?metadata=aimon.at%2Fmanaged%3Dtrue%26spike-run%3Dr1790724856 -> 200 {"items":[{"id":"6d0f8dc1-446d-4ac7-8b08-2d64e8127fac","image":{"uri":"spike-docker-base:1"},"status":{"state":"Running","reason":"CONTAINER_RUNNING","message":"Sandbox container is running.","lastTra...(+1510 chars)
+[OBSERVED] metadata filter sent as repeated params (does it AND, or keep only one?) :: n=5 status=200 ids=['6d0f8dc1', 'cb3fe2d2', '518ba192', '23569d9c', '81262d8a']
+[OBSERVED] filter value case-sensitivity (upper-case key value) :: ids=['23569d9c']
+== a6 pagination
+   page=1: ids=['d263335e', '54b0a49a'] pagination={'page': 1, 'pageSize': 2, 'totalItems': 8, 'totalPages': 4, 'hasNextPage': True}
+   page=2: ids=['71dd63ba', '6d0f8dc1'] pagination={'page': 2, 'pageSize': 2, 'totalItems': 8, 'totalPages': 4, 'hasNextPage': True}
+   page=3: ids=['cb3fe2d2', '518ba192'] pagination={'page': 3, 'pageSize': 2, 'totalItems': 8, 'totalPages': 4, 'hasNextPage': True}
+   page=4: ids=['23569d9c', '81262d8a'] pagination={'page': 4, 'pageSize': 2, 'totalItems': 8, 'totalPages': 4, 'hasNextPage': False}
+   page=5: ids=[] pagination={'page': 5, 'pageSize': 2, 'totalItems': 8, 'totalPages': 4, 'hasNextPage': False}
+   page=6: ids=[] pagination={'page': 6, 'pageSize': 2, 'totalItems': 8, 'totalPages': 4, 'hasNextPage': False}
+[PASS] pagination pageSize=2 visits all 8 exactly once (order: createdAt desc?) :: n=8 uniq=8
+[OBSERVED] pageSize=1000 :: GET /v1/sandboxes?metadata=spike-run%3Dr1790724856&pageSize=1000 -> 422 {"detail":[{"type":"less_than_equal","loc":["query","pageSize"],"msg":"Input should be less than or equal to 200","input":"1000","ctx":{"le":200}}]}
+[OBSERVED] page=0 :: GET /v1/sandboxes?page=0 -> 422 {"detail":[{"type":"greater_than_equal","loc":["query","page"],"msg":"Input should be greater than or equal to 1","input":"0","ctx":{"ge":1}}]}
+== a7 terminated sandboxes in list / GET after delete
+   DELETE /v1/sandboxes/6d0f8dc1-446d-4ac7-8b08-2d64e8127fac -> 204 
+[OBSERVED] deleted sandbox appears in list? :: False
+[OBSERVED] list state=Terminated :: GET /v1/sandboxes?metadata=spike-run%3Dr1790724856&state=Terminated -> 200 {"items":[],"pagination":{"page":1,"pageSize":20,"totalItems":0,"totalPages":0,"hasNextPage":false}}
+[OBSERVED] GET after DELETE :: GET /v1/sandboxes/6d0f8dc1-446d-4ac7-8b08-2d64e8127fac -> 404 {"code":"DOCKER::SANDBOX_NOT_FOUND","message":"Sandbox 6d0f8dc1-446d-4ac7-8b08-2d64e8127fac not found."}
+[OBSERVED] DELETE twice :: DELETE /v1/sandboxes/6d0f8dc1-446d-4ac7-8b08-2d64e8127fac -> 404 {"code":"DOCKER::SANDBOX_NOT_FOUND","message":"Sandbox 6d0f8dc1-446d-4ac7-8b08-2d64e8127fac not found."}
+[OBSERVED] DELETE never-existed id :: DELETE /v1/sandboxes/00000000-0000-0000-0000-000000000000 -> 404 {"code":"DOCKER::SANDBOX_NOT_FOUND","message":"Sandbox 00000000-0000-0000-0000-000000000000 not found."}
+[OBSERVED] GET never-existed id :: GET /v1/sandboxes/00000000-0000-0000-0000-000000000000 -> 404 {"code":"DOCKER::SANDBOX_NOT_FOUND","message":"Sandbox 00000000-0000-0000-0000-000000000000 not found."}
+== a8 metadata PATCH (label mutation after create)
+[OBSERVED] PATCH metadata :: PATCH /v1/sandboxes/81262d8a-d73c-44a2-a243-05456b810846/metadata -> 200 {"id":"81262d8a-d73c-44a2-a243-05456b810846","image":{"uri":"spike-docker-base:1"},"status":{"state":"Running","reason":"CONTAINER_RUNNING","message":"Sandbox container is running.","lastTransitionAt":"2026-09-29T23:34:16.504668Z"},"metadata":{"aimon.at/deployment":"spike-docker","aimon.at/generation":"4","aimon.at/managed":"true","aimon.at/sandbox-key":"2o7l2id7upeaxxhvhsnjnkv5h5zd6bcg","spike-ru...(+136 chars)
+   GET /v1/sandboxes/81262d8a-d73c-44a2-a243-05456b810846 -> 200 {"id":"81262d8a-d73c-44a2-a243-05456b810846","image":{"uri":"spike-docker-base:1"},"status":{"state":"Running","reason":"CONTAINER_RUNNING","message":"Sandbox container is running.","lastTransitionAt":"2026-09-29T23:34:16.504668Z"},"metadata":{"aimon.at/deployment":"spike-docker","aimon.at/generation":"4","aimon.at/managed":"true","aimon.at/sandbox-key":"2o7l2id7upeaxxhvhsnjnkv5h5zd6bcg","spike-run":"r1790724856"},"entrypoint":["sleep","infinity"],"expiresAt":"2026-09-29T23:44:16.479690Z","createdAt":"2026-09-29T23:34:16.504668Z"}
+== a9 auth
+[PASS] no API key -> 401 :: GET /v1/sandboxes -> 401 {"code":"MISSING_API_KEY","message":"Authentication credentials are missing. Provide API key via OPEN-SANDBOX-API-KEY header."}
+[PASS] wrong API key :: GET /v1/sandboxes -> 401 {"code":"INVALID_API_KEY","message":"Authentication credentials are invalid. Check your API key and try again."}

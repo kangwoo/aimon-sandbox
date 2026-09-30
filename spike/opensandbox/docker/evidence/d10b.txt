@@ -1,0 +1,4 @@
+## d10b raw curl throughput (sandbox 75499c1a-49a2-458e-823c-cb4b7d2c6311)
+10MB as 100-byte lines: sse_bytes=15400221 stdout_events=100000 time=2.3s last=b'{"type":"execution_complete","execution_time":1284,"timestamp":1790725966495}'
+10MB as one line: sse_bytes=10000275 stdout_events=1 time=1.3s last=b'{"type":"execution_complete","execution_time":227,"timestamp":1790725967987}'
+10MB as 64KiB lines: sse_bytes=10008482 stdout_events=153 time=1.1s last=b'{"type":"execution_complete","execution_time":70,"timestamp":1790725969298}'
