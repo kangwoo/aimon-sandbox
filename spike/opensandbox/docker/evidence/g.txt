@@ -1,0 +1,18 @@
+[OBSERVED] identity :: uid=0(root) gid=0(root) groups=0(root)
+[OBSERVED] caps/nnp/seccomp :: CapInh:	0000000000000000 | CapPrm:	00000000800405fb | CapEff:	00000000800405fb | CapBnd:	00000000800405fb | CapAmb:	0000000000000000 | NoNewPrivs:	1 | Seccomp:	2 | Seccomp_filters:	1
+[OBSERVED] decoded CapBnd :: 0x00000000800405fb=cap_chown,cap_dac_override,cap_fowner,cap_fsetid,cap_kill,cap_setgid,cap_setuid,cap_setpcap,cap_net_bind_service,cap_sys_chroot,cap_setfcap
+[OBSERVED] pids limit :: 4096
+[OBSERVED] memory limit :: 536870912
+[OBSERVED] cpu limit :: 50000 100000
+[OBSERVED] rootfs writable? :: rootfs-writable
+[OBSERVED] docker socket visible? :: ls: cannot access '/var/run/docker.sock': No such file or directory
+[OBSERVED] mount allowed? :: mount: /mnt: permission denied.
+[OBSERVED] unshare userns? :: unshare: unshare failed: Operation not permitted
+[OBSERVED] raw socket (NET_RAW dropped)? :: bash: line 1: ping: command not found
+[OBSERVED] chown other uid (CHOWN kept?) :: 1234
+[OBSERVED] setuid escalation (nnp) :: uid=65534(nobody) gid=65534(nogroup) groups=65534(nogroup)
+[OBSERVED] execd pid/user :: USER         PID COMMAND | root           1 /bin/sh /opt/opensandbox/bootstrap.sh sleep infinity | root          20 /opt/opensandbox/execd | root          21 sleep infinity | root          65 bash -c ps -o user,pid,args -e | head -5
+[OBSERVED] /proc/1 environ readable :: PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin HOSTNAME=ba0fb03f4428 OPENSANDBOX_ID=2553151d-3aaf-44fa-a167-3e8d1100cb71 HOME=/root
+[OBSERVED] mounts :: / rw,relatime | /proc rw,nosuid,nodev,noexec,relatime | /dev rw,nosuid | /dev/pts rw,nosuid,noexec,relatime | /sys ro,nosuid,nodev,noexec,relatime | /sys/fs/cgroup ro,nosuid,nodev,noexec,relatime | /dev/mqueue rw,nosuid,nodev,noexec,relatime | /dev/shm rw,nosuid,nodev,noexec,relatime | /etc/resolv.conf rw,relatime | /etc/hostname rw,relatime | /etc/hosts rw,relatime | /proc/bus ro,nosuid,nodev,noexec,relatime | /proc/fs ro,nosuid,nodev,noexec,relatime | /proc/irq ro,nosuid,nodev,noexec,relatime | /proc/sys ro,nosuid,nodev,noexec,relatime | /proc/sysrq-trigger ro,nosuid,nodev,noexec,relatime | 
+docker inspect: 
+[OBSERVED] create with unknown field 'user' :: POST /v1/sandboxes -> 202 {"id":"e1cf74aa-0033-49f3-8681-8cefba2f1b0f","status":{"state":"Running","reason":"CONTAINER_RUNNING","message":"Sandbox container started successfully.","lastTransitionAt":"2026-09-29T23:46:41.492939Z"},"metadata":{"spike-run":"g-user"},"expiresAt":"2026-09-29T23:56:41.492939Z","createdAt":"2026-09...(+56 chars)

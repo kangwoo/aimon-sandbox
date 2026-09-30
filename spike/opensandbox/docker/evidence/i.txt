@@ -1,0 +1,11 @@
+[OBSERVED] endpoint 44772 :: GET /v1/sandboxes/e1496e8c-0dba-4b88-ad1a-630dea52bc8c/endpoints/44772 -> 200 {"endpoint":"192.168.20.15:41698/proxy/44772"} headers={'x-request-id': 'ad1e7a402bfd4ec9b35102eef6d35fe7'}
+[OBSERVED] endpoint 44772?use_server_proxy=true :: GET /v1/sandboxes/e1496e8c-0dba-4b88-ad1a-630dea52bc8c/endpoints/44772?use_server_proxy=true -> 200 {"endpoint":"localhost:8090/v1/sandboxes/e1496e8c-0dba-4b88-ad1a-630dea52bc8c/proxy/44772"} headers={'x-request-id': '821b196ab6d647fc84a331e60df99a7a'}
+[OBSERVED] endpoint 44772?expires=1790726215 :: GET /v1/sandboxes/e1496e8c-0dba-4b88-ad1a-630dea52bc8c/endpoints/44772?expires=1790726215 -> 400 {"code":"SANDBOX::API_NOT_SUPPORTED","message":"Signed routes (expires parameter) are not supported when runtime.type='docker'. Use the Kubernetes runtime for signed routes."} headers={'x-request-id': '4406e4e5e81444cb8d0bbf06f38a41a1'}
+[OBSERVED] endpoint for app port 8080 :: GET /v1/sandboxes/e1496e8c-0dba-4b88-ad1a-630dea52bc8c/endpoints/8080 -> 200 {"endpoint":"192.168.20.15:41776"}
+[OBSERVED] endpoint for arbitrary port 9999 :: GET /v1/sandboxes/e1496e8c-0dba-4b88-ad1a-630dea52bc8c/endpoints/9999 -> 200 {"endpoint":"192.168.20.15:41698/proxy/9999"}
+[OBSERVED] direct endpoint, no headers :: http://192.168.20.15:41698/proxy/44772/ping -> 200 
+[OBSERVED] direct host port root path /ping :: http://192.168.20.15:41698/ping -> 200 
+[OBSERVED] server proxy WITH api key :: http://localhost:8090/v1/sandboxes/e1496e8c-0dba-4b88-ad1a-630dea52bc8c/proxy/44772/ping -> 200 
+[OBSERVED] server proxy WITHOUT api key :: http://localhost:8090/v1/sandboxes/e1496e8c-0dba-4b88-ad1a-630dea52bc8c/proxy/44772/ping -> 200 
+[OBSERVED] /command through server proxy :: 200 '{"type":"init","text":"9d305439e6f04d7790b24414a281b101","timestamp":1790725615345}\n\n{"type":"stdout","text":"via-server-proxy","timestamp":1790725615345}\n\n{"type":"execution_complete","timestamp":1790725615345}\n\n{"type":"ping","text":"pong","timestamp":1790725615346}\n\n'
+[OBSERVED] direct with a garbage X-EXECD-ACCESS-TOKEN :: 200

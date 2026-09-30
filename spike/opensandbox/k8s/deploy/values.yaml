@@ -1,0 +1,53 @@
+# spike-os values: docker.io multi-arch images (the chart default points at an Aliyun CN registry)
+opensandbox-controller:
+  controller:
+    image:
+      repository: docker.io/opensandbox/controller
+      tag: release-1.1.1-rc.1
+    resources:
+      requests: {cpu: 10m, memory: 64Mi}
+    snapshot:
+      imageCommitterImage: docker.io/opensandbox/image-committer:release-1.1.1-rc.1
+      registry: spike-os-registry:5000/snapshots
+      registryInsecure: true
+opensandbox-server:
+  server:
+    image:
+      repository: docker.io/opensandbox/server
+      tag: release-1.1.1-rc.1
+    resources:
+      requests: {cpu: 100m, memory: 256Mi}
+      limits: {cpu: "2", memory: 2Gi}
+    volumes:
+      - name: bs-template
+        configMap: {name: spike-bs-template}
+    volumeMounts:
+      - name: bs-template
+        mountPath: /etc/spike
+  configToml: |
+    [server]
+    host = "0.0.0.0"
+    port = 80
+    api_key = "spike-key"
+    max_sandbox_timeout_seconds = 86400
+
+    [log]
+    level = "INFO"
+
+    [runtime]
+    type = "kubernetes"
+    execd_image = "docker.io/opensandbox/execd:release-1.1.1-rc.1"
+
+    [storage]
+    volume_default_size = "1Gi"
+
+    [kubernetes]
+    kubeconfig_path = ""
+    namespace = "opensandbox"
+    workload_provider = "batchsandbox"
+    image_pull_policy = "IfNotPresent"
+    batchsandbox_template_file = "/etc/spike/template.yaml"
+
+    [egress]
+    image = "docker.io/opensandbox/egress:release-1.1.1-rc.1"
+    mode = "dns+nft"

@@ -1,0 +1,11 @@
+sidecar container for cf5982e3-56c5-4d7b-85d6-1e31c3e7d6cf:
+name=/sandbox-egress-cf5982e3-56c5-4d7b-85d6-1e31c3e7d6cf image=opensandbox/egress:v1.1.7 capadd=["NET_ADMIN"] ports={"18080/tcp":[{"HostIp":"0.0.0.0","HostPort":"41612"}],"44772/tcp":[{"HostIp":"0.0.0.0","HostPort":"41063"}],"8080/tcp":[{"HostIp":"0.0.0.0","HostPort":"41433"}]} labels={"opensandbox.io/egress-sidecar-for":"cf5982e3-56c5-4d7b-85d6-1e31c3e7d6cf"} ip=172.17.0.5
+== INBOUND east-west: from no-policy sandbox A (9c244fa5-b331-472c-9028-7d1f7c1bb449) to deny-policy sandbox C execd at 172.17.0.5:44772
+INBOUND-EXEC-OK-in-policy-sandbox\
+== egress sidecar API on host port 41612 without token
+unauthorized
+ [401]
+== with a PATCH attempt (no token)
+unauthorized
+ [401]
+"OPENSANDBOX_EGRESS_TOKEN=<redacted>

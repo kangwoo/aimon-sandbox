@@ -1,0 +1,21 @@
+== c1 pause/resume round trip keeps files + processes
+   POST /v1/sandboxes/187d614d-f21b-4179-8bd6-b521b963e964/pause -> 202 
+   state after pause: Paused; docker: sandbox-187d614d-f21b-4179-8bd6-b521b963e964 Up 3 seconds (Paused)
+   docker exec while paused -> rc=1 Error response from daemon: Container sandbox-187d614d-f21b-4179-8bd6-b521b963e964 is paused, unpause the container before exec
+== c2 exec / files while paused
+[OBSERVED] execd /command while paused :: ReadTimeout: timed out after 8.0s
+[OBSERVED] execd /files/info while paused :: ReadTimeout: timed out after 8.0s
+[OBSERVED] GET endpoint while paused :: GET /v1/sandboxes/187d614d-f21b-4179-8bd6-b521b963e964/endpoints/44772 -> 200 {"endpoint":"192.168.20.15:41979/proxy/44772"}
+== c3 renew while paused
+[PASS] renew while paused :: POST /v1/sandboxes/187d614d-f21b-4179-8bd6-b521b963e964/renew-expiration -> 200 {"expiresAt":"2026-09-29T23:50:43.807628Z"}
+[OBSERVED] pause when already paused :: POST /v1/sandboxes/187d614d-f21b-4179-8bd6-b521b963e964/pause -> 409 {"code":"DOCKER::SANDBOX_NOT_RUNNING","message":"Sandbox is not in a running state."}
+   resume: POST /v1/sandboxes/187d614d-f21b-4179-8bd6-b521b963e964/resume -> 202 
+   state after resume: Running
+[PASS] background process survives pause and continues after resume :: '5\nbefore' -> '8'
+[OBSERVED] resume when already running :: POST /v1/sandboxes/187d614d-f21b-4179-8bd6-b521b963e964/resume -> 409 {"code":"DOCKER::SANDBOX_NOT_PAUSED","message":"Sandbox is not in a paused state."}
+[OBSERVED] expiresAt before pause / after renew-in-pause :: 2026-09-29T23:45:24.156938Z / 2026-09-29T23:50:43.807628Z
+== c4 does expiry fire while paused? create timeout=60, pause immediately, wait past expiresAt
+   paused (Paused); expiresAt=2026-09-29T23:36:50.965522+00:00; waiting ...
+   t-exp=-59.5s -> (200, 'Paused') docker='sandbox-4b6cce49-bd52-49df-80a1-b724ba02192c Up Less than a second (Paused)'
+   t-exp=1.5s -> (404, '{"code":"DOCKER::SANDBOX_NOT_FOUND","message":"Sandbox 4b6cce49-bd52-49df-80a1-b724ba02192c not found."}') docker=''
+[OBSERVED] paused sandbox past expiresAt :: final=(404, '{"code":"DOCKER::SANDBOX_NOT_FOUND","message":"Sandbox 4b6cce49-bd52-49df-80a1-b724ba02192c not found."}') docker=''

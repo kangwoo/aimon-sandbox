@@ -1,0 +1,5 @@
+restart at ~23:48:59 with sandbox e7f61e35 expired at 23:48:38 while server down
+container: 
+{"code":"DOCKER::SANDBOX_NOT_FOUND","message":"Sandbox e7f61e35-882e-4162-a182-b5d1b313c7d0 not found."}
+[32mINFO[0m:     2026-09-30 08:49:03+0900 [-] opensandbox_server.services.docker.docker_service: Sandbox e7f61e35-882e-4162-a182-b5d1b313c7d0 already expired; terminating now.
+[32mINFO[0m:     2026-09-30 08:49:10+0900 [-] uvicorn.access: 127.0.0.1:58875 - "GET /v1/sandboxes/e7f61e35-882e-4162-a182-b5d1b313c7d0 HTTP/1.1" 404

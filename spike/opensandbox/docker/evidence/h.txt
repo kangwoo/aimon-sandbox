@@ -1,0 +1,23 @@
+pre: []
+create rw: POST /v1/sandboxes -> 202 {"id":"afc03e93-ec11-4d62-8d9b-598b59e82f36","status":{"state":"Running","reason":"CONTAINER_RUNNING","message":"Sandbox container started successfully.","lastTransitionAt":"2026-09-29T23:46:42.499429Z"},"metadata":{"spike-run":"h1790725602","role":"rw"},"expiresAt":"2026-09-30T00:01:42.499429Z","createdAt":"2026-09-29T23:46:42.499429Z","entrypoint":["sleep","infinity"]}
+docker volume inspect: [     {         "CreatedAt": "2026-09-29T23:46:42Z",         "Driver": "local",         "Labels": {             "opensandbox.io/volume-managed-by": "server"         },         "Mountpoint": "/var/lib/docker/volumes/spike-docker-vol1/_data",         "Name": "spike-docker-vol1",         "Options": null,         "Scope": "local"     } ]
+create ro: POST /v1/sandboxes -> 202 {"id":"2eb7e889-1b7a-40f9-ab26-cc73e458d13f","status":{"state":"Running","reason":"CONTAINER_RUNNING","message":"Sandbox container started successfully.","lastTransitionAt":"2026-09-29T23:46:42.981793Z"},"metadata":{"spike-run":"h1790725602","role":"ro"},"expiresAt":"2026-09-30T00:01:42.981793Z","cr...(+73 chars)
+[OBSERVED] A writes :: 0
+root 755
+root 644
+[OBSERVED] B reads :: from-a
+[OBSERVED] B writes (ro mount) :: rc=1
+bash: line 1: /workspace/shared.txt: Read-only file system
+[OBSERVED] B files API upload into ro mount :: POST /proxy/44772/files/upload -> 500 {"code":"RUNTIME_ERROR","message":"error opening destination file /workspace/via-files.txt. open /workspace/via-files.txt: read-only file system"}
+mounts A: [{"Type":"volume","Name":"spike-docker-vol1","Source":"/var/lib/docker/volumes/spike-docker-vol1/_data","Destination":"/workspace","Driver":"local","Mode":"rw","RW":true,"Propagation":""}]
+mounts B: [{"Type":"volume","Name":"spike-docker-vol1","Source":"/var/lib/docker/volumes/spike-docker-vol1/_data","Destination":"/workspace","Driver":"local","Mode":"ro","RW":false,"Propagation":""}]
+[OBSERVED] createIfNotExists=false on a missing volume :: POST /v1/sandboxes -> 400 {"code":"VOLUME::PVC_NOT_FOUND","message":"Volume 'x': Docker named volume 'spike-docker-absent' does not exist. Named volumes must be created before sandbox creation (e.g., 'docker volume create <name>')."}
+[OBSERVED] host bind with empty allowed_host_paths :: POST /v1/sandboxes -> 400 {"code":"VOLUME::HOST_PATH_NOT_ALLOWED","message":"Host path '/tmp' is not under any allowed prefix. Allowed prefixes: []"}
+[OBSERVED] invalid claimName :: POST /v1/sandboxes -> 422 {"detail":[{"type":"string_pattern_mismatch","loc":["body","volumes",0,"pvc","claimName"],"msg":"String should match pattern '^[a-z0-9]([-a-z0-9]*[a-z0-9])?$'","input":"Bad_Name","ctx":{"pattern":"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"}}]}
+== delete paths
+[OBSERVED] docker volume rm while mounted :: rc=1 Error response from daemon: remove spike-docker-vol1: volume is in use - [9ca61fd033f570c6d815b9686a31021a3b8bc9c1654c195a7fa03881fb6d3e64, 9c06300f8a352d4ee0371a7dc8bec01ef3d79db140d1cc514b29becc3735539c]
+[OBSERVED] volume after both sandboxes deleted (deleteOnSandboxTermination default false) :: spike-docker-vol1 {"opensandbox.io/volume-managed-by":"server"}
+vol2 labels: {"opensandbox.io/volume-managed-by":"server"}
+[OBSERVED] deleteOnSandboxTermination=true: creator deleted while another sandbox still mounts it :: spike-docker-vol2
+[OBSERVED] vol2 after all users deleted :: spike-docker-vol2
+[OBSERVED] docker volume rm after unmount :: rc=0 spike-docker-vol1 

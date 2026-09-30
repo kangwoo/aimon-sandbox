@@ -1,0 +1,15 @@
+## docker inspect sandbox-93d48c4d-dd3e-4d9b-a98a-5f348f7deebf
+user= privileged=false capdrop=["AUDIT_WRITE","MKNOD","NET_ADMIN","NET_RAW","SYS_ADMIN","SYS_MODULE","SYS_PTRACE","SYS_TIME","SYS_TTY_CONFIG"] capadd=null secopt=["no-new-privileges=true"] pids=4096 mem=536870912 nanocpu=500000000 ro=false userns= runtime=runc binds=null ports={"44772/tcp":[{"HostIp":"0.0.0.0","HostPort":"41353"}],"8080/tcp":[{"HostIp":"0.0.0.0","HostPort":"41437"}]}
+## unauthenticated /command via lifecycle-server proxy (no OPEN-SANDBOX-API-KEY)
+{"type":"init","text":"b310e81062e142cea4d8473dfc8edf92","timestamp":1790725640024}
+
+{"type":"ping","text":"pong","timestamp":1790725640025}
+
+{"type":"stdout","text":"uid=0(root) gid=0(root) groups=0(root)","timestamp":1790725640026}
+
+{"type":"stdout","text":"fec2cb5b734f","timestamp":1790725640026}
+
+{"type":"execution_complete","execution_time":1,"timestamp":1790725640026}
+
+## unauthenticated list via server (control)
+{"code":"MISSING_API_KEY","message":"Authentication credentials are missing. Provide API key via OPEN-SANDBOX-API-KEY header."}

@@ -1,0 +1,53 @@
+host_ip=192.168.20.15 peer B container ip=172.17.0.3 peer B host port=41248
+A network: bridge {"bridge":{"IPAMConfig":null,"Links":null,"Aliases":null,"DriverOpts":null,"GwPriority":0,"NetworkID":"230931a3062049b892f9dd2bba1a1007dd13c5deee5c4a70f4fc0b7207c307b1","EndpointID":"a0fd19a8017cdf08429c531b27f3c295607509f9e33526d9b41e6957ef294ceb","Gateway":"172.17.0.1","IPAddress":"172.17.0.2","MacAddress":"12:ab:8e:3d:70:3b","IPPrefixLen":16,"IPv6Gateway":"","GlobalIPv6Address":"","Globa
+--- no networkPolicy (server egress mode=dns+nft)
+   resolv: nameserver 192.168.65.7   | 192.168.65.254  host.docker.internal | 104.20.23.154   example.com | 172.66.147.243  example.com
+[OBSERVED] [no networkPolicy] server via host.docker.internal:8090/health :: 200 192.168.65.254 rc=0
+[OBSERVED] [no networkPolicy] server via host LAN IP 192.168.20.15:8090/health :: 200 192.168.20.15 rc=0
+[OBSERVED] [no networkPolicy] server API without key (reachable => 401) :: 401 192.168.65.254 rc=0
+[OBSERVED] [no networkPolicy] peer sandbox execd via container IP 172.17.0.3:44772/ping :: 200 172.17.0.3 rc=0
+[OBSERVED] [no networkPolicy] peer sandbox execd via host-published port 192.168.20.15:41248/ping :: 200 192.168.20.15 rc=0
+[OBSERVED] [no networkPolicy] internet by name https://example.com :: 200 104.20.23.154 rc=0
+[OBSERVED] [no networkPolicy] internet by IP https://1.1.1.1 :: 301 1.1.1.1 rc=0
+[OBSERVED] [no networkPolicy] internet by IP http://1.1.1.1 :: 301 1.1.1.1 rc=0
+[OBSERVED] [no networkPolicy] docker bridge gateway 172.17.0.1:8090 :: curl: (7) Failed to connect to 172.17.0.1 port 8090 after 0 ms: Couldn't connect to server 000  rc=7
+[OBSERVED] [no networkPolicy] run a command in the PEER sandbox through its unauthenticated execd :: LATERAL-EXEC-OK
+[OBSERVED] [no networkPolicy] DNS (system resolver / direct @8.8.8.8) :: 104.20.23.154 | 172.66.147.243 | 172.66.147.243 | 104.20.23.154 | 
+create with networkPolicy={'defaultAction': 'deny', 'egress': []}: 202 in 1.8s {"id":"02e885d3-a51a-4b73-b195-fd16e1003c6a","status":{"state":"Running","reason":"CONTAINER_RUNNING","message":"Sandbox container started successfully.","lastTransitionAt":"2026-09-29T23:49:31.710280Z"},"metadata":{"spike-run":"f1790725756","role":"policy"},"expiresAt":"2026-09-30T00:04:31.710280Z"
+   sandbox container network: container:bfcbb39a0921bfcfa3ee90080f358edfba27a96eb500bf21d85e00ebb1e19f36 capadd=null
+   containers for this sandbox: sandbox-02e885d3-a51a-4b73-b195-fd16e1003c6a spike-docker-base:1
+   GET networkpolicy: GET /v1/sandboxes/02e885d3-a51a-4b73-b195-fd16e1003c6a/networkpolicy -> 200 {"status":"ok","mode":"deny_all","enforcementMode":"dns+nft","policy":{"egress":[],"defaultAction":"deny"}}
+
+--- deny + empty allow list (server egress mode=dns+nft)
+   resolv: nameserver 192.168.65.7
+[OBSERVED] [deny + empty allow list] server via host.docker.internal:8090/health :: curl: (6) Could not resolve host: host.docker.internal 000  rc=6
+[OBSERVED] [deny + empty allow list] server via host LAN IP 192.168.20.15:8090/health :: curl: (28) Connection timed out after 6003 milliseconds 000  rc=28
+[OBSERVED] [deny + empty allow list] server API without key (reachable => 401) :: curl: (6) Could not resolve host: host.docker.internal 000  rc=6
+[OBSERVED] [deny + empty allow list] peer sandbox execd via container IP 172.17.0.3:44772/ping :: curl: (28) Connection timed out after 6003 milliseconds 000  rc=28
+[OBSERVED] [deny + empty allow list] peer sandbox execd via host-published port 192.168.20.15:41248/ping :: curl: (28) Connection timed out after 6002 milliseconds 000  rc=28
+[OBSERVED] [deny + empty allow list] internet by name https://example.com :: curl: (6) Could not resolve host: example.com 000  rc=6
+[OBSERVED] [deny + empty allow list] internet by IP https://1.1.1.1 :: curl: (28) Connection timed out after 6001 milliseconds 000  rc=28
+[OBSERVED] [deny + empty allow list] internet by IP http://1.1.1.1 :: curl: (28) Connection timed out after 6001 milliseconds 000  rc=28
+[OBSERVED] [deny + empty allow list] docker bridge gateway 172.17.0.1:8090 :: curl: (28) Connection timed out after 6003 milliseconds 000  rc=28
+[OBSERVED] [deny + empty allow list] run a command in the PEER sandbox through its unauthenticated execd :: no
+[OBSERVED] [deny + empty allow list] DNS (system resolver / direct @8.8.8.8)
+[OBSERVED] [deny + empty allow list] can sandbox alter its netns? (NET_ADMIN dropped) ::     inet 127.0.0.1/8 scope host lo |     inet 172.17.0.4/16 brd 172.17.255.255 scope global eth0 | bash: line 1: nft: command not found | RTNETLINK answers: Operation not permitted | 
+create with networkPolicy={'defaultAction': 'deny', 'egress': [{'action': 'allow', 'target': 'example.com'}]}: 202 in 1.8s {"id":"cf5982e3-56c5-4d7b-85d6-1e31c3e7d6cf","status":{"state":"Running","reason":"CONTAINER_RUNNING","message":"Sandbox container started successfully.","lastTransitionAt":"2026-09-29T23:50:28.869117Z"},"metadata":{"spike-run":"f1790725756","role":"policy"},"expiresAt":"2026-09-30T00:05:28.869117Z"
+   sandbox container network: container:0017e2c2d8d4a1a0f721afed76ce9f2c0549ba7fbbaac85cb5d7c5db3ae90195 capadd=null
+   containers for this sandbox: sandbox-cf5982e3-56c5-4d7b-85d6-1e31c3e7d6cf spike-docker-base:1
+   GET networkpolicy: GET /v1/sandboxes/cf5982e3-56c5-4d7b-85d6-1e31c3e7d6cf/networkpolicy -> 200 {"status":"ok","mode":"enforcing","enforcementMode":"dns+nft","policy":{"egress":[{"action":"allow","target":"example.com"}],"defaultAction":"deny"}}
+
+--- deny + allow example.com (server egress mode=dns+nft)
+   resolv: nameserver 192.168.65.7   | 104.20.23.154   example.com | 172.66.147.243  example.com
+[OBSERVED] [deny + allow example.com] server via host.docker.internal:8090/health :: curl: (6) Could not resolve host: host.docker.internal 000  rc=6
+[OBSERVED] [deny + allow example.com] server via host LAN IP 192.168.20.15:8090/health :: curl: (28) Connection timed out after 6000 milliseconds 000  rc=28
+[OBSERVED] [deny + allow example.com] server API without key (reachable => 401) :: curl: (6) Could not resolve host: host.docker.internal 000  rc=6
+[OBSERVED] [deny + allow example.com] peer sandbox execd via container IP 172.17.0.3:44772/ping :: curl: (28) Connection timed out after 6003 milliseconds 000  rc=28
+[OBSERVED] [deny + allow example.com] peer sandbox execd via host-published port 192.168.20.15:41248/ping :: curl: (28) Connection timed out after 6000 milliseconds 000  rc=28
+[OBSERVED] [deny + allow example.com] internet by name https://example.com :: 200 104.20.23.154 rc=0
+[OBSERVED] [deny + allow example.com] internet by IP https://1.1.1.1 :: curl: (28) Connection timed out after 6001 milliseconds 000  rc=28
+[OBSERVED] [deny + allow example.com] internet by IP http://1.1.1.1 :: curl: (28) Connection timed out after 6001 milliseconds 000  rc=28
+[OBSERVED] [deny + allow example.com] docker bridge gateway 172.17.0.1:8090 :: curl: (28) Connection timed out after 6001 milliseconds 000  rc=28
+[OBSERVED] [deny + allow example.com] run a command in the PEER sandbox through its unauthenticated execd :: no
+[OBSERVED] [deny + allow example.com] DNS (system resolver / direct @8.8.8.8) :: 104.20.23.154 | 172.66.147.243 | 104.20.23.154 | 172.66.147.243 | 
+[OBSERVED] [deny + allow example.com] can sandbox alter its netns? (NET_ADMIN dropped) ::     inet 127.0.0.1/8 scope host lo |     inet 172.17.0.5/16 brd 172.17.255.255 scope global eth0 | bash: line 1: nft: command not found | RTNETLINK answers: Operation not permitted | 

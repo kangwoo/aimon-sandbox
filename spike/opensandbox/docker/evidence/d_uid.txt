@@ -1,0 +1,6 @@
+== d11 uid of commands and of files written via files API
+[OBSERVED] command identity :: uid=0(root) gid=0(root) groups=0(root) | USER         PID COMMAND | root           1 /bin/sh /opt/opensandbox/bootstrap.sh sleep infinity | root     /opt/opensandbox/execd | root     bash -c id; ps -o user,pid,args -p 1; ps -o user,args -e | grep execd | head -3 | root     grep execd | 
+   upload -> 200 
+[OBSERVED] owner of a file written via files API :: -rwxr-xr-x 1 0 0 5 Sep 29 23:43 /tmp/via-files-api.txt | root 0 755 | 
+[OBSERVED] uid=1000 via /command uid :: uid=1000 gid=1000 groups=1000 None 
+[OBSERVED] uid=1000 command writing to a files-API (root-owned) file :: 1000 bash: line 1: /tmp/via-files-api.txt: Permission denied {'ename': 'CommandExecError', 'evalue': '1', 'traceback': ['exit status 1']}
