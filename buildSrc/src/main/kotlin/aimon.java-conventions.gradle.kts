@@ -107,25 +107,27 @@ tasks.withType<Test>().configureEach {
 // Docker/Testcontainers-backed tests are annotated `@Tag("docker")`. The default `test` task — run by
 // `build` / `check` — excludes them so unit tests stay fast and need no Docker daemon; the separate
 // `integrationTest` task runs exactly those. Modules with no docker-tagged tests simply run nothing in
-// `integrationTest` — which, today, is every module here. See the IMPORTANT below.
+// `integrationTest`.
 //
 // `@Tag("packaging")` is a third tier with the same shape and a different reason. Those tests build a fat jar
 // and launch it in a child JVM, so they cost tens of seconds — which does not belong in the loop a developer runs
 // on every save. Excluded from `test` for the same reason `docker` is, and given its own task for the same reason
 // too. Repeated `useJUnitPlatform { }` calls accumulate into one options set, so both exclusions apply.
 //
-// IMPORTANT: neither tier has a subject in this repository today. Nothing here carries `@Tag("docker")` or
-// `@Tag("packaging")`, so both tasks match no test class, report NO-SOURCE and go green in under a second.
-// They are registered anyway, so that a test tagged tomorrow lands in a tier that already exists and so that
-// this build and aimon-core's keep the same shape. But a tier nothing runs cannot be told apart from a
-// passing one: do not read a green `integrationTest` or `packagingTest` here as verification of anything.
+// `@Tag("k8s")` is a fourth tier: checks that need a Kubernetes-runtime OpenSandbox server someone provisioned
+// (kind + helm, minutes of setup), run by hand before a release — never by `build`. It is excluded from
+// `integrationTest` as well, so a test tagged both `docker` and `k8s` cannot run against the wrong server.
 //
-// The first subject is planned: docs/design/workspace-sandbox.md §16 runs the provider contract suite against
-// an OpenSandbox server started by Testcontainers under `@Tag("docker")`.
+// The docker tier has one subject: `aimon-sandbox-opensandbox` runs the provider contract suite against an
+// OpenSandbox server started by Testcontainers (docs/design/workspace-sandbox.md §16). `packagingTest` has none —
+// nothing here carries `@Tag("packaging")`, so it reports NO-SOURCE and goes green in under a second; do not read
+// that as verification of anything. The same holds for `integrationTest` in every module but the provider's, and for
+// `k8sTest` when its tests skip for want of a cluster (they say so).
 tasks.named<Test>("test") {
     useJUnitPlatform {
         excludeTags("docker")
         excludeTags("packaging")
+        excludeTags("k8s")
     }
 }
 
@@ -137,6 +139,18 @@ tasks.register<Test>("integrationTest") {
     classpath = testSourceSet.runtimeClasspath
     useJUnitPlatform {
         includeTags("docker")
+        excludeTags("k8s")
+    }
+    shouldRunAfter(tasks.named("test"))
+}
+
+tasks.register<Test>("k8sTest") {
+    description = "Runs checks against a provisioned Kubernetes-runtime OpenSandbox server (JUnit @Tag(\"k8s\"))."
+    group = "verification"
+    testClassesDirs = testSourceSet.output.classesDirs
+    classpath = testSourceSet.runtimeClasspath
+    useJUnitPlatform {
+        includeTags("k8s")
     }
     shouldRunAfter(tasks.named("test"))
 }
@@ -162,9 +176,9 @@ tasks.register<Test>("packagingTest") {
 // The plugin's default is `test.exec` alone, which in aimon-core made seven published modules measure between
 // 0.0% and 12.9% line -- every one of them a module whose tests are @Tag("docker") and therefore absent from
 // `test`. A number that low reads as "untested" when the truth is "measured with the tests excluded", and it is
-// the number any coverage floor would have been set against. No module here is in that position today, because
-// no test here is tagged at all; the configuration is kept so that the first tagged test does not silently get
-// measured out of its own module's floor.
+// the number any coverage floor would have been set against. `aimon-sandbox-opensandbox` has docker-tagged tests,
+// but its floor is measured from the default tier alone (its fake-server tests), so `build` never needs Docker to
+// meet it; the docker tier's execution data only adds to it.
 //
 // Deliberately `mustRunAfter` and not `dependsOn` for the tiers outside `test`: generating a report must not start
 // requiring a Docker daemon or a fat jar. Ordering-only means `./gradlew test jacocoTestReport` still works with
@@ -184,7 +198,7 @@ tasks.register<Test>("packagingTest") {
 // with its tests excluded, which is the exact number the floor below exists to stop anyone from freezing.
 tasks.withType<JacocoReportBase>().configureEach {
     dependsOn(tasks.named("test"))
-    mustRunAfter(tasks.named("integrationTest"), tasks.named("packagingTest"))
+    mustRunAfter(tasks.named("integrationTest"), tasks.named("packagingTest"), tasks.named("k8sTest"))
     executionData.setFrom(fileTree(layout.buildDirectory.dir("jacoco")).include("*.exec"))
 }
 

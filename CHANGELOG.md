@@ -5,13 +5,58 @@ All notable aimon-sandbox changes are recorded here. The format is loosely based
 
 ## [Unreleased]
 
+### Added — workspace sandbox, implementation step 4
+
+The production provider and sandbox reconciliation of
+[`docs/design/workspace-sandbox.md`](docs/design/workspace-sandbox.md) §18-4; how it was built and where it departed
+from the plan is [`docs/design/workspace-sandbox-step4.md`](docs/design/workspace-sandbox-step4.md). Released together
+with step 3.
+
+- **`aimon-sandbox-opensandbox`** is a new, published module: `OpenSandboxProvider` calls the OpenSandbox REST API
+  directly (JDK `HttpClient` + Jackson, no SDK). Its capabilities are derived from operator declarations, never
+  probed (`egress-enforcement`, `network-isolation`, `hardened-security-context`, `runtime-class`, `credentials`,
+  `volume-reclaimer`), and `OpenSandboxProviderConfig` refuses declarations the runtime cannot honour. It enforces
+  what the server does not: `timeout` is always sent; expiry moves forward only, capped at `max-expiry`, and never on
+  a paused sandbox; kill and await-timeout always send `DELETE /command`; file writes go through a temporary name
+  plus `mv`/`ln`; a 404 on destroy is success. Errors are classified by HTTP status, and the execd endpoint is
+  re-resolved once after a connect failure. Credential bindings are written to the egress sidecar's vault, only the
+  ones a profile names.
+- **Sandbox reconciliation** (`SandboxReconciler`, run by `SandboxJanitor.runOnce()`): ORPHAN, STALE,
+  FAILED-LEFTOVER and DUPLICATE sandboxes of the deployment are destroyed, and missing ones are confirmed LOST after
+  `lost-confirm-after`. The grace is measured from the sandbox's creation time, and every destroy re-reads the record
+  first. New settings: `orphan-grace` (10m, must exceed `provision-timeout`) and `lost-confirm-after` (90s).
+- **SPI additions**, all additive:
+  - `ProviderCapabilities` gains `runtimeClass()`, `credentialScopes()` and `controlPlaneEndpoints()`, plus a
+    builder;
+  - `SandboxProvider.verify(ref, required)`;
+  - `ProviderSandbox.createdAt()`;
+  - `CredentialScope`, `HostPort` and `VerificationFailure`.
+- **Output may be line-normalized**, and the SPI now says so. The contract suite's truncation test uses
+  newline-terminated output. `SandboxShell` sizes its provider-side capture backstop for U+FFFD expansion
+  (`3 × max + 1 KiB`).
+- **The seed checks more.** `provider.verify` runs before the seed script: the egress `enforcementMode` and the
+  vault's bindings. When `NETWORK_ISOLATION` is required and not waived, the seed probes the provider's control-plane
+  endpoints.
+- **Credential bindings are allowed** in profiles. Startup validation checks:
+  - that every named binding exists;
+  - that no two bindings of a profile overlap;
+  - that `egress` explicitly allows every binding host (`credentials` without `egress` is refused);
+  - that a profile's `runtime-class` equals the provider's.
+- **Test tiers.** `integrationTest` (`@Tag("docker")`) now has a subject: the contract suite, a `WorkspaceSandbox`
+  end-to-end IT and an egress IT, run against an OpenSandbox server that Testcontainers starts per run. A new
+  `k8sTest` tier (`@Tag("k8s")`) is manual, runs against a provisioned cluster, and is excluded from `test` and
+  `integrationTest`. The testkit's contract suite gains an overridable `deployment()` and a `createdAt` check, and
+  its fault injector gains `Operation.VERIFY`.
+- `testcontainers` 2.0.5 joins the catalog (test only). The coverage floors are now `aimon-sandbox` 90 and
+  `aimon-sandbox-opensandbox` 86.
+
 ### Added — workspace sandbox, implementation step 3
 
 The domain and the local path of [`docs/design/workspace-sandbox.md`](docs/design/workspace-sandbox.md) §18-3;
 how it was built and where it departed from the plan is
 [`docs/design/workspace-sandbox-step3.md`](docs/design/workspace-sandbox-step3.md). **Not usable in production
-yet**: the only provider is the test-only `LocalProcessSandboxProvider`; the OpenSandbox provider is step 4, and
-steps 3 and 4 are released together.
+yet** at step 3 alone: its only provider was the test-only `LocalProcessSandboxProvider`. The OpenSandbox provider is
+step 4 (above), and steps 3 and 4 are released together.
 
 - **`aimon-sandbox`** now has code: workspace records with a version-CAS store (`InMemorySandboxWorkspaceStore`,
   single node only) and the `SandboxWorkspaceManager` (lazy provisioning, owner checks at every entry point,
@@ -24,7 +69,8 @@ steps 3 and 4 are released together.
 - **`aimon-sandbox-testkit`** is a new, published module: the provider and store contract suites, the
   local-process provider, fault injection, a manual clock and scheduler.
 - **Refused at startup, not ignored**: profiles with `pause-after` (step 7), `shared-access` other than `none`
-  (step 5), a `seed` (step 5) or `credentials` (step 4). Only the `primary` slot is served (step 5).
+  (step 5) or a `seed` (step 5). Step 3 also refused `credentials`; step 4 (above) lifted that refusal. Only the
+  `primary` slot is served (step 5).
 - **aimon-core is pinned to `0.3.1-SNAPSHOT`**, resolved through a `mavenLocal()` filtered to the `at.aimon.core`
   group and to snapshots. **This is a release blocker**: nothing is released from this repository until
   aimon-core 0.3.1 is on Maven Central, the pin is raised to it, and `mavenLocal()` is removed.
@@ -38,7 +84,7 @@ Everything below "Split out of aimon-core" is superseded by
 compatibility layer (§17 maps old to new). Nothing from it has been released under `at.aimon.sandbox`.
 
 - **`aimon-sandbox-docker` and `aimon-sandbox-kubernetes` are gone.** The only backend in the new design is
-  OpenSandbox, which covers both runtimes (§6.4); `aimon-sandbox-opensandbox` arrives in step 4 (§18).
+  OpenSandbox, which covers both runtimes (§6.4); `aimon-sandbox-opensandbox` arrived with step 4 (above).
 - **`aimon-sandbox` was emptied** (step 3, above, fills it again). The four tools (`RunSandbox`, `CopyToSandbox`, `RestartSandbox`,
   `DeleteSandbox`), `SandboxBackend`, `SandboxConfig`, `RunStore`/`RunManager`, `SandboxExpiryStore`,
   `SandboxLock`, `ReaperService`, the tar transfer classes and `IdentifierValidator` were all deleted; each

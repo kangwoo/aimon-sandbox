@@ -55,10 +55,9 @@ tasks.register("checkStyle") {
     dependsOn(subprojects.map { it.tasks.named("checkstyleMain") })
 }
 
-// `test` is each module's own test task, which excludes `@Tag("docker")` and `@Tag("packaging")` (see the
-// aimon.java-conventions plugin). No test in this repository carries either tag today, so `integrationTest`
-// and `packagingTest` currently match nothing -- see the tier comment in that plugin, which says what that
-// costs.
+// `test` is each module's own test task, which excludes `@Tag("docker")`, `@Tag("packaging")` and `@Tag("k8s")`
+// (see the aimon.java-conventions plugin). Only `aimon-sandbox-opensandbox` has tests in those tiers
+// (`integrationTest`, `k8sTest`); `checkAll` runs none of them -- see the tier comment in that plugin.
 tasks.register("checkAll") {
     description = "Run all code quality checks (Spotless + Checkstyle + unit tests)"
     group = "verification"

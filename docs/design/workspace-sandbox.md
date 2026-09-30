@@ -1,8 +1,9 @@
 # 워크스페이스 샌드박스 — 기존 도구가 OpenSandbox 위의 격리 환경을 투명하게 쓴다
 
-> Status: **ACCEPTED** — 3단계(도메인과 로컬 경로)까지 구현되었고, 2단계(OpenSandbox 스파이크)가 §6.4 의 확인 칸을 닫았다.
-> 운영에 쓸 프로바이더(4단계)는 아직 없다. 3단계의 구현 설계와 거기서 벗어난 점은
-> [`workspace-sandbox-step3.md`](workspace-sandbox-step3.md) 에, 스파이크의 근거는 [`opensandbox-spike.md`](opensandbox-spike.md) 에 있다. identifier 기반 옛 설계(도구 4개 · `SandboxBackend` · Docker/K8s 백엔드)를
+> Status: **ACCEPTED** — 4단계(OpenSandbox 프로바이더와 조정)까지 구현되었고, 2단계(OpenSandbox 스파이크)가 §6.4 의
+> 확인 칸을 닫았다. 3·4단계는 한 릴리스로 나간다(§18). 3단계의 구현 설계와 거기서 벗어난 점은
+> [`workspace-sandbox-step3.md`](workspace-sandbox-step3.md) 에, 4단계의 것은 [`workspace-sandbox-step4.md`](workspace-sandbox-step4.md)
+> 에, 스파이크의 근거는 [`opensandbox-spike.md`](opensandbox-spike.md) 에 있다. identifier 기반 옛 설계(도구 4개 · `SandboxBackend` · Docker/K8s 백엔드)를
 > **대체한다.** 옛 코드와 문서는 저장소에서 지웠다 — 마지막 모습은 커밋 `704013c` 의
 > [`sandbox.md`](https://github.com/kangwoo/aimon-sandbox/blob/704013c02cb14f16ec37ebf8c07f90d7e107db73/docs/design/sandbox.md) 이고, 배포본은 `at.aimon.core:aimon-sandbox{,-docker,-kubernetes}:0.2.4` 다. 하위 호환은
 > 목표가 아니다 — 이행 경로 대신 대응표(§17)를 둔다.
@@ -161,10 +162,10 @@ aimon-core (repo: aimon-core)
 │   OpenSandboxProvider     │ │   store-jdbc          │ │   SandboxProviderContract    │
 │   OpenSandboxProvider-    │ │   JdbcSandbox-        │ │   SandboxWorkspaceStore-     │
 │     Config                │ │   WorkspaceStore      │ │     Contract                 │
-│   VolumeReclaimer(I)      │ │   (§18-6)             │ │   LocalProcessSandbox-       │
-│   -> com.alibaba.         │ │                       │ │     Provider (tests only)    │
-│      opensandbox          │ │                       │ │   FaultInjectingSandbox-     │
-│                           │ │                       │ │     Provider · ManualClock · │
+│   CredentialDefinition    │ │   (§18-6)             │ │   LocalProcessSandbox-       │
+│   VolumeReclaimer(I)      │ │                       │ │     Provider (tests only)    │
+│   -> REST (JDK HttpClient │ │                       │ │   FaultInjectingSandbox-     │
+│      + Jackson), no SDK   │ │                       │ │     Provider · ManualClock · │
 │                           │ │                       │ │     ManualScheduler          │
 └───────────────────────────┘ └───────────────────────┘ └──────────────────────────────┘
 ```
@@ -181,9 +182,13 @@ aimon-core (repo: aimon-core)
 `aimon-sandbox-testkit` 은 발행한다 — 이 저장소 밖의 프로바이더와 저장소 구현도 계약 스위트를 통과해야 하기
 때문이다(§16). 계약 스위트는 JUnit 5 추상 클래스이므로 testkit 은 JUnit·AssertJ 를 `api` 로 싣는다.
 
-의존은 한 방향이다. 코어는 샌드박스를 모르고, `aimon-sandbox` 는 OpenSandbox SDK 를 모른다. OpenSandbox
-SDK 타입이 `aimon-sandbox-opensandbox` 밖으로 새어 나가지 않는다 — 공개 메서드의 인자·반환에 SDK 타입이
-나오면 안 된다.
+의존은 한 방향이다. 코어는 샌드박스를 모르고, `aimon-sandbox` 는 OpenSandbox 를 모른다.
+`aimon-sandbox-opensandbox` 는 OpenSandbox SDK 를 쓰지 않고 REST API 를 JDK `HttpClient` 와 Jackson 으로 직접
+부른다(스파이크 §8 — Kotlin SDK 는 출력을 상한 없이 모으고, `kill` 에 필요한 명령 id 를 콜백으로만 준다). 공개 표면은
+`OpenSandboxProvider` · `OpenSandboxProviderConfig` · `CredentialDefinition` · `VolumeReclaimer` 뿐이고 HTTP 를 말하는
+나머지(수명 클라이언트, execd 클라이언트, SSE 파서, vault 클라이언트, 에러 분류, 재시도)는 패키지 안에 둔다. 프로바이더
+설정 키(`aimon.sandbox.opensandbox.*`)도 이 모듈이 가진다 — `SandboxSettings` 는 그것을 모르고, 매니저는
+`ProviderCapabilities` 만 본다(§6.1).
 
 ### 4.2 호출 경로
 
@@ -357,6 +362,9 @@ public interface SandboxProvider extends AutoCloseable {
     Optional<SharedVolumes> sharedVolumes();                // present iff SHARED_VOLUME
 
     SandboxConnection connect(ProviderSandboxRef ref);
+
+    // what only the provider can see on a live sandbox (egress mode, vault bindings) — seed step, §11.3
+    default List<VerificationFailure> verify(ProviderSandboxRef ref, Set<Capability> required) { return List.of(); }
 }
 
 public interface SharedVolumes {
@@ -375,10 +383,15 @@ public interface RunningCommand {
     void kill();                          // SIGTERM to the process group, then SIGKILL after grace
 }
 
-public final class ProviderCapabilities {                // advertised() + maxExpiry()
+public final class ProviderCapabilities {                // declared provider configuration the manager checks against
     Set<Capability> advertised();
     Optional<Duration> maxExpiry();                      // the server's max expiry, from provider config; terminateAfter must not exceed it
+    Optional<String> runtimeClass();                     // the server's one runtime class; a profile's runtimeClass must equal it
+    Map<String, CredentialScope> credentialScopes();     // binding name -> {schemes, hosts, methods, paths}; no secrets (§12.1)
+    List<HostPort> controlPlaneEndpoints();              // what a sandbox must not reach; the seed probes them (§11.3)
 }
+
+public final class ProviderSandbox { ref, state, labels, expiresAt, Optional<Instant> createdAt }   // createdAt: §10.4 grace
 ```
 
 `ExecSpec` 는 명령 문자열(`bash -c` 로 도는 스크립트) · `workingDirectory` · `environment`(프로파일의 `env` 만 — 명령별
@@ -389,9 +402,24 @@ public final class ProviderCapabilities {                // advertised() + maxEx
 상한을 넘기는 것도 받아들이므로 `extendExpiry` 의 "앞으로만" 과 상한은 **프로바이더가** 지킨다. 명령은 **execd 의 uid** 로 돈다. `/command` 의 uid 인자는 쓰지 않는다 — files
 API 에는 uid 인자가 없으므로, 명령만 다른 uid 로 돌리면 파일 도구가 쓴 파일과 소유자가 어긋난다(§13.3). 프로바이더는 stdout 과 stderr 를 **구분해서** 돌려주고, `kill()` 은
 그 호출의 프로세스 그룹만 끝낸다. 지속 셸 세션은 SPI 에 없다 — `SandboxShell` 이 이 위에서 셸 상태를 이어 붙인다(§9).
-execd 는 출력을 줄 단위 이벤트로 보내므로 OpenSandbox 프로바이더의 stdout · stderr 는 줄로 정규화된다(`\r` 은 줄바꿈이
-되고, 마지막 줄바꿈은 늘 있으며, 잘못된 UTF-8 은 U+FFFD). §9 는 이것에 기대지 않는다 — 트레일러는 한 줄이고 잘림은
-트레일러의 바이트 수로 판단한다. 계약 스위트가 이것을 어떻게 받아들일지는 4단계가 정한다(§20, [스파이크](opensandbox-spike.md) §4-3).
+**출력은 줄로 정규화될 수 있다 — SPI 의 계약이다**(`ExecOutcome`): 줄 단위로 받는 프로바이더는 줄마다 `\n` 을 붙여
+돌려주고(비어 있지 않은 출력의 마지막 줄바꿈은 늘 있다), `\r` 은 버려지거나 줄바꿈이 되며(`\r\n` 은 줄바꿈 하나, 홀로 선
+`\r` 은 줄바꿈 — 4단계의 docker 계층에서 확인), 잘못된 UTF-8 은 U+FFFD 가 된다. `maxCaptureBytes` 는 정규화 **뒤의**
+바이트로 센다. 바이트 수가 정확해야 하는 쪽은 그 수를 출력 안에 싣는다 — §9 의 트레일러가 그렇다. OpenSandbox 프로바이더가
+그렇게 한다(execd 는 출력을 줄 단위 이벤트로 보낸다). U+FFFD 는 3바이트이므로 정규화가 스트림을 최대 세 배로 키운다 —
+`SandboxShell` 은 프로바이더 쪽 상한을 `3 × max + 1 KiB` 로 두어, 래퍼의 `head -c {max}` 를 지난 출력 뒤에 오는 트레일러가
+잘리지 않게 한다. 계약 스위트의 `execTruncatesStdoutAndStderrSeparately` 는 줄바꿈으로 끝나는 출력을 쓴다. 바이트
+그대로의 출력이 필요한 소비자가 생기면 래퍼의 `run.out` 을 files API 로 읽는 길이 남아 있다([스파이크](opensandbox-spike.md) §4-3).
+프로바이더는 `maxCaptureBytes` 를 넘는 출력을 버리고 잘림을 표시할 뿐 **명령을 끝내지 않는다** — 명령은 제 끝이나 타임아웃까지
+돈다([단계 4 구현 설계](workspace-sandbox-step4.md) D8. 스파이크 §3 의 "명령을 끝낸다" 는 따르지 않았다: 출력을 많이 낸 명령의 종료 코드를 바꾸고, 로컬 프로바이더와도
+다르다).
+
+`verify` 는 seed 단계에서 세대마다 한 번, seed 스크립트 **앞에** 불린다(§11.3). 선언으로 광고한 capability 가 실제로
+걸렸는지 살아 있는 샌드박스에서만 볼 수 있는 것을 본다 — OpenSandbox 는 `EGRESS_POLICY` 가 필요하면
+`GET /sandboxes/{id}/networkpolicy` 의 `enforcementMode == dns+nft` 와 `defaultAction == deny` 를,
+`CREDENTIAL_INJECTION` 이 필요하면 vault 가 생성 때 받은 바인딩을 그대로 갖고 있는지를 본다. 실패는 그 단계를 step 으로
+하는 FAILED(영구)와 destroy 다. `ProviderCapabilities` 의 `runtimeClass` · `credentialScopes` · `controlPlaneEndpoints` 는
+`maxExpiry` 처럼 선언된 설정이다 — 기동 시 검사(§13.2)가 프로바이더 없이 읽고, seed 가 탐침 대상을 얻는다.
 
 공유 볼륨은 따로 만들지 않는다. `CreateSpec` 이 볼륨 마운트(이름 · `rw`/`ro` · 크기 · storage class · access mode ·
 없으면 만든다)를 선언하고, 워크스페이스의 첫 샌드박스 생성이 볼륨을 만든다. 삭제만 `SharedVolumes` 가 맡는다 —
@@ -456,8 +484,10 @@ volume 은 만든 뒤 라벨을 바꿀 수 없다. 그래서 볼륨은 라벨이
 매니저는 그 샌드박스의 workspace · sandbox-key · generation · owner 라벨이 레코드와 같은지 확인한다. 다르면 쓰지
 않고 슬롯을 FAILED(`permanent`, 단계 `labels`)로 둔다. 인코딩 버그나 라벨 충돌이 남의 샌드박스를 넘겨주는 경로를
 막는다. 대조에 실패한 샌드박스는 남의 것일 수 있으므로 지우지도 않는다. 라벨 계산과 대조는 매니저 쪽 일이라
-`CreateSpec` 을 만드는 3단계에 이미 들어 있다(`SandboxLabels`) — 4단계에 남는 것은 OpenSandbox 가 그 라벨을 실제로
-받아들이는지의 검증이다.
+`CreateSpec` 을 만드는 3단계에 이미 들어 있다(`SandboxLabels`). OpenSandbox 가 그 라벨(`ws:{uuid}` 워크스페이스의 해시 포함)을
+실제로 받아들이는지는 4단계의 docker 계층이 계약 스위트와 `WorkspaceSandbox` 로 확인했다. OpenSandbox 프로바이더는 여기에
+자기 라벨 `aimon.at/credentials`(vault 에 넣은 바인딩 이름의 해시)를 더한다 — `verify` 가 프로파일 없이 어느 노드에서든
+vault 를 대조하기 위해서다. 대조 대상 라벨이 아니다.
 
 `deployment` 는 한 워크스페이스 저장소를 공유하는 AIMON 노드 집합의 이름이다(설정 필수, 기본값 없음).
 OpenSandbox 서버 하나를 여러 애플리케이션이나 여러 개발자 머신이 같이 쓰면 `managed=true` 만으로는
@@ -472,11 +502,11 @@ OpenSandbox 서버 하나를 여러 애플리케이션이나 여러 개발자 �
 | `FILES` | 파일 API | files API (read/write/search/delete). `stat` 의 mtime 은 나노초이고 해시·etag 는 없다 — mtime 만으로 변경 감지 계약을 지킨다. 업로드는 제자리에서 자르고 쓰며 새 파일 전용 모드가 없으므로, 프로바이더가 임시 이름에 올린 뒤 옮긴다(스파이크 §4-4) |
 | `PAUSE_RESUME` | 일시 정지 | pause/resume. 두 런타임 모두 **일시 정지 중에도 만료 시각이 흐른다.** Docker 는 컨테이너 동결이고, K8s 는 루트 파일 시스템을 이미지로 커밋하고 파드를 지웠다가 resume 때 새 파드(새 IP)로 띄운다 — 파일은 남고 프로세스는 사라진다. K8s 에서 멈춘 샌드박스를 renew 하면 샌드박스가 `Failed` 가 되므로(업스트림 버그) 멈춘 샌드박스에는 `extendExpiry` 를 부르지 않는다(§10.3) |
 | `EXPIRY` | 프로바이더 측 절대 만료 시각 + 연장 | `timeout`(상대 초, 최소 60 — 빼면 만료되지 않으므로 늘 보낸다) · `renew-expiration`(절대 시각. 서버는 줄이는 것도, 상한을 넘기는 것도 받아들이므로 앞으로만 · 상한은 프로바이더가 지킨다). 서버의 `max_sandbox_timeout_seconds` 가 상한이고 API 로 읽을 수 없어 `max-expiry` 로 선언한다. 만료 = 즉시 삭제. idle 타임아웃이 아니다 |
-| `SHARED_VOLUME` | 여러 샌드박스에 RWX 볼륨 마운트, 샌드박스별 읽기 전용 마운트, 볼륨 삭제 | 생성은 `volumes[].pvc.createIfNotExists`(기본 access mode 가 `ReadWriteOnce` 이므로 RWX 를 명시). 삭제 API 는 없다 — `OpenSandboxProvider` 에 `VolumeReclaimer`(K8s API 또는 Docker 볼륨 API)를 설정해야 광고한다 |
-| `EGRESS_POLICY` | 목적지 허용 목록, 명시하지 않은 목적지는 차단 | `networkPolicy` + `defaultAction: deny`. 서버 egress 모드가 `dns+nft` 여야 IP/CIDR 까지 막힌다(`dns` 모드는 IP 로 샌다 — 실측). 기동 시점에는 모드를 알 수 없으므로 운영자가 `egress-enforcement: dns+nft` 로 선언해야 광고하고, 샌드박스가 생긴 뒤에는 `GET /sandboxes/{id}/networkpolicy` 의 `enforcementMode` 를 seed 가 대조한다(§11.3). gVisor 와는 같이 쓸 수 없다(서버가 거부) |
-| `CREDENTIAL_INJECTION` | 샌드박스에 비밀을 노출하지 않고 egress 에서 주입. host · 경로 prefix · 메서드로 범위를 좁힘 | credential vault(`dns+nft` 필요). 범위는 scheme · host · port · method · path(glob)이다 — 요구를 채운다(K8s 실측). 바인딩은 생성 뒤 사이드카 API 에 넣는다 |
-| `NETWORK_ISOLATION` | 샌드박스 사이(east-west)와 샌드박스 → OpenSandbox 서버·K8s API·클러스터 내부 트래픽 차단 | OpenSandbox 가 강제하지 않으므로 운영자가 네트워크 정책을 걸고 `network-isolation: declared` 로 선언해야 광고한다. seed 가 서버 엔드포인트로의 연결이 실패하는지 자가 점검한다(§11.3). **Docker 런타임은 선언할 수 없다** — execd 가 토큰 없이 열려 있어 옆 샌드박스가 root 명령을 실행할 수 있고(실측), egress 정책은 들어오는 쪽을 막지 않는다. K8s 는 운영자 NetworkPolicy 로 막힌다(스파이크 §7) |
-| `RUNTIME_CLASS` | 요청한 runtimeClass(gVisor/Kata)로 실제 실행 | K8s 런타임의 `runtimeClassName`. Docker 런타임은 광고하지 않는다 |
+| `SHARED_VOLUME` | 여러 샌드박스에 RWX 볼륨 마운트, 샌드박스별 읽기 전용 마운트, 볼륨 삭제 | 생성은 `volumes[].pvc.createIfNotExists`(기본 access mode 가 `ReadWriteOnce` 이므로 RWX 를 명시). 삭제 API 는 없다 — `OpenSandboxProvider` 에 `VolumeReclaimer`(K8s API 또는 Docker 볼륨 API)를 주입해야 광고한다. 4단계는 인터페이스만 두고 구현은 싣지 않는다(5단계) |
+| `EGRESS_POLICY` | 목적지 허용 목록, 명시하지 않은 목적지는 차단 | `networkPolicy` + `defaultAction: deny`. 서버 egress 모드가 `dns+nft` 여야 IP/CIDR 까지 막힌다(`dns` 모드는 IP 로 샌다 — 실측). 기동 시점에는 모드를 알 수 없으므로 운영자가 `egress-enforcement: dns+nft` 로 선언해야 광고하고, 샌드박스가 생긴 뒤에는 `GET /sandboxes/{id}/networkpolicy` 의 `enforcementMode` 를 seed 단계의 `verify` 가 대조한다(§11.3). gVisor 와는 같이 쓸 수 없다(서버가 거부) — `dns+nft` 와 gVisor `runtime-class` 를 함께 선언하면 프로바이더 설정이 기동을 거부한다. Docker 런타임은 서버의 `[docker] network_mode = "bridge"` 에서만 정책을 받는다(운영 계약, §13.3) |
+| `CREDENTIAL_INJECTION` | 샌드박스에 비밀을 노출하지 않고 egress 에서 주입. host · 경로 prefix · 메서드로 범위를 좁힘 | credential vault(`dns+nft` 필요). 범위는 scheme · host · method · path(glob)이다 — port 는 scheme 을 따르고 vault 에서도 deprecated 라 겹침 검사는 무시한다(요구를 채운다, K8s 실측). 바인딩은 생성 뒤 사이드카 API(포트 18080, endpoint 해석이 주는 `OPENSANDBOX-EGRESS-AUTH` 헤더 — 4단계 실측)에 **프로파일이 이름으로 부른 것만** 넣는다. 바인딩 host 는 egress 허용 목록이 명시적으로 덮어야 한다(§13.2) |
+| `NETWORK_ISOLATION` | 샌드박스 사이(east-west)와 샌드박스 → OpenSandbox 서버·K8s API·클러스터 내부 트래픽 차단 | OpenSandbox 가 강제하지 않으므로 운영자가 네트워크 정책을 걸고 `network-isolation: declared` 로 선언해야 광고한다. seed 가 프로바이더가 알려 준 제어면 엔드포인트(`controlPlaneEndpoints`)로의 TCP 연결이 실패하는지 자가 점검한다(§11.3). **Docker 런타임은 선언할 수 없다** — execd 가 토큰 없이 열려 있어 옆 샌드박스가 root 명령을 실행할 수 있고(실측), egress 정책은 들어오는 쪽을 막지 않는다. K8s 는 운영자 NetworkPolicy 로 막힌다(스파이크 §7) |
+| `RUNTIME_CLASS` | 요청한 runtimeClass(gVisor/Kata)로 실제 실행 | K8s 런타임의 `runtimeClassName` — 서버 설정으로만 정해진다. 프로바이더 설정 `runtime-class: {name, kind}` 가 선언하고(`kind` 는 gVisor 인지 알아야 해서 필수), 프로파일의 `runtimeClass` 는 그 이름과 같아야 한다. Docker 런타임에서는 선언할 수 없다 |
 | `HARDENED_SECURITY_CONTEXT` | 비루트 · 권한 상승 금지 · capability 제거 · 서비스 계정 토큰 미마운트 | 요청으로는 지정할 수 없다 — 서버의 BatchSandbox 템플릿이 **샌드박스 컨테이너의** securityContext 로 건다(파드 단위로 걸면 egress 의 init 컨테이너가 깨진다). 기본값은 root 이고 SA 토큰만 빠진다. 운영자가 선언해야 광고하고 seed 가 결과를 다시 검사한다(§11.3). Docker 런타임은 root 로만 돌아 광고하지 않는다 |
 | `SNAPSHOT` · `FORK` | 스냅숏·복제 | snapshot (fork 는 snapshot 위에 조립) |
 
@@ -971,8 +1001,9 @@ OpenSandbox 의 만료는 idle 타임아웃이 아니라 **절대 시각**이다
 
 ### 10.4 `SandboxJanitor`
 
-application-scoped 단일 루프(기본 30초)이며 세 일을 한다. 3단계는 첫째(idle 집행)만 하고, 노드 로컬로 `execShellIdle`
-동안 쓰이지 않은 `exec:` 셸 디렉터리를 지운다(§9). 조정(둘째·셋째)은 4·5단계에 들어온다.
+application-scoped 단일 루프(기본 30초)이며 세 일을 한다. 3단계가 첫째(idle 집행)와 노드 로컬의 `exec:` 셸 디렉터리
+정리(`execShellIdle`, §9)를, 4단계가 둘째(샌드박스 조정, `SandboxReconciler` — idle 집행 뒤에 돈다)를 넣었다. 셋째(볼륨
+조정)는 5단계에 들어온다. DRIFT 행은 pause 가 생기는 7단계까지 쓰이지 않는다.
 
 1. **idle 집행** — `store.scan` 으로 `pauseAfter`/`terminateAfter`/`closeAfter` 를 넘긴 대상, `closeResumeAfter`
    (기본 5분) 넘게 CLOSING 에 머문 워크스페이스, 기한이 지난 툼스톤을 찾는다. `provisioning.since` 에서
@@ -992,6 +1023,8 @@ generation" 은 샌드박스 라벨의 값이다.
 
 | 레코드 | 프로바이더 | 판정 | 조치 |
 |-------|-----------|------|-----|
+| 무엇이든 | 라벨에 generation · slot · incarnation 이 없거나 읽을 수 없다 | SKIP | 건드리지 않는다(WARN 한 번) |
+| FAILED(같은 generation, 실패 단계 `labels`) | 있음 | SKIP | 건드리지 않는다 — 라벨 대조에 실패한 샌드박스는 남의 것일 수 있다(§6.3). 프로바이더 만료만 지운다. 프로파일이 바뀌어 슬롯이 generation+1 로 가면 이 샌드박스는 STALE 로 지워진다 — 자기 deployment 의 `managed` 라벨을 단 것만 목록에 오므로 위험은 작다 |
 | 슬롯 없음 · 레코드 없음 · 다른 incarnation | 있음 | ORPHAN | `orphanGrace`(기본 10분) 뒤 destroy |
 | 무엇이든 | 샌드박스 generation > 레코드 generation | IN-FLIGHT | 건드리지 않는다. scan 뒤에 다른 노드가 새 generation 을 프로비저닝했다. 다음 주기에 다시 본다. `orphanGrace` 가 지나도 레코드가 따라오지 않으면 ORPHAN 으로 본다 |
 | 무엇이든 | 샌드박스 generation < 레코드 generation | STALE | destroy |
@@ -999,8 +1032,18 @@ generation" 은 샌드박스 라벨의 값이다.
 | FAILED (같은 generation) | 있음 | FAILED-LEFTOVER | destroy. 실패한 `create` 가 일부만 만들어 둔 샌드박스다. 재시도는 generation 을 올리므로(§5.2) 이 샌드박스를 다시 쓰는 쪽은 없다 |
 | TERMINATED (같은 generation) | 있음 | ORPHAN | `orphanGrace` 뒤 destroy |
 | RUNNING/PAUSED (ref=X, 같은 generation) | 같은 sandbox-key 의 Y ≠ X | DUPLICATE | `orphanGrace` 뒤 Y 를 destroy. 인계 경합이 만든 두 번째 샌드박스다(§10.1) |
-| PAUSED | RUNNING | DRIFT | pause 재시도 |
-| RUNNING/PAUSED | 목록에 없음 | LOST 의심 | 아래 |
+| PAUSED | RUNNING | DRIFT | pause 재시도(7단계) |
+| RUNNING/PAUSED | 목록에 없음, 또는 TERMINATED · FAILED 로 있음 | LOST 의심 | 아래 — 그런 샌드박스는 일을 할 수 없으므로 없는 것으로 친다 |
+
+**grace 는 샌드박스의 나이로 잰다.** 고아에게는 (맞는) 레코드가 없으므로 레코드에 시계를 둘 수 없다. 나이는
+`min(now − 샌드박스 createdAt, now − 이 노드가 처음 본 시각)` 이다 — 프로바이더가 `createdAt` 을 주지 않으면 뒤쪽만 쓴다.
+작은 쪽을 쓰므로 서버와 노드의 시계가 어긋나도 destroy 가 늦어질 수만 있고 빨라지지는 않는다. 레코드 없는 고아는 다시
+읽을 레코드가 없으므로 안전은 순서 불변식에서 온다 — 레코드는 첫 샌드박스보다 먼저 생기고(`createIfAbsent`)
+`orphanGrace > provisionTimeout` 이다(기동 시 검사). 레코드가 있는 판정은 모두 destroy 직전에 다시 읽어 **같은 판정이 나올
+때만** destroy 한다. 대가: janitor 가 재시작하면(처음 본 시각을 잃으면) 고아는 `orphanGrace` 를 한 번 더 기다린다. 레코드가
+있는 destroy 는 `ORPHAN_DESTROYED`(원인 `orphan` · `stale` · `failed-leftover`) 또는 `DUPLICATE_DESTROYED` 이벤트를 남기고,
+레코드 없는 고아는 워크스페이스 라벨의 해시만 INFO 로 남긴다(샌드박스 id 는 남기지 않는다, §13.3). `list` 나 scan 이
+실패하면 그 주기의 조정은 거기서 끝난다 — 일부만 본 것에서 아무것도 추론하지 않는다.
 
 **LOST 는 시간으로 확정한다.** 목록에 없으면 `status(ref)` 로 다시 묻고, 없다고 답하면 슬롯에 `missingSince` 를 적는다
 (이미 있으면 두고). 다음에 볼 때 여전히 없고 `missingSince` 에서 `lostConfirmAfter`(기본 90초, janitor 주기의 세 배)가
@@ -1022,7 +1065,9 @@ generation · `providerRef` · 상태가 판정 때와 같을 때만 다시 쓴�
 오인한다. 이 조건은 기동 시 검사한다(§13.2).
 
 모든 노드에서 janitor 가 돌아도 된다. 모든 조치가 CAS 와 destroy 직전의 재확인으로 보호되고 프로바이더 호출은
-멱등이기 때문이다. 리더 선출은 두지 않는다 — 선출 저장소가 하나 더 생기는 비용이 중복 `list` 호출보다 크다.
+멱등이기 때문이다. 리더 선출은 두지 않는다 — 선출 저장소가 하나 더 생기는 비용이 중복 `list` 호출보다 크다. 단
+**`InMemory` 저장소는 한 노드 전용이다**(§5.3) — 여러 노드가 각자 `InMemory` 저장소로 같은 deployment 를 돌리면 각 janitor
+가 다른 노드의 샌드박스를 레코드 없는 고아로 보고 지운다. 이것은 감지할 수 없으므로 운영 계약이다.
 
 ### 10.5 워크스페이스 종료
 
@@ -1204,12 +1249,13 @@ worktree 의 수명 규칙:
 
 ```
 provision(slot, gen) seed:                                   (every step idempotent)
+  provider.verify(ref, required) || fail <step>               (egress enforcementMode, vault bindings — §6.1)
   flock /workspace/.aimon-seed.lock for the rest            (two nodes seeding one slot run one at a time)
   command -v git rg flock sha256sum || fail "image contract"   (§13.3; permanent)
   uname -s matches profile.platform || fail "descriptor mismatch"   (§7; slot -> FAILED)
   [ "$(id -u)" != 0 ] || fail "runs as root"                 (§12.1; slot -> FAILED, unless insecure-allow)
   [ ! -e /var/run/secrets/kubernetes.io/serviceaccount/token ] || fail "service account token mounted"
-  connecting to the OpenSandbox server endpoint must fail || fail "network not isolated"   (NETWORK_ISOLATION)
+  no TCP connect to any controlPlaneEndpoint succeeds || fail "network-isolation"   (NETWORK_ISOLATION, not waived)
   rm -rf /workspace/.tmp-* ; remove /shared/git/.tmp-* older than provisionTimeout   (leftovers of a crashed seed)
   mkdir -p /workspace/.aimon-staged /workspace/.aimon-shell  (read-only to file tools, §11.1)
   if sharedAccess == none:                                   (no bare repository, §6.4)
@@ -1229,8 +1275,19 @@ review slot:     git fetch origin && git checkout dev/<topic>        (no externa
 이 없는 이미지는 락 오류가 아니라 이미지 계약 위반으로 보고된다), `uname -s` 와 선언한 platform, 선언했을 때만
 `uname -sr` 와 osVersion(글롭으로, `Linux 6.x` 의 `x` 는 `*`), `HARDENED_SECURITY_CONTEXT` 를 면제하지 않았으면 uid 와
 서비스 계정 토큰, `.tmp-*` 정리, `mkdir -p` 까지다. 실패한 검사는 `permanent` 이고 그 샌드박스는 지운다(라벨 대조를
-통과한 자기 샌드박스다). 제어면 네트워크 점검은 프로바이더 엔드포인트가 필요해 4단계에, git 으로 받는 seed(직접 clone
-포함)는 5단계에 들어간다. 그 전까지 `seed` 를 가진 프로파일은 기동 시 거부한다(§13.2, §20).
+통과한 자기 샌드박스다). git 으로 받는 seed(직접 clone 포함)는 5단계에 들어간다. 그 전까지 `seed` 를 가진 프로파일은 기동 시
+거부한다(§13.2, §20).
+
+**4단계가 두 검사를 더했다.** 첫째, seed 스크립트 **앞에서** `provider.verify` 가 프로바이더만 볼 수 있는 것을 대조한다(§6.1) —
+선언은 `dns+nft` 인데 서버가 `dns` 로 돌면 FAILED(영구, `egress`), vault 가 생성 때 받은 바인딩을 갖고 있지 않으면
+FAILED(영구, `credentials`). 샌드박스가 사라졌으면 LOST 경로, 검사를 못 돌렸으면(일시 실패) `seeded` 가 false 로 남아 다음
+호출이 다시 한다. 둘째, `NETWORK_ISOLATION` 을 요구하고 면제하지 않은 프로파일은 seed 스크립트가 프로바이더의
+`controlPlaneEndpoints` 마다 연결을 시도한다. bash 의 `/dev/tcp` 에 3초 감시자를 붙인다(이미지 계약에 `timeout` 이나 `nc` 는
+없고, 라우팅되지 않는 주소는 `/dev/tcp` 만으로 75초를 붙잡는다). 거절 · 시간 초과 · 이름 해석 실패는 모두 통과이고 **연결이
+맺어질 때만** 실패다. 대상 주소는 다른 선언값처럼 작은따옴표로 넣은 데이터다. OpenSandbox 의 기본 대상은 AIMON 이 보는
+엔드포인트의 host:port(K8s 면 `kubernetes.default.svc:443` 도)이고, AIMON 이 NAT 나 port-forward 뒤에 있으면 운영자가
+`control-plane-probes` 에 샌드박스가 보는 주소를 적어야 한다 — 샌드박스가 풀 수 없는 이름은 늘 통과하기 때문이다. 이
+탐침은 들어오는 방향(옆 샌드박스 → 나)을 보지 못한다 — 그래서 `NETWORK_ISOLATION` 은 여전히 선언이 필요하다.
 
 bare 저장소와 작업 트리는 모두 매번 다른 임시 경로에 받은 뒤 rename 으로 올린다. 두 슬롯(또는 같은 슬롯을 인계받은 두
 노드)이 동시에 seed 를 돌아도 `mv -T` 는 한쪽만 성공하고, clone 이 중간에 끊겨도 반쯤 받은 디렉터리가 `repo.git` 이나
@@ -1329,6 +1386,16 @@ artifact 는 샌드박스보다 오래 살아야 한다. 샌드박스 파일을 
 정해져 있지 않다. 그래서 같은 저장소에 쓰기 자격 증명을 가진 슬롯은 seed 도 그 자격 증명으로 받고(`seed.git.credential`
 생략), 읽기 전용 seed 자격 증명은 런타임 자격 증명이 없는 슬롯에만 쓴다.
 
+**4단계의 검사.** 바인딩의 정의(범위 · 주입 방식 · 비밀)는 프로바이더 설정(`credentials`, §13.2)에 있고, 매니저는
+`ProviderCapabilities.credentialScopes()` 로 이름과 범위만 본다 — 비밀은 보지 않는다. 기동 시 검사는 프로파일마다
+(1) 모든 바인딩 이름이 정의되어 있는지, (2) 두 바인딩의 scheme · method 가 겹치고 어떤 host 쌍(같음, `*.s` 와 그 아래
+host, 한쪽이 다른 쪽 접미사인 두 와일드카드)과 어떤 path 쌍(같음, prefix `p*` 와 `p` 로 시작하는 것, 한쪽이 다른 쪽으로
+시작하는 두 prefix)이 겹치는지, (3) 모든 바인딩 host 를 프로파일의 `egress` 가 **명시적으로** 허용하는지 본다 — vault 는
+egress 정책이 허용하지 않는 host 의 바인딩을 거부하고 `defaultAction=allow` 는 허용으로 치지 않는다. 그래서 `credentials`
+가 있는데 `egress` 가 없는 프로파일은 거부한다. 덮는 규칙은 vault 에 대고 실측했다: 같은 항목, 또는 `*.s` 가 `h.s` 를 덮는다.
+`*.s` 는 `s` 를 덮지 않는다. 비밀은 샌드박스를 만들 때 공급자에서 읽어(교체는 다음 generation 부터) vault 에만 보내고,
+그 샌드박스의 프로파일이 부른 바인딩만 보낸다. 로그와 `toString` 에는 남지 않는다.
+
 **닫힌 실패.** 샌드박스 제공자의 `resolve()` 가 실패하면 코어가 호출마다 에러를 내는
 `UnavailableExecutionEnvironment` 를 넣는다(코어 실행 환경 설계 §5.1). 환경 키는 한 번만 쓸 수 있고 제공자는
 하나이므로, 호스트 환경이 조용히 남는 경로가 구조적으로 없다.
@@ -1422,12 +1489,26 @@ aimon:
       request-timeout: 30s
       retry: { max-attempts: 3, backoff: 500ms }   # idempotent calls only (status, list, destroy, extend)
       max-concurrent-calls: 32
+      runtime: kubernetes            # required, no default: docker | kubernetes; decides which declarations are legal
       max-expiry: 24h                # server's max_sandbox_timeout_seconds; terminate-after must not exceed it
-      egress-enforcement: dns+nft    # operator-declared; without it EGRESS_POLICY is not advertised (§6.4)
-      volume-reclaimer: kubernetes   # kubernetes | docker | none; none -> SHARED_VOLUME not advertised
-      network-isolation: declared    # operator put east-west/control-plane blocking in place (§12.1)
+      create-timeout: 90s            # POST /sandboxes (K8s blocks up to 60s) plus waiting for Running
+      use-server-proxy: false        # reach execd/egress through the server (K8s from outside the cluster)
+      entrypoint: [tail, -f, /dev/null]   # keeps the sandbox alive whatever the image's CMD
+      default-resources: { cpu: 1, memory: 1Gi }   # sent when a profile gives none (K8s requires resourceLimits)
+      egress-enforcement: dns+nft    # none | dns | dns+nft; only dns+nft advertises EGRESS_POLICY (§6.4)
+      volume-reclaimer: <bean>       # a VolumeReclaimer instance; none -> SHARED_VOLUME not advertised.
+                                     # built-in kubernetes | docker reclaimers arrive with step 5
+      network-isolation: declared    # operator put east-west/control-plane blocking in place (§12.1); not on docker
+      control-plane-probes: [opensandbox-server.opensandbox-system.svc:80, kubernetes.default.svc:443]
+                                     # what the seed must fail to reach (§11.3); default: the endpoint (+ the K8s API)
       hardened-security-context: declared   # operator hardened the server's sandbox-container template (§13.3)
-      runtime-class: gvisor          # the server's k8s_runtime_class; profiles' runtime-class must equal it (§6.4)
+      runtime-class: { name: kata, kind: kata }   # the server's k8s_runtime_class; kind: gvisor | kata | other.
+                                     # profiles' runtime-class must equal the name; gvisor with dns+nft is refused
+      credentials:                   # vault bindings (§12.1); need egress-enforcement dns+nft
+        github-acme-app-rw:
+          scope: { hosts: [github.com], methods: [GET, POST], paths: ["/acme/app*"] }
+          auth: bearer
+          secret: ${GITHUB_ACME_APP_TOKEN}
     default-profile: standard
     profiles:
       standard:
@@ -1436,7 +1517,7 @@ aimon:
         cpu: 2
         memory: 4Gi
         pids: 512
-        runtime-class: gvisor
+        runtime-class: kata
         egress: [github.com, repo.maven.apache.org]
         credentials: [github-acme-app-rw]        # vault: host github.com, path /acme/app, push allowed
         pause-after: 15m                          # requires PAUSE_RESUME (implementation stage 7)
@@ -1447,7 +1528,7 @@ aimon:
         image: ghcr.io/kangwoo/aimon-sandbox-runtime:1
         cpu: 1
         memory: 2Gi
-        runtime-class: gvisor
+        runtime-class: kata
         egress: []
         pause-after: 5m
         terminate-after: 30m
@@ -1475,7 +1556,12 @@ aimon:
 - `terminate-after ≥ 3 × activity-write-interval` — heartbeat 기록 하나가 늦거나 실패해도 도는 명령의 샌드박스가 두 기록
   사이에 만료되지 않게
 - `retain-for ≤ closed-retention`
-- 한 프로파일의 자격 증명 바인딩끼리 host · 경로 범위가 겹치지 않는다(§12.1)
+- `lost-confirm-after` 가 양수다
+- 한 프로파일의 자격 증명 바인딩은 모두 정의되어 있고, 서로 겹치지 않으며, 모든 host 를 프로파일의 `egress` 가 명시적으로
+  허용한다(`egress` 가 없으면 거부) — §12.1
+- 프로바이더 설정은 자기 검사를 한다(`OpenSandboxProviderConfig`, 위반을 모두 모아 한 번에): Docker 런타임에서
+  `network-isolation` · `hardened-security-context` · `runtime-class` 선언, gVisor `runtime-class` 와 `dns+nft`, `dns+nft`
+  없는 `credentials`, `network-isolation` 선언과 빈 `control-plane-probes` 를 거부한다
 - 프로파일이 요구하는 capability 를 프로바이더가 광고한다(§6.4)
 - 프로파일의 `runtime-class` 는 프로바이더가 선언한 서버의 class 와 같다 — OpenSandbox 는 요청마다 class 를 받지 않는다(§6.4)
 - `require-principal: true` 이면 `SandboxTenantResolver` 와 `SessionOwnerLookup` 빈이 있다
@@ -1483,10 +1569,9 @@ aimon:
 - `insecure-allow` 는 `HARDENED_SECURITY_CONTEXT` · `RUNTIME_CLASS` · `NETWORK_ISOLATION` 만 면제한다
 - `admission.max-running-per-tenant` 는 1 이상이거나 명시한 `unlimited` 다 — 값이 없어서 전부 허용이 되는 경로는 없다
 
-아직 구현되지 않은 기능을 쓰는 프로파일은 조용히 무시하지 않고 **거부한다.** 3단계에서는 `pause-after`(`PAUSE_RESUME`,
-7단계), `shared-access` 가 `none` 이 아닌 것(5단계), `seed`(5단계), 비어 있지 않은 `credentials`(4단계 — 위의 자격 증명
-겹침 검사에 프로바이더의 vault 정의가 필요하고, 검사하지 못한 바인딩으로 시작하면 이 절이 필수로 둔 검사를 건너뛰게
-된다)가 그렇다. 해당 단계가 들어오면 이 거부가 풀린다(§20).
+아직 구현되지 않은 기능을 쓰는 프로파일은 조용히 무시하지 않고 **거부한다.** `pause-after`(`PAUSE_RESUME`, 7단계),
+`shared-access` 가 `none` 이 아닌 것(5단계), `seed`(5단계)가 그렇다. 3단계는 `credentials` 도 거부했지만, 4단계가 위의
+자격 증명 검사를 넣으면서 그 거부를 풀었다. 해당 단계가 들어오면 이 거부가 풀린다(§20).
 
 ### 13.3 이미지와 배포 계약
 
@@ -1511,6 +1596,13 @@ aimon:
 누구든 샌드박스 id 만 알면 root 로 명령을 실행한다(스파이크 §4-5). 그래서 샌드박스 id 는 INFO 로그에 남기지 않는다.
 span 속성 `aimon.sandbox.provider_id`(§14)는 tracing 백엔드를 읽을 수 있는 사람이 이 네트워크에도 닿는다는 전제로 둔다.
 Docker 런타임은 이 경계를 세울 수 없으므로 로컬 개발 전용이다(`insecure-allow: [NETWORK_ISOLATION, HARDENED_SECURITY_CONTEXT]`).
+
+**4단계가 더한 운영 계약.** (1) Docker 런타임에서 `egress-enforcement: dns+nft` 를 쓰려면 서버가
+`[docker] network_mode = "bridge"` 여야 한다 — 기본값 `host` 와 사용자 정의 네트워크에서는 서버가 `networkPolicy` 를 400 으로
+거부하고, 프로바이더는 그 설정을 볼 수 없어 첫 `create` 가 FAILED(영구, `create`)로 드러난다. (2) `InMemory` 저장소는 한
+노드 전용이다(§5.3, §10.4). (3) K8s 에서 `network-isolation: declared` 이면 `control-plane-probes` 에 서버의 클러스터 안
+주소를 적는다(§11.3). (4) `max-expiry` 는 서버의 `max_sandbox_timeout_seconds` 와 같은 값이어야 한다 — 더 크면
+`create` 가 400 이다. 모듈 README 가 이 목록과 docker · k8s 테스트 계층을 돌리는 법을 적는다.
 
 ---
 
@@ -1603,7 +1695,9 @@ read/write/stat/list/move · `stat` 의 변경 감지 계약(같은 크기로 1�
 `list(labels)` 가 모든 페이지를 돌려줌 · `status` 가 라벨(`EXPIRY` 를 광고하면 만료 시각도)을 돌려줌 · 출력이 `OutputSink`
 로도 전달됨 · `kill()` 뒤 그 그룹의 자손도 끝남 · `extendExpiry`/`resume` 이 없는 샌드박스에, 그리고 destroy 전에 연 연결의
 exec · files 호출에 `SandboxNotFoundException` · `SharedVolumes.delete` 멱등과 마운트 중 `VolumeInUseException` · capability 가 광고한
-기능만 동작. 셸 상태(§9)는 SPI 가 아니라 `SandboxShell` 의 일이므로 매니저 통합 테스트에서 덮는다.
+기능만 동작 · `status` 의 `createdAt` 이 미래가 아님. 출력은 줄로 정규화될 수 있으므로(§6.1) 출력 비교는 줄바꿈으로 끝나는
+출력을 쓴다. 공유 서버에서 도는 프로바이더는 `deployment()` 를 실행마다 다른 값으로 바꾼다. 셸 상태(§9)는 SPI 가 아니라
+`SandboxShell` 의 일이므로 매니저 통합 테스트에서 덮는다.
 
 **저장소 계약 스위트** — `SandboxWorkspaceStoreContract`. `InMemory` 가 3단계부터 통과하고, JDBC 구현(6단계)이 같은
 스위트를 통과한다: `createIfAbsent` 경합 → 하나 · stale version, 지운 뒤의 `update` → `StaleVersionException` · 지웠다가 다시 만든
@@ -1628,10 +1722,17 @@ found·"생성은 됐지만 응답 유실"·노드 종료(호출 경로를 그 �
 계약 스위트를 돌린다. 서버는 Docker 소켓 마운트가 필요하고, egress 시나리오는 사이드카에 `NET_ADMIN`/nft 권한이
 필요하다. CI 러너가 이를 허용하지 않으면 공유 테스트 서버를 쓰되 실행마다 다른 `deployment`(`ci-{runId}`)를 주어 서로의
 샌드박스를 조정하지 않게 한다. 어느 쪽을 쓰는지는 2단계 스파이크가 정했다 — 러너의 Docker 소켓으로 충분하므로(DinD 불필요, 서버 기동 약 1초)
-실행마다 서버를 띄운다. 단 amd64 execd 이미지와 러너 커널의 `dns+nft` 는 아직 러너에서 돌려 보지 않았으므로 4단계의 첫 CI 가
-확인한다. K8s 런타임(kind, 준비 3–4분)은 릴리스 전과 수동 실행이다(스파이크 §9).
+실행마다 서버를 띄운다. 4단계는 서버를 Testcontainers 컨테이너로 띄운다(`opensandbox/server` 정식 태그를 digest 로 고정, 러너의
+Docker 소켓을 바인드). 서버가 컨테이너 안에 있으므로 도달 설정은 업스트림의 참조 compose 를 따른다 — `[docker] host_ip =
+"host.docker.internal"` + `extra_hosts: host.docker.internal:host-gateway`, `[proxy] resolve_internal = false`,
+`network_mode = "bridge"`. 샌드박스는 execd 를 호스트에 publish 하고, 서버는 `host.docker.internal:{port}` 로 닿으며, 테스트
+JVM 은 서버의 매핑된 포트에만 닿아 execd 는 서버 프록시(`use-server-proxy`)로 부른다. 이 조합은 macOS(Docker Desktop)에서
+확인했고 Linux 러너는 아직이다. amd64 execd 이미지와 러너 커널의 `dns+nft` 도 아직 러너에서 돌려 보지 않았다 — 이 저장소에는
+CI 워크플로가 없으므로 "4단계의 첫 CI" 는 아직 오지 않았다(§20). K8s 런타임(kind, 준비 3–4분)은 릴리스 전과 수동 실행이다(스파이크 §9).
 
-**K8s 런타임 검증**(`@Tag("k8s")`) — K8s 에서만 드러나는 항목을 kind 클러스터 + OpenSandbox K8s 런타임으로 확인한다.
+**K8s 런타임 검증**(`@Tag("k8s")`, `./gradlew k8sTest`) — K8s 에서만 드러나는 항목을 kind 클러스터 + OpenSandbox K8s 런타임으로
+확인한다. `test` 와 `integrationTest` 는 이 태그를 빼므로 `build` 에서 돌지 않고, 클러스터가 없으면(`OPENSANDBOX_K8S_ENDPOINT` 가
+없으면) 건너뛴다. 클러스터는 테스트가 만들지 않고 미리 준비한 것을 쓴다(모듈 README 의 절차).
 단계마다 그 단계의 기능만 통과 조건이 된다 — 4단계: 라벨 검증, runtimeClass·SecurityContext 적용, east-west·제어면 차단.
 5단계: RWX 볼륨과 샌드박스별 `ro` 마운트, PVC 삭제와 finalizer. 7단계: pause 시 파드 재생성 여부. 이후 릴리스마다 돈다.
 
@@ -1718,6 +1819,11 @@ found·"생성은 됐지만 응답 유실"·노드 종료(호출 경로를 그 �
 | 같은 branchKey 를 다른 실행이 쓰는 중에 `isolate()` | 에러, 쓰는 중인 worktree 는 지우지 않음 | 7 |
 | 격리 브랜치 도중 LOST | 파생 환경은 에러로 끝남, 빈 트리로 이어 가지 않음 | 7 |
 
+4단계 행이 어느 테스트에서 도는지 — 매니저 논리는 기본 계층(로컬 프로바이더 · 장애 주입 · 수동 시계), 실서버가 필요한 것은
+docker 계층, K8s 에서만 드러나는 것은 k8s 계층 — 는 [`workspace-sandbox-step4.md`](workspace-sandbox-step4.md) §12 에 있다.
+"root 로 도는 이미지" 는 Docker 런타임에서 닿을 수 없다(root 이미지는 `HARDENED_SECURITY_CONTEXT` 를 면제해야 기동되고,
+면제하면 검사하지 않는다) — 3단계의 seed 테스트와 k8s 계층이 덮는다.
+
 ---
 
 ## 17. 옛 설계 대응표
@@ -1764,7 +1870,9 @@ found·"생성은 됐지만 응답 유실"·노드 종료(호출 경로를 그 �
    worktree 로 바뀐다). `PAUSE_RESUME` 이 없으므로 `pauseAfter` 를 가진 프로파일은 기동 거부된다(§6.4). 코어를 실행 환경
    SPI 가 있는 버전으로 올리는 것도 이 단계다. 옛 도구 넷과 백엔드 모듈은 이 단계에 앞서 **이미 지웠다** — `aimon-sandbox`
    는 빈 모듈로 이 단계를 기다린다
-4. **aimon-sandbox-opensandbox.** 프로바이더·만료 연장·라벨 인코딩과 대조(매니저 쪽 계산과 대조는 3단계에 들어갔고, 여기서는
+4. **aimon-sandbox-opensandbox.** **구현되었다** — 구현 설계와 거기서 벗어난 점은
+   [`workspace-sandbox-step4.md`](workspace-sandbox-step4.md) 에 있고, 이 문서는 그 결과를 담았다(§4.1 · §6.1 · §6.4 · §10.4 ·
+   §11.3 · §12.1 · §13.2 · §13.3 · §16 · §20). 프로바이더·만료 연장·라벨 인코딩과 대조(매니저 쪽 계산과 대조는 3단계에 들어갔고, 여기서는
    실서버가 그 라벨을 받아들이는지 확인한다)·`deployment` 라벨·자격 증명 바인딩과 그 겹침 검사·seed 의 제어면 네트워크 점검·janitor 의 샌드박스
    조정(STALE·ORPHAN·DUPLICATE·LOST 확인)·계약 스위트 통합 테스트·K8s 런타임 검증(이 단계 항목, §16). 조정은
    `InMemory` 저장소의 재시작 뒤 고아를 치우는 유일한 장치이므로 여기서 들어간다. **3단계와 한 릴리스로 낸다** — 옛 백엔드는 이미 없고 `LocalProcessSandboxProvider`
@@ -1831,10 +1939,9 @@ found·"생성은 됐지만 응답 유실"·노드 종료(호출 경로를 그 �
 - ~~**§6.4 의 확인 칸**~~ *(2단계에서 닫았다)* — [`opensandbox-spike.md`](opensandbox-spike.md) §1. 서버가 활동에 따라 만료를
   스스로 미는 기능(OSEP-0009)은 heartbeat 의 `extendExpiry` 를 대신하지 못한다 — 샌드박스마다 켜야 하고, 서버 프록시나 K8s
   ingress 를 거친 요청만 활동으로 센다(Docker 의 직접 엔드포인트는 세지 않는다)
-- **OpenSandbox 의 출력 바이트** *(4단계에서 닫는다)* — execd 가 출력을 줄 단위로 보내 바이트를 되살릴 수 없다(§6.1).
-  계약 스위트의 `execTruncatesStdoutAndStderrSeparately` 가 끝 줄바꿈 없는 출력을 그대로 기대하므로 OpenSandbox 에서 실패한다.
-  SPI 에 "출력은 줄로 정규화될 수 있다" 를 적고 그 검사를 고치거나, 프로바이더가 출력을 파일로 받아 files API 로 읽는다(명령마다
-  HTTP 왕복 둘). §9 의 래퍼는 어느 쪽에서도 동작하므로 앞쪽을 권한다([스파이크](opensandbox-spike.md) §4-3)
+- ~~**OpenSandbox 의 출력 바이트**~~ *(4단계에서 닫았다)* — SPI 에 "출력은 줄로 정규화될 수 있다" 를 적고 계약 스위트의 검사를
+  줄바꿈으로 끝나는 출력으로 바꿨다. `SandboxShell` 의 프로바이더 쪽 상한은 U+FFFD 팽창을 감안해 `3 × max + 1 KiB` 다(§6.1,
+  단계 4 구현 설계 §5.3)
 - **워크스페이스 단위 seed 매개변수** *(6단계의 JDBC 스키마를 굳히기 전에 닫는다)* — `seed`(원격 · ref · 자격 증명
   이름)는 지금 프로파일에만 있다. 그래서 저장소나 브랜치가 티켓마다 다르면 프로파일을 저장소 수만큼 만들어야 하고,
   테넌트마다 다른 자격 증명을 쓸 방법이 없다. 병렬 해법 탐색(§18-8)도 모든 실험 슬롯이 같은 기준 커밋에서 출발해야
@@ -1865,14 +1972,27 @@ found·"생성은 됐지만 응답 유실"·노드 종료(호출 경로를 그 �
   어느 단계인지 말하지 않는다. 3단계는 `seed` 를 가진 프로파일을 기동 시 거부한다(§11.3, §13.2). 구현되지 않은 경로가
   조용히 아무것도 하지 않는 것보다 낫다. 넣을 때는 bare 저장소 seed 와 함께 `SandboxSeeder` 에 넣는다(단계 3 구현 설계
   §10 Q2)
-- **자격 증명 바인딩의 겹침 검사** *(4단계에서 닫는다)* — §13.2 의 검사는 vault 쪽 정의(host · 경로 prefix · 메서드)가
-  필요한데 그것은 OpenSandbox 프로바이더 설정만 안다. 스파이크가 정의의 모양을 확인했다 — `{schemes, hosts, methods, paths}`,
-  path 는 glob(스파이크 §6). 프로바이더 쪽 검증 훅의 모양을 4단계가 정하고, 그 전까지
-  `credentials` 를 가진 프로파일은 기동 시 거부한다(단계 3 구현 설계 §10 Q3)
-- **seed 의 네트워크 격리 점검** *(4단계에서 닫는다)* — seed 가 제어면 엔드포인트에 닿지 못하는지 스스로 확인하려면
-  프로바이더가 그 엔드포인트를 SPI 로 알려 줘야 한다. egress 모드 대조(`enforcementMode`, §6.4)도 같은 seed 단계에 들어간다. 그 모양이 4단계의 일이다. 그 전까지 `NETWORK_ISOLATION` 은 필수
-  capability 로 남으므로, 모든 프로파일은 그것을 광고하는 프로바이더 위에서 돌거나 `insecure-allow` 로 면제하고 기동 경고를
-  남긴다 — 빈틈이 조용히 생기지 않는다(단계 3 구현 설계 §10 Q4)
+- ~~**자격 증명 바인딩의 겹침 검사**~~ *(4단계에서 닫았다)* — 프로바이더가 범위를 데이터로 내놓고
+  (`ProviderCapabilities.credentialScopes()`), 기동 시 검사가 이름 · 겹침 · egress 덮음을 본다. 검증 훅은 두지 않았다(§12.1,
+  §13.2, 단계 4 구현 설계 §6.6)
+- ~~**seed 의 네트워크 격리 점검**~~ *(4단계에서 닫았다)* — 프로바이더가 `controlPlaneEndpoints()` 를 알려 주고 seed 스크립트가
+  bash `/dev/tcp` 로 탐침한다. egress 모드와 vault 바인딩은 seed 단계의 `SandboxProvider.verify` 가 대조한다(§11.3, 단계 4 구현
+  설계 §6.4)
+- **샌드박스가 egress 프록시의 CA 를 신뢰하는가** *(K8s 계층을 처음 돌릴 때 닫는다)* — credential vault 는 HTTPS 를 MITM 으로
+  주입한다. 스파이크는 TLS 검증을 끄고 확인했으므로, 샌드박스 이미지가 사이드카의 CA 를 신뢰하지 않으면 `git` 같은 도구의
+  HTTPS 요청에는 주입이 되지 않는다(요청이 실패한다). 신뢰가 필요하면 이미지 계약이나 환경(CA 번들)에 더해야 한다. k8s 계층의
+  `credentialsAreInjectedOnlyWithinTheirScope` 가 검증을 켠 채 확인한다. 그 전까지 `CREDENTIAL_INJECTION` 은 설정대로 광고하되
+  모듈 README 가 경고한다(단계 4 구현 설계 §12 Q4)
+- **러너에서의 docker 계층** *(3·4단계 릴리스 전에 닫는다)* — docker 계층은 macOS(Docker Desktop, arm64)에서만 돌았다. Linux
+  러너에서의 서버 컨테이너 도달(`host.docker.internal` + host-gateway), amd64 execd 이미지, 러너 커널의 `dns+nft` 는 확인되지
+  않았다. 이 저장소에는 CI 워크플로가 없다 — 워크플로를 더해 한 번 돌리거나, 릴리스 전에 Linux 호스트에서 손으로 돌려 기록한다
+  (§16, 단계 4 구현 설계 §12 Q10)
+- **내장 `VolumeReclaimer`** *(5단계에서 닫는다)* — 4단계는 `VolumeReclaimer` 인터페이스만 두고 주입된 인스턴스를 받는다.
+  §13.2 의 `volume-reclaimer: kubernetes | docker` 처럼 속성으로 고르는 내장 구현(K8s PVC · Docker 볼륨 API)과 볼륨 조정은
+  공유 볼륨과 함께 5단계에 들어간다(단계 4 구현 설계 §12 Q3)
+- **프로바이더 설정의 속성 바인딩** — `OpenSandboxProviderConfig` 는 빌더다. `api-key` 와 자격 증명 비밀은 `Supplier` 로,
+  `volume-reclaimer` 는 인스턴스로 받는다. Spring 스타터가 생기면 §13.2 의 속성을 이리로 옮기는 방법(비밀의 출처, 빈 이름)을
+  그때 정한다
 - **§14 의 span 과 메트릭을 어느 단계가 가지는가** *(3·4단계 릴리스 전에 닫는다)* — §18 은 관측성을 어느 단계에도 두지
   않았다. 3단계는 `SandboxEventListener` 의 수명 이벤트(§14 의 감사 쪽)만 넣었다. 메트릭은 Micrometer 의존성과 라벨
   설계가 따라오므로 소비처가 생길 때 정한다(단계 3 구현 설계 §10 Q6)
@@ -1890,7 +2010,8 @@ found·"생성은 됐지만 응답 유실"·노드 종료(호출 경로를 그 �
 - **샌드박스 환경을 얻지 못했을 때 호스트 셸로 되돌아가지 말 것.** 닫힌 쪽으로 실패한다(§12.1)
 - **도구 인자로 워크스페이스·슬롯·sandbox id 를 받지 말 것.** 오케스트레이터 도구의 슬롯 이름은 호출자의
   워크스페이스 안에서만 해석된다(§8.5)
-- **OpenSandbox SDK 타입을 `aimon-sandbox-opensandbox` 밖으로 내보내지 말 것**(§4.1)
+- **OpenSandbox 의 타입을 `aimon-sandbox-opensandbox` 밖으로 내보내지 말 것**(§4.1). 4단계는 SDK 를 쓰지 않고 REST 를 직접
+  부르므로 그런 타입이 없다 — 와이어 모양(JSON 필드, 에러 코드)도 모듈 안에 둔다
 - **프로파일이 요구한 capability 를 프로바이더가 광고하지 않는데 조용히 진행하지 말 것**(§6.4)
 - **슬롯 상태 전이를 CAS 없이 쓰지 말 것.** 노드 간 직렬화 장치는 CAS 뿐이다(§10.1)
 - **CAS 충돌을 이유로 쓰기를 버리지 말 것.** 다시 읽고 조건을 확인한 뒤 재시도한다. 활동 기록이 유실되면 도는 명령이 멈춘다(§5.3)
@@ -1934,6 +2055,7 @@ found·"생성은 됐지만 응답 유실"·노드 종료(호출 경로를 그 �
 ## 관련 문서
 
 - [`workspace-sandbox-step3.md`](workspace-sandbox-step3.md) — 3단계(도메인과 로컬 경로)의 구현 설계, 결정(§10)과 구현이 벗어난 점(§12)
+- [`workspace-sandbox-step4.md`](workspace-sandbox-step4.md) — 4단계(OpenSandbox 프로바이더와 조정)의 구현 설계, 결정(§10)과 구현이 벗어난 점(§13)
 - [`opensandbox-spike.md`](opensandbox-spike.md) — 2단계(OpenSandbox 스파이크)의 결과와 근거
 - [`sandbox.md` @ `704013c`](https://github.com/kangwoo/aimon-sandbox/blob/704013c02cb14f16ec37ebf8c07f90d7e107db73/docs/design/sandbox.md) — 이 설계가 대체한 identifier 기반 설계(삭제됨)
 - [`scope-model.md`](https://github.com/kangwoo/aimon-core/blob/main/docs/overview/scope-model.md) — 수명과 소멸 책임

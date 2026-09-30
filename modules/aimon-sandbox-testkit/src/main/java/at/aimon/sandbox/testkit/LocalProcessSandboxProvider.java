@@ -214,7 +214,7 @@ public final class LocalProcessSandboxProvider implements SandboxProvider {
             throw new UncheckedIOException("cannot create sandbox directory " + dir, e);
         }
         final LocalSandbox sandbox = new LocalSandbox(ProviderSandboxRef.of(NAME, id), dir, spec.labels(),
-                spec.expiresAt(), spec.environment());
+                spec.expiresAt(), spec.environment(), clock.instant());
         sandboxes.put(id, sandbox);
         return sandbox.ref;
     }
@@ -347,12 +347,14 @@ public final class LocalProcessSandboxProvider implements SandboxProvider {
         final Set<LocalRunningCommand> running = ConcurrentHashMap.newKeySet();
         /** Process group id → its leader's start time, which tells a reused pid from the group's own leader. */
         final Map<Long, Optional<Instant>> processGroups = new ConcurrentHashMap<>();
+        final Instant createdAt;
         volatile Instant expiresAt;
         volatile boolean destroyed;
 
         LocalSandbox(ProviderSandboxRef ref, Path dir, Map<String, String> labels, Instant expiresAt,
-                Map<String, String> environment) {
+                Map<String, String> environment, Instant createdAt) {
             this.ref = ref;
+            this.createdAt = createdAt;
             this.dir = dir;
             this.labels = Map.copyOf(labels);
             this.expiresAt = expiresAt;
@@ -360,7 +362,7 @@ public final class LocalProcessSandboxProvider implements SandboxProvider {
         }
 
         ProviderSandbox describe() {
-            return ProviderSandbox.of(ref, ProviderSandboxState.RUNNING, labels, expiresAt);
+            return ProviderSandbox.of(ref, ProviderSandboxState.RUNNING, labels, expiresAt, createdAt);
         }
 
         /**

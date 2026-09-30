@@ -11,22 +11,26 @@ picks, provisions and retires. The design is
 
 ## Status
 
-IMPORTANT: this repository **ships nothing usable in production yet.** Implementation step 3 (§18) is in —
-the workspace domain, the provider SPI and the local path — but the only provider is a test-only one; the
-production OpenSandbox provider is step 4, and steps 3 and 4 are released together.
+IMPORTANT: this repository **has not been released yet.** Implementation steps 3 and 4 (§18) are in — the
+workspace domain, the provider SPI and the local path (step 3), and the production OpenSandbox provider with the
+janitor's sandbox reconciliation (step 4) — and are released together. The release is still blocked on the
+aimon-core SNAPSHOT pin (below) and on the open items of design §20 marked for it.
 
 The identifier-based sandbox it was split out of aimon-core with — four `*Sandbox` tools, the
 `SandboxBackend` SPI and its Docker and Kubernetes backends — has been deleted, not kept alongside the new
-design (why: [`workspace-sandbox.md`](docs/design/workspace-sandbox.md) §19; old-to-new map: §17). How step 3
-was built, and where it departed from the plan, is
-[`workspace-sandbox-step3.md`](docs/design/workspace-sandbox-step3.md).
+design (why: [`workspace-sandbox.md`](docs/design/workspace-sandbox.md) §19; old-to-new map: §17). How steps 3
+and 4 were built, and where they departed from the plan, is
+[`workspace-sandbox-step3.md`](docs/design/workspace-sandbox-step3.md) and
+[`workspace-sandbox-step4.md`](docs/design/workspace-sandbox-step4.md); what the OpenSandbox server actually does is
+[`opensandbox-spike.md`](docs/design/opensandbox-spike.md).
 
 | Module | Coordinate | What it is |
 |---|---|---|
 | `aimon-sandbox` | `at.aimon.sandbox:aimon-sandbox` | Workspace records and CAS store, the manager and janitor, provider SPI, binding policy, and the `ExecutionEnvironmentProvider` that aimon-core's file and shell tools resolve per execution (step 3) |
 | `aimon-sandbox-testkit` | `at.aimon.sandbox:aimon-sandbox-testkit` | Provider and store contract suites every implementation must pass, a local-process provider **for tests only**, fault injection, a manual clock (step 3) |
+| `aimon-sandbox-opensandbox` | `at.aimon.sandbox:aimon-sandbox-opensandbox` | The production provider: OpenSandbox over its REST API, capabilities from operator declarations, credential vault bindings (step 4; [README](modules/aimon-sandbox-opensandbox/README.md)) |
 
-`aimon-sandbox-opensandbox` (step 4) and `aimon-sandbox-store-jdbc` (step 6) are added as their steps land.
+`aimon-sandbox-store-jdbc` (step 6) is added when its step lands.
 
 If you need the old implementation, `at.aimon.core:aimon-sandbox{,-docker,-kubernetes}:0.2.4` is still on
 Maven Central and still works; its design document was deleted with it and survives at
@@ -47,9 +51,11 @@ reference to anything here. The workspace sandbox implements aimon-core's execut
 # once, in a checkout of aimon-core (until 0.3.1 is on Maven Central):
 ./gradlew publishToMavenLocal -x test -x javadoc
 
-./gradlew build       # compile + unit tests
-./gradlew checkAll    # the gate: Spotless + Checkstyle + unit tests
-./gradlew format      # apply formatting
+./gradlew build            # compile + unit tests (no Docker needed)
+./gradlew checkAll         # the gate: Spotless + Checkstyle + unit tests
+./gradlew format           # apply formatting
+./gradlew integrationTest  # @Tag("docker"): the provider against a real OpenSandbox server (needs Docker)
+./gradlew k8sTest          # @Tag("k8s"): manual, against a provisioned cluster (see the provider's README)
 ```
 
 ## License

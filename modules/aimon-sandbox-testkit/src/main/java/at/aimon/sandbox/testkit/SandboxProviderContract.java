@@ -53,11 +53,12 @@ import at.aimon.sandbox.provider.WriteMode;
  *
  * <p>
  * Extend it, implement {@link #createProvider()}, and every test here runs against a fresh provider. Shell state is
- * not part of the SPI and is not tested here.
+ * not part of the SPI and is not tested here. Output is compared newline-terminated, since a provider may deliver it
+ * line-normalized ({@link ExecOutcome}).
  */
 public abstract class SandboxProviderContract {
 
-    /** The deployment label every contract sandbox carries. */
+    /** The default deployment label of contract sandboxes ({@link #deployment()}). */
     protected static final String DEPLOYMENT = "contract";
 
     private static final Duration COMMAND_TIMEOUT = Duration.ofSeconds(30);
@@ -71,6 +72,14 @@ public abstract class SandboxProviderContract {
     /** @return the image contract sandboxes are created from */
     protected String image() {
         return "local";
+    }
+
+    /**
+     * @return the deployment label every contract sandbox carries; override with a per-run value ({@code ci-{runId}})
+     *         when the provider's server is shared, so runs do not see each other's sandboxes
+     */
+    protected String deployment() {
+        return DEPLOYMENT;
     }
 
     /** @return how far ahead new sandboxes expire */
@@ -108,9 +117,9 @@ public abstract class SandboxProviderContract {
      * @return a create spec for this contract's deployment
      */
     protected CreateSpec.Builder spec(String workspace, long generation) {
-        return CreateSpec.builder().key(SandboxLabels.key(DEPLOYMENT, workspace, "inc00001", "primary", generation))
+        return CreateSpec.builder().key(SandboxLabels.key(deployment(), workspace, "inc00001", "primary", generation))
                 .image(image())
-                .labels(SandboxLabels.labels(DEPLOYMENT, workspace, "inc00001", "primary", generation, "tenant"))
+                .labels(SandboxLabels.labels(deployment(), workspace, "inc00001", "primary", generation, "tenant"))
                 .expiresAt(Instant.now().plus(expiry()));
     }
 
@@ -182,6 +191,17 @@ public abstract class SandboxProviderContract {
     }
 
     @Test
+    void statusReportsCreatedAtWhenKnown() {
+        final Instant before = Instant.now();
+        final ProviderSandboxRef ref = newSandbox();
+
+        // Reconciliation measures an orphan's grace from it; a creation time in the future would hasten nothing but
+        // is a clock the provider got wrong. Clock skew between server and test is allowed a minute.
+        assertThat(provider.status(ref).orElseThrow().createdAt()).hasValueSatisfying(createdAt -> assertThat(createdAt)
+                .isBefore(Instant.now().plus(Duration.ofMinutes(1))).isAfter(before.minus(Duration.ofMinutes(1))));
+    }
+
+    @Test
     void listReturnsEveryMatchingSandbox() {
         final String workspace = "ws:" + UUID.randomUUID();
         for (int generation = 1; generation <= 30; generation++) {
@@ -189,7 +209,7 @@ public abstract class SandboxProviderContract {
         }
         final ProviderSandboxRef other = newSandbox();
 
-        final List<ProviderSandbox> listed = provider.list(SandboxLabels.workspaceSelector(DEPLOYMENT, workspace));
+        final List<ProviderSandbox> listed = provider.list(SandboxLabels.workspaceSelector(deployment(), workspace));
 
         assertThat(listed).hasSize(30).noneMatch(sandbox -> sandbox.ref().equals(other));
     }
@@ -223,14 +243,15 @@ public abstract class SandboxProviderContract {
     void execTruncatesStdoutAndStderrSeparately() throws InterruptedException {
         final SandboxConnection connection = provider.connect(newSandbox());
 
+        // Newline-terminated: a line-normalizing provider always ends output with one (ExecOutcome).
         final ExecOutcome outcome = connection
-                .run(ExecSpec.builder().command("printf 'aaaaaaaaaaaaaaaaaaaa'; printf 'bbbbb' >&2").maxCaptureBytes(10)
-                        .timeout(COMMAND_TIMEOUT).build(), OutputSink.DISCARD)
+                .run(ExecSpec.builder().command("printf 'aaaaaaaaaaaaaaaaaaaa\\n'; printf 'bbbbb\\n' >&2")
+                        .maxCaptureBytes(10).timeout(COMMAND_TIMEOUT).build(), OutputSink.DISCARD)
                 .await(COMMAND_TIMEOUT);
 
         assertThat(text(outcome.stdout())).isEqualTo("aaaaaaaaaa");
         assertThat(outcome.stdoutTruncated()).isTrue();
-        assertThat(text(outcome.stderr())).isEqualTo("bbbbb");
+        assertThat(text(outcome.stderr())).isEqualTo("bbbbb\n");
         assertThat(outcome.stderrTruncated()).isFalse();
     }
 
@@ -437,7 +458,7 @@ public abstract class SandboxProviderContract {
         final String workspace = "ws:" + UUID.randomUUID();
         create(spec(workspace, 1).build());
         final Map<String, String> otherDeployment = new HashMap<>(
-                SandboxLabels.workspaceSelector(DEPLOYMENT, workspace));
+                SandboxLabels.workspaceSelector(deployment(), workspace));
         otherDeployment.put(SandboxLabels.DEPLOYMENT, "another-deployment");
 
         assertThat(provider.list(otherDeployment)).isEmpty();

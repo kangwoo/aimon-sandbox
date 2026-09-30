@@ -7,7 +7,8 @@ package at.aimon.sandbox.provider;
 public interface SandboxConnection extends AutoCloseable {
 
     /**
-     * Starts one command in a process group of its own.
+     * Starts one command in a process group of its own. Its output may reach the sink and the outcome
+     * line-normalized ({@link ExecOutcome}).
      *
      * @param spec
      *            the command

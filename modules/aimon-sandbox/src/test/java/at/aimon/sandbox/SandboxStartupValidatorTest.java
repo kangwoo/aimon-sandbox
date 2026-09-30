@@ -7,6 +7,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import java.time.Duration;
 import java.util.EnumSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 import org.junit.jupiter.api.Test;
@@ -15,11 +16,12 @@ import at.aimon.sandbox.profile.SandboxProfile;
 import at.aimon.sandbox.profile.SeedSpec;
 import at.aimon.sandbox.profile.SharedAccess;
 import at.aimon.sandbox.provider.Capability;
+import at.aimon.sandbox.provider.CredentialScope;
 import at.aimon.sandbox.provider.ProviderCapabilities;
 import at.aimon.sandbox.testkit.LocalProcessSandboxProvider;
 import at.aimon.sandbox.testkit.SandboxTestProfiles;
 
-/** One case per startup rule (§13.2, and implementation step 3's own refusals). */
+/** One case per startup rule (§13.2, and the refusals of implementation steps 3 and 4). */
 class SandboxStartupValidatorTest {
 
     private static final ProviderCapabilities LOCAL = ProviderCapabilities
@@ -77,13 +79,84 @@ class SandboxStartupValidatorTest {
     }
 
     @Test
-    void sharedAccessSeedAndCredentialsAreRejectedInStepThree() {
+    void sharedAccessAndSeedAreRejectedUntilStepFive() {
         assertThat(violations(local().sharedAccess(SharedAccess.RW).build()))
                 .anyMatch(v -> v.contains("shared-access rw"));
         assertThat(violations(local().seed(SeedSpec.git("https://x/r.git", null, null)).build()))
                 .anyMatch(v -> v.contains("seed is not supported"));
-        assertThat(violations(local().credentials(List.of("gh")).build()))
-                .anyMatch(v -> v.contains("credential bindings arrive with implementation step 4"));
+    }
+
+    private static final ProviderCapabilities VAULT = ProviderCapabilities.builder()
+            .advertised(EnumSet.of(Capability.EXEC, Capability.FILES, Capability.EXPIRY, Capability.EGRESS_POLICY,
+                    Capability.CREDENTIAL_INJECTION))
+            .maxExpiry(Duration.ofHours(24))
+            .credentialScopes(Map.of("gh-read", CredentialScope
+                    .builder().hosts(Set.of("github.com")).methods(Set.of("GET")).paths(List.of("/repos/*")).build(),
+                    "gh-write",
+                    CredentialScope.builder().hosts(Set.of("github.com")).methods(Set.of("POST"))
+                            .paths(List.of("/repos/*")).build(),
+                    "gh-any", CredentialScope.builder().hosts(Set.of("github.com")).build(), "api",
+                    CredentialScope.builder().hosts(Set.of("api.example.com")).build(), "wild",
+                    CredentialScope.builder().hosts(Set.of("*.example.com")).build()))
+            .build();
+
+    private static List<String> vaultViolations(SandboxProfile profile) {
+        return violations(SandboxTestProfiles.settings(profile).build(), VAULT, false, false);
+    }
+
+    @Test
+    void credentialBindingsThatAreDisjointAndCoveredByEgressPass() {
+        assertThat(vaultViolations(local().egress(List.of("github.com", "*.example.com"))
+                .credentials(List.of("gh-read", "gh-write", "api")).build())).isEmpty();
+    }
+
+    @Test
+    void unknownCredentialBindingsAreRefused() {
+        assertThat(vaultViolations(local().egress(List.of("github.com")).credentials(List.of("gh")).build()))
+                .anyMatch(v -> v.contains("unknown credential binding 'gh'"));
+    }
+
+    @Test
+    void overlappingCredentialBindingsAreRefused() {
+        assertThat(vaultViolations(
+                local().egress(List.of("github.com")).credentials(List.of("gh-read", "gh-any")).build()))
+                .anyMatch(v -> v.contains("'gh-read' and 'gh-any' overlap"));
+    }
+
+    @Test
+    void credentialsNeedAnEgressThatAllowsEveryBindingHost() {
+        assertThat(vaultViolations(local().credentials(List.of("gh-read")).build()))
+                .anyMatch(v -> v.contains("credentials need an explicit egress allow-list"));
+        assertThat(vaultViolations(local().egress(List.of("example.com")).credentials(List.of("api", "wild")).build()))
+                .anyMatch(v -> v.contains("'api' targets host 'api.example.com'"))
+                .anyMatch(v -> v.contains("'wild' targets host '*.example.com'"));
+        assertThat(vaultViolations(local().egress(List.of("*.example.com")).credentials(List.of("wild")).build()))
+                .isEmpty();
+    }
+
+    @Test
+    void theProfilesRuntimeClassMustBeTheProvidersOwn() {
+        final ProviderCapabilities kata = ProviderCapabilities.builder()
+                .advertised(EnumSet.of(Capability.EXEC, Capability.FILES, Capability.EXPIRY, Capability.RUNTIME_CLASS))
+                .runtimeClass("kata").build();
+
+        assertThat(violations(SandboxTestProfiles.settings(local().runtimeClass("gvisor").build()).build(), kata, false,
+                false)).anyMatch(v -> v.contains("runtime-class 'gvisor' is not the provider's runtime class"));
+        assertThat(violations(SandboxTestProfiles.settings(local().runtimeClass("kata").build()).build(), kata, false,
+                false)).isEmpty();
+        // Without a class on the provider, only a waived request passes (local development).
+        assertThat(violations(local().runtimeClass("gvisor").build())).anyMatch(v -> v.contains("none declared"));
+        assertThat(violations(local().runtimeClass("gvisor").insecureAllow(
+                Set.of(Capability.HARDENED_SECURITY_CONTEXT, Capability.NETWORK_ISOLATION, Capability.RUNTIME_CLASS))
+                .build())).isEmpty();
+    }
+
+    @Test
+    void orphanGraceMustExceedProvisionTimeout() {
+        assertThat(violations(SandboxTestProfiles.settings(local().build()).orphanGrace(Duration.ofMinutes(5)).build(),
+                LOCAL, false, false)).anyMatch(v -> v.contains("orphan-grace PT5M must exceed provision-timeout"));
+        assertThat(violations(SandboxTestProfiles.settings(local().build()).lostConfirmAfter(Duration.ZERO).build(),
+                LOCAL, false, false)).anyMatch(v -> v.contains("lost-confirm-after must be positive"));
     }
 
     @Test

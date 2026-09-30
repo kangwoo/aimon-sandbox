@@ -2,6 +2,7 @@ package at.aimon.sandbox.workspace;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.List;
 import java.util.Optional;
 import java.util.regex.Pattern;
 
@@ -9,14 +10,15 @@ import at.aimon.sandbox.profile.SandboxProfile;
 import at.aimon.sandbox.provider.Capability;
 import at.aimon.sandbox.provider.ExecOutcome;
 import at.aimon.sandbox.provider.ExecSpec;
+import at.aimon.sandbox.provider.HostPort;
 import at.aimon.sandbox.provider.OutputSink;
 import at.aimon.sandbox.provider.RunningCommand;
 import at.aimon.sandbox.provider.SandboxConnection;
 import at.aimon.sandbox.provider.SandboxProviderException;
 
 /**
- * The seed of implementation step 3 (docs/design/workspace-sandbox.md §11.3, §7): one exec, idempotent, that checks
- * the image against the image contract and the profile's declarations and lays out {@code /workspace}.
+ * The seed (docs/design/workspace-sandbox.md §11.3, §7): one exec, idempotent, that checks the image against the image
+ * contract and the profile's declarations and lays out {@code /workspace}.
  *
  * <ul>
  * <li>{@code /workspace} is a writable directory, and the seed lock in it can be opened — the mount contract
@@ -25,23 +27,37 @@ import at.aimon.sandbox.provider.SandboxProviderException;
  * <li>{@code uname -s}, lower-cased, equals the declared platform; {@code uname -sr} matches the declared OS version
  * as a glob ({@code Linux 6.x} reads as {@code Linux 6.*}) when one is declared;</li>
  * <li>not root and no service-account token — skipped when {@code HARDENED_SECURITY_CONTEXT} is waived;</li>
+ * <li>no TCP connection to any of the provider's control-plane endpoints succeeds — when {@code NETWORK_ISOLATION} is
+ * required (not waived). Refused, timed out (3 s) or unresolvable all pass; only an established connection fails;</li>
  * <li>{@code rm -rf /workspace/.tmp-*}, then {@code mkdir -p} the staging and shell areas and the root.</li>
  * </ul>
  * Everything after the contract check runs under {@code flock} on {@code /workspace/.aimon-seed.lock}, held on an fd
  * like the shell lock. A failed check prints {@code AIMON_SEED_FAIL {step} {reason}} and exits 65: a permanent
- * failure. The control-plane network probe needs a provider endpoint and joins with implementation step 4; git seeds
- * with step 5.
+ * failure. What only the provider can see (the egress enforcement mode, the vault's bindings) is checked by
+ * {@code SandboxProvider.verify} before this script runs. Git seeds arrive with step 5.
  */
 final class SandboxSeeder {
 
     static final int FAIL_EXIT = 65;
     private static final String FAIL_MARKER = "AIMON_SEED_FAIL ";
     private static final Pattern VERSION_X = Pattern.compile("(?<=\\.)x(?=$|\\.)");
+    /** How long the network probe waits for one connect; {@code /dev/tcp} alone can hang for over a minute. */
+    static final int PROBE_TIMEOUT_SECONDS = 3;
 
     private final Duration provisionTimeout;
+    private final List<HostPort> controlPlane;
 
     SandboxSeeder(Duration provisionTimeout) {
+        this(provisionTimeout, List.of());
+    }
+
+    /**
+     * @param controlPlane
+     *            the endpoints a sandbox must not reach ({@code ProviderCapabilities.controlPlaneEndpoints()})
+     */
+    SandboxSeeder(Duration provisionTimeout, List<HostPort> controlPlane) {
         this.provisionTimeout = provisionTimeout;
+        this.controlPlane = List.copyOf(controlPlane);
     }
 
     /** A check that failed: permanent until the profile changes. */
@@ -134,10 +150,30 @@ final class SandboxSeeder {
             s.append("[ ! -e /var/run/secrets/kubernetes.io/serviceaccount/token ] || fail service-account-token "
                     + "'a service account token is mounted'\n");
         }
+        if (profile.requiredCapabilities().contains(Capability.NETWORK_ISOLATION) && !controlPlane.isEmpty()) {
+            appendNetworkProbe(s);
+        }
         s.append("rm -rf /workspace/.tmp-*\n");
         s.append("mkdir -p /workspace/.aimon-staged /workspace/.aimon-shell ").append(quote(root))
                 .append(" || fail root-directory 'cannot create the working root'\n");
         return s.toString();
+    }
+
+    /**
+     * The control-plane probe (§11.3): bash's {@code /dev/tcp} (bash is in the image contract; no {@code timeout} or
+     * {@code nc} is assumed) with a watchdog, since an unroutable address can hold a connect for over a minute. The
+     * probe's own output goes nowhere, so bash's job notice for a killed connect does not end up in a failure reason.
+     */
+    private void appendNetworkProbe(StringBuilder s) {
+        s.append("probe() {\n  {\n    ( exec 3<>\"/dev/tcp/$1/$2\" ) & c=$!\n    ( sleep ")
+                .append(PROBE_TIMEOUT_SECONDS)
+                .append("; kill \"$c\" ) & w=$!\n    wait \"$c\"; r=$?; kill \"$w\"; wait \"$w\"; return \"$r\"\n")
+                .append("  } >/dev/null 2>&1\n}\n");
+        for (HostPort endpoint : controlPlane) {
+            s.append("probe_host=").append(quote(endpoint.host())).append("; probe_port=").append(endpoint.port())
+                    .append("\nprobe \"$probe_host\" \"$probe_port\" && fail network-isolation \"the sandbox reaches "
+                            + "the control plane at $probe_host:$probe_port\"\n");
+        }
     }
 
     /** A declared version as a {@code case} pattern: literal parts single-quoted, {@code x} segments as {@code *}. */

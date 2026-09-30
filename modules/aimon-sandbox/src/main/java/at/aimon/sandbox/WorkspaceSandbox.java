@@ -226,7 +226,12 @@ public final class WorkspaceSandbox implements AutoCloseable {
             return this;
         }
 
-        /** Default: a new {@link InMemorySandboxWorkspaceStore} (single node only). */
+        /**
+         * Default: a new {@link InMemorySandboxWorkspaceStore} — <b>single node only</b>: the janitor's reconciliation
+         * destroys every sandbox of the deployment its store has no record of, so two nodes with an in-memory store
+         * each
+         * would reclaim each other's sandboxes as orphans (docs/design/workspace-sandbox.md §5.3, §10.4).
+         */
         public Builder store(SandboxWorkspaceStore store) {
             this.store = store;
             return this;

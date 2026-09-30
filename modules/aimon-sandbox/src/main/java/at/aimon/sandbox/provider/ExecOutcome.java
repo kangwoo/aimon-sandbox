@@ -5,6 +5,13 @@ import java.util.Objects;
 /**
  * How one {@link SandboxConnection#run} ended. The byte arrays hold at most {@link ExecSpec#maxCaptureBytes()} each;
  * the truncation flags say whether more was produced.
+ *
+ * <p>
+ * The output may be <b>line-normalized</b> (docs/design/workspace-sandbox.md §6.1): a provider that receives it as
+ * lines delivers each line terminated by {@code \n} — a final newline is always present on non-empty output, a
+ * {@code \r} is dropped or becomes a line break, and invalid UTF-8 is replaced by U+FFFD, so a stream can grow up to
+ * three times its raw size. Byte counts are then counted after normalization. A consumer that needs exact byte counts
+ * carries them in-band, as the §9 wrapper's trailer does.
  */
 public final class ExecOutcome {
 

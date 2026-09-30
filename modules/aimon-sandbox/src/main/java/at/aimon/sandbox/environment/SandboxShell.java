@@ -64,6 +64,12 @@ public final class SandboxShell implements VirtualShell {
     /** Room left for the wrapper's trailer above the in-sandbox cap; the trailer itself is under 128 bytes. */
     static final long TRAILER_ALLOWANCE = 1024;
 
+    /**
+     * How much a provider's line normalization can grow a stream: every invalid UTF-8 byte becomes U+FFFD, three bytes
+     * (docs/design/workspace-sandbox.md §6.1).
+     */
+    static final long NORMALIZATION_GROWTH = 3;
+
     static final String KILLED_NOTICE = "the command was killed; its cd/export were not applied";
 
     private static final Logger log = LoggerFactory.getLogger(SandboxShell.class);
@@ -150,6 +156,18 @@ public final class SandboxShell implements VirtualShell {
         }
     }
 
+    /**
+     * The provider-side capture cap of one wrapper run: a backstop the wrapper's own {@code head -c {max}} never lets
+     * raw output reach, sized so that a line-normalizing provider cannot cut the trailer off either — {@code max} raw
+     * bytes can arrive as {@code 3 × max} (§6.1). Saturates instead of overflowing for a huge {@code max}.
+     */
+    static long captureBackstop(long max) {
+        if (max > (Long.MAX_VALUE - TRAILER_ALLOWANCE) / NORMALIZATION_GROWTH) {
+            return Long.MAX_VALUE;
+        }
+        return max * NORMALIZATION_GROWTH + TRAILER_ALLOWANCE;
+    }
+
     private ShellCommandResult run(ConnectedSlot slot, String text, ExecutionOptions options, boolean foreground)
             throws ShellExecutionException {
         final String directory = ShellWrapper.directory(binding.shellKey().directoryName());
@@ -186,8 +204,8 @@ public final class SandboxShell implements VirtualShell {
             // Not binding.root(): a command may have removed it, and an exec server may refuse a missing directory
             // before the wrapper could fall back. The wrapper moves into the root itself.
             final ExecSpec spec = ExecSpec.builder().command(script).workingDirectory(ShellWrapper.EXEC_DIRECTORY)
-                    .environment(slot.profile().environment()).timeout(backstop)
-                    .maxCaptureBytes(max + TRAILER_ALLOWANCE).build();
+                    .environment(slot.profile().environment()).timeout(backstop).maxCaptureBytes(captureBackstop(max))
+                    .build();
             final ShellCommandResult result = await(slot, spec,
                     new Run(runPrefix, nonce, timeout != null ? timeout : backstop, max, options.getCharset(),
                             foreground, options.getWorkingDirectory() != null));
