@@ -12,10 +12,10 @@ import at.aimon.sandbox.profile.SandboxProfile;
 import at.aimon.sandbox.workspace.WorkspaceQuota;
 
 /**
- * The workspace sandbox's configuration — the keys implementation step 3 reads, named after the Spring properties
- * docs/design/workspace-sandbox.md §13.2 proposes ({@code provision-timeout} is {@link #provisionTimeout()}, and so
- * on). Keys a later step reads ({@code orphan-grace}, {@code lost-confirm-after}, volume and orchestrator keys) are
- * added with that step: a key nothing reads rots.
+ * The workspace sandbox's configuration — the keys implementation steps 3 and 4 read, named after the Spring
+ * properties docs/design/workspace-sandbox.md §13.2 proposes ({@code provision-timeout} is {@link #provisionTimeout()},
+ * and so on). Keys a later step reads (volume and orchestrator keys) are added with that step: a key nothing reads
+ * rots. The provider's own keys ({@code aimon.sandbox.opensandbox.*}) belong to the provider module, never here.
  *
  * <p>
  * Validated as a whole by {@link WorkspaceSandbox.Builder#build()}, not here, so one failed start lists every problem.
@@ -48,6 +48,8 @@ public final class SandboxSettings {
     private final Duration execShellIdle;
     private final Duration shellLockWait;
     private final Duration janitorInterval;
+    private final Duration orphanGrace;
+    private final Duration lostConfirmAfter;
     private final int maxRunningPerTenant;
     private final String defaultProfile;
     private final List<SandboxProfile> profiles;
@@ -71,6 +73,8 @@ public final class SandboxSettings {
         this.execShellIdle = Objects.requireNonNull(builder.execShellIdle, "execShellIdle");
         this.shellLockWait = Objects.requireNonNull(builder.shellLockWait, "shellLockWait");
         this.janitorInterval = Objects.requireNonNull(builder.janitorInterval, "janitorInterval");
+        this.orphanGrace = Objects.requireNonNull(builder.orphanGrace, "orphanGrace");
+        this.lostConfirmAfter = Objects.requireNonNull(builder.lostConfirmAfter, "lostConfirmAfter");
         this.maxRunningPerTenant = builder.maxRunningPerTenant;
         this.defaultProfile = builder.defaultProfile;
         this.profiles = List.copyOf(builder.profiles);
@@ -91,7 +95,8 @@ public final class SandboxSettings {
                 .failureBackoff(failureBackoff).maxFailureBackoff(maxFailureBackoff)
                 .activityWriteInterval(activityWriteInterval).casRetries(casRetries).closeWait(closeWait)
                 .closeResumeAfter(closeResumeAfter).closedRetention(closedRetention).execShellIdle(execShellIdle)
-                .shellLockWait(shellLockWait).janitorInterval(janitorInterval).maxRunningPerTenant(maxRunningPerTenant)
+                .shellLockWait(shellLockWait).janitorInterval(janitorInterval).orphanGrace(orphanGrace)
+                .lostConfirmAfter(lostConfirmAfter).maxRunningPerTenant(maxRunningPerTenant)
                 .defaultProfile(defaultProfile).profiles(profiles).closeAfter(closeAfter).quota(quota).nodeId(nodeId);
     }
 
@@ -184,6 +189,22 @@ public final class SandboxSettings {
         return janitorInterval;
     }
 
+    /**
+     * @return {@code orphan-grace} (10m): how old a sandbox with no matching record, or a duplicate, must be
+     *         before reconciliation destroys it (§10.4); longer than {@code provision-timeout}
+     */
+    public Duration orphanGrace() {
+        return orphanGrace;
+    }
+
+    /**
+     * @return {@code lost-confirm-after} (90s): how long a RUNNING slot's sandbox must stay missing before
+     *         reconciliation declares it LOST (§10.4)
+     */
+    public Duration lostConfirmAfter() {
+        return lostConfirmAfter;
+    }
+
     /** @return {@code admission.max-running-per-tenant} (10), or {@link #UNLIMITED} */
     public int maxRunningPerTenant() {
         return maxRunningPerTenant;
@@ -231,6 +252,8 @@ public final class SandboxSettings {
         private Duration execShellIdle = Duration.ofMinutes(10);
         private Duration shellLockWait = Duration.ofSeconds(10);
         private Duration janitorInterval = Duration.ofSeconds(30);
+        private Duration orphanGrace = Duration.ofMinutes(10);
+        private Duration lostConfirmAfter = Duration.ofSeconds(90);
         private int maxRunningPerTenant = 10;
         private String defaultProfile;
         private List<SandboxProfile> profiles = List.of();
@@ -313,6 +336,16 @@ public final class SandboxSettings {
 
         public Builder janitorInterval(Duration janitorInterval) {
             this.janitorInterval = janitorInterval;
+            return this;
+        }
+
+        public Builder orphanGrace(Duration orphanGrace) {
+            this.orphanGrace = orphanGrace;
+            return this;
+        }
+
+        public Builder lostConfirmAfter(Duration lostConfirmAfter) {
+            this.lostConfirmAfter = lostConfirmAfter;
             return this;
         }
 

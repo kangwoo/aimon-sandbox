@@ -61,8 +61,13 @@ public final class ProviderSandboxRef {
         return Objects.hash(provider, sandboxId);
     }
 
+    /**
+     * The provider and a hash of the id, never the id itself: on OpenSandbox the id alone lets anyone who reaches the
+     * server run commands in the sandbox (docs/design/workspace-sandbox.md §13.3), and this string ends up in logs,
+     * events and tool errors the model sees.
+     */
     @Override
     public String toString() {
-        return provider + ":" + sandboxId;
+        return provider + ":#" + SandboxLabels.h(sandboxId);
     }
 }

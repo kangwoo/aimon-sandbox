@@ -17,17 +17,23 @@ import org.slf4j.LoggerFactory;
 import at.aimon.sandbox.profile.SandboxProfile;
 import at.aimon.sandbox.profile.SharedAccess;
 import at.aimon.sandbox.provider.Capability;
+import at.aimon.sandbox.provider.CredentialScope;
 import at.aimon.sandbox.provider.ProviderCapabilities;
 
 /**
- * The startup checks of docs/design/workspace-sandbox.md §13.2 that implementation step 3 can make, plus the step's
+ * The startup checks of docs/design/workspace-sandbox.md §13.2 that implementation steps 3 and 4 can make, plus their
  * own refusals. Collects every violation so one failed start lists them all; nothing is started when any is found.
  *
  * <p>
- * Step 3 refuses, rather than ignores, what it cannot do yet: {@code pause-after} (no {@code PAUSE_RESUME} until
- * step 7), {@code shared-access} other than {@code none} (step 5), any {@code seed} (git seeding arrives with step 5),
- * and any {@code credentials} (the §13.2 overlap check needs the step-4 provider's vault definitions, and an
- * unchecked binding must not start).
+ * Refused, rather than ignored, until the step that can do it: {@code pause-after} (no {@code PAUSE_RESUME} until
+ * step 7), {@code shared-access} other than {@code none} (step 5) and any {@code seed} (git seeding arrives with step
+ * 5).
+ *
+ * <p>
+ * Credential bindings (step 4) are checked against the provider's {@linkplain ProviderCapabilities#credentialScopes()
+ * scopes}: every name must exist, no two bindings of a profile may overlap (the vault could not tell which to inject),
+ * and every binding host must be allowed by the profile's {@code egress} — the vault refuses a host the egress policy
+ * does not allow explicitly, so a profile with credentials and no {@code egress} is refused too.
  */
 final class SandboxStartupValidator {
 
@@ -116,12 +122,20 @@ final class SandboxStartupValidator {
                 Map.entry("exec-shell-idle", settings.execShellIdle()),
                 Map.entry("shell-lock-wait", settings.shellLockWait()),
                 Map.entry("janitor.interval", settings.janitorInterval()),
+                Map.entry("orphan-grace", settings.orphanGrace()),
+                Map.entry("lost-confirm-after", settings.lostConfirmAfter()),
                 Map.entry("workspace.close-after", settings.closeAfter()));
         positive.forEach((key, value) -> {
             if (value.isNegative() || value.isZero()) {
                 violations.add(key + " must be positive, got " + value);
             }
         });
+        // A sandbox whose record write is late must not look like an orphan: provisioning ends within provision-timeout
+        // (a takeover after it), and the grace is measured from the sandbox's creation (§10.4).
+        if (settings.orphanGrace().compareTo(settings.provisionTimeout()) <= 0) {
+            violations.add("orphan-grace " + settings.orphanGrace() + " must exceed provision-timeout "
+                    + settings.provisionTimeout() + ", or a slow provisioning's sandbox is reclaimed as an orphan");
+        }
         if (settings.casRetries() < 0) {
             violations.add("cas-retries must not be negative");
         }
@@ -149,10 +163,16 @@ final class SandboxStartupValidator {
         if (profile.seed().isPresent()) {
             violations.add(p + "seed is not supported until implementation step 5");
         }
-        if (!profile.credentials().isEmpty()) {
-            violations.add(p + "credential bindings arrive with implementation step 4 (their overlap check needs the "
-                    + "provider's vault definitions)");
-        }
+        checkCredentials(profile, capabilities, violations);
+        profile.runtimeClass().ifPresent(requested -> {
+            final Optional<String> served = capabilities.runtimeClass();
+            final boolean waived = profile.insecureAllow().contains(Capability.RUNTIME_CLASS);
+            if (served.isPresent() ? !served.get().equals(requested) : !waived) {
+                violations.add(p + "runtime-class '" + requested + "' is not the provider's runtime class ("
+                        + served.map(c -> "'" + c + "'").orElse("none declared")
+                        + "): the server has one class for every sandbox");
+            }
+        });
         final Set<Capability> notWaivable = EnumSet.noneOf(Capability.class);
         notWaivable.addAll(profile.insecureAllow());
         notWaivable.removeAll(SandboxProfile.WAIVABLE);
@@ -169,6 +189,65 @@ final class SandboxStartupValidator {
             violations.add(p + "the provider does not advertise " + missing + " (waive isolation capabilities for "
                     + "local development only, with insecure-allow)");
         }
+    }
+
+    private static void checkCredentials(SandboxProfile profile, ProviderCapabilities capabilities,
+            List<String> violations) {
+        if (profile.credentials().isEmpty()) {
+            return;
+        }
+        final String p = "profile '" + profile.name() + "': ";
+        final Map<String, CredentialScope> scopes = capabilities.credentialScopes();
+        final List<String> known = new ArrayList<>();
+        for (String name : profile.credentials()) {
+            if (scopes.containsKey(name)) {
+                known.add(name);
+            } else {
+                violations
+                        .add(p + "unknown credential binding '" + name + "': the provider defines " + scopes.keySet());
+            }
+        }
+        for (int i = 0; i < known.size(); i++) {
+            for (int j = i + 1; j < known.size(); j++) {
+                final CredentialScope a = scopes.get(known.get(i));
+                final CredentialScope b = scopes.get(known.get(j));
+                if (a.overlaps(b)) {
+                    violations.add(p + "credential bindings '" + known.get(i) + "' and '" + known.get(j) + "' overlap ("
+                            + a + " / " + b + "): the vault cannot tell which to inject");
+                }
+            }
+        }
+        final Optional<List<String>> egress = profile.egress();
+        if (egress.isEmpty()) {
+            violations.add(p + "credentials need an explicit egress allow-list: the vault injects only for hosts the "
+                    + "egress policy allows, and no egress means no policy");
+            return;
+        }
+        for (String name : known) {
+            for (String host : scopes.get(name).hosts()) {
+                if (!egressCovers(egress.get(), host)) {
+                    violations.add(p + "credential binding '" + name + "' targets host '" + host + "', which egress "
+                            + egress.get() + " does not allow");
+                }
+            }
+        }
+    }
+
+    /**
+     * Whether an egress allow-list covers a binding host the way the vault checks it: an equal entry, or an entry
+     * {@code *.s} for a host under {@code s} (both measured against OpenSandbox; {@code *.s} does not cover {@code s}).
+     */
+    static boolean egressCovers(List<String> egress, String host) {
+        for (String entry : egress) {
+            final String allowed = entry.toLowerCase(Locale.ROOT);
+            if (allowed.equals(host)) {
+                return true;
+            }
+            if (allowed.startsWith("*.") && !host.startsWith("*.") && host.endsWith(allowed.substring(1))) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static void checkTerminateAfterSpansHeartbeats(SandboxProfile profile, Duration activityWriteInterval,

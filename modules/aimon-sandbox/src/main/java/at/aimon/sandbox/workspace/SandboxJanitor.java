@@ -15,8 +15,8 @@ import at.aimon.sandbox.SandboxSettings;
 import at.aimon.sandbox.profile.SandboxProfile;
 
 /**
- * The application-scoped loop that enforces idle policy (docs/design/workspace-sandbox.md §10.4 item 1). One
- * {@link #runOnce()} does, in order:
+ * The application-scoped loop that enforces idle policy and reconciles sandboxes (docs/design/workspace-sandbox.md
+ * §10.4 items 1–2). One {@link #runOnce()} does, in order:
  *
  * <ol>
  * <li><b>terminate</b> — every RUNNING slot idle for its profile's {@code terminateAfter} (the longest configured
@@ -28,12 +28,14 @@ import at.aimon.sandbox.profile.SandboxProfile;
  * its creation, its last reopen and its slots' {@code lastActiveAt};</li>
  * <li><b>resume</b> — every close stuck in CLOSING for {@code closeResumeAfter}, from the top;</li>
  * <li><b>tombstones</b> — every CLOSED record older than {@code closedRetention} is deleted;</li>
- * <li>node-local: {@code exec:} shell directories unused for {@code execShellIdle}.</li>
+ * <li>node-local: {@code exec:} shell directories unused for {@code execShellIdle};</li>
+ * <li><b>reconcile</b> — the deployment's sandboxes against the records: orphans, stale generations, failed leftovers
+ * and duplicates are destroyed, missing sandboxes confirmed LOST ({@link SandboxReconciler}).</li>
  * </ol>
  *
  * Every transition re-checks its condition on a freshly read record inside the CAS — a heartbeat that pushed
  * {@code lastActivityAt} in the meantime wins — and calls the provider only after the CAS. One workspace failing is
- * logged and the loop goes on. Sandbox and volume reconciliation (§10.4 items 2–3) arrive with implementation step 4.
+ * logged and the loop goes on. Volume reconciliation (§10.4 item 3) arrives with implementation step 5.
  */
 public final class SandboxJanitor implements AutoCloseable {
 
@@ -42,6 +44,7 @@ public final class SandboxJanitor implements AutoCloseable {
     private final SandboxWorkspaceManager manager;
     private final SandboxScheduler scheduler;
     private final SandboxSettings settings;
+    private final SandboxReconciler reconciler;
     private SandboxScheduler.Cancellable task;
 
     /**
@@ -54,6 +57,7 @@ public final class SandboxJanitor implements AutoCloseable {
         this.manager = Objects.requireNonNull(manager, "manager must not be null");
         this.scheduler = Objects.requireNonNull(scheduler, "scheduler must not be null");
         this.settings = manager.settings();
+        this.reconciler = new SandboxReconciler(manager);
     }
 
     /**
@@ -79,6 +83,7 @@ public final class SandboxJanitor implements AutoCloseable {
         } catch (RuntimeException e) {
             log.warn("Sweeping exec shell directories failed: {}", e.getMessage(), e);
         }
+        reconciler.reconcile(manager.clock().instant());
     }
 
     private void forEach(Set<WorkspaceState> states, Consumer<SandboxWorkspace> action) {

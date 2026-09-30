@@ -1,0 +1,43 @@
+# The OpenSandbox server of the docker test tier (docs/design/workspace-sandbox-step4.md §9.2). The server runs in a
+# container and drives the host's Docker through its socket; the settings follow upstream's reference compose
+# (server/docker-compose.example.yaml): sandboxes publish execd on the host, the server reaches them at
+# host.docker.internal, and the test JVM reaches execd only through the server's proxy route.
+[server]
+host = "0.0.0.0"
+port = 8090
+api_key = "${API_KEY}"
+max_sandbox_timeout_seconds = 7200
+
+[proxy]
+resolve_internal = false
+
+[log]
+level = "INFO"
+
+[runtime]
+type = "docker"
+execd_image = "${EXECD_IMAGE}"
+
+[storage]
+allowed_host_paths = []
+
+[store]
+type = "sqlite"
+path = "/tmp/opensandbox.db"
+
+[docker]
+network_mode = "bridge"
+host_ip = "host.docker.internal"
+drop_capabilities = ["AUDIT_WRITE", "MKNOD", "NET_ADMIN", "NET_RAW", "SYS_ADMIN", "SYS_MODULE", "SYS_PTRACE", "SYS_TIME", "SYS_TTY_CONFIG"]
+no_new_privileges = true
+apparmor_profile = ""
+pids_limit = 4096
+seccomp_profile = ""
+
+[ingress]
+mode = "direct"
+
+[egress]
+image = "${EGRESS_IMAGE}"
+mode = "${EGRESS_MODE}"
+readiness_timeout_seconds = 30.0

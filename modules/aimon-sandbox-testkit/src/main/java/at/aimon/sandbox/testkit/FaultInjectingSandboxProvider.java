@@ -9,10 +9,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
 
+import at.aimon.sandbox.provider.Capability;
 import at.aimon.sandbox.provider.CreateSpec;
 import at.aimon.sandbox.provider.ExecSpec;
 import at.aimon.sandbox.provider.FileStat;
@@ -27,6 +29,7 @@ import at.aimon.sandbox.provider.SandboxNotFoundException;
 import at.aimon.sandbox.provider.SandboxProvider;
 import at.aimon.sandbox.provider.SandboxProviderException;
 import at.aimon.sandbox.provider.SharedVolumes;
+import at.aimon.sandbox.provider.VerificationFailure;
 import at.aimon.sandbox.provider.WriteMode;
 
 /**
@@ -44,7 +47,7 @@ public final class FaultInjectingSandboxProvider implements SandboxProvider {
     /** What can be intercepted. */
     // spotless:off
     public enum Operation {
-        CREATE, STATUS, PAUSE, RESUME, EXTEND_EXPIRY, DESTROY, LIST, CONNECT,
+        CREATE, STATUS, PAUSE, RESUME, EXTEND_EXPIRY, DESTROY, LIST, CONNECT, VERIFY,
         RUN,
         FILES_READ, FILES_WRITE, FILES_STAT, FILES_LIST, FILES_MKDIR, FILES_DELETE, FILES_MOVE
     }
@@ -300,6 +303,11 @@ public final class FaultInjectingSandboxProvider implements SandboxProvider {
     @Override
     public List<ProviderSandbox> list(Map<String, String> labels) {
         return call(Operation.LIST, null, () -> delegate.list(labels));
+    }
+
+    @Override
+    public List<VerificationFailure> verify(ProviderSandboxRef ref, Set<Capability> required) {
+        return call(Operation.VERIFY, ref, () -> delegate.verify(ref, required));
     }
 
     @Override

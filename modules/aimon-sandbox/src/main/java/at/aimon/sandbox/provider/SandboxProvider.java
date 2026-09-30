@@ -4,11 +4,12 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 /**
  * The infrastructure that creates sandboxes (docs/design/workspace-sandbox.md §6.1). The production implementation is
- * OpenSandbox ({@code aimon-sandbox-opensandbox}, implementation step 4); {@code aimon-sandbox-testkit} holds a
- * local-process one for tests and a contract suite every implementation must pass.
+ * OpenSandbox ({@code aimon-sandbox-opensandbox}); {@code aimon-sandbox-testkit} holds a local-process one for tests
+ * and a contract suite every implementation must pass.
  *
  * <p>
  * A provider only does what the workspace record decided: "reuse if present" is the record's call, not
@@ -93,6 +94,25 @@ public interface SandboxProvider extends AutoCloseable {
      *             when it does not exist
      */
     SandboxConnection connect(ProviderSandboxRef ref);
+
+    /**
+     * Checks, on a live sandbox, what only the provider can see — for OpenSandbox the egress enforcement mode the
+     * server applied and the credential bindings its vault holds (§11.3). Called once per generation in the seed step,
+     * before the seed script; idempotent.
+     *
+     * @param ref
+     *            the sandbox
+     * @param required
+     *            the profile's required capabilities, after {@code insecure-allow}
+     * @return the failed checks, each permanent for this profile; empty when everything holds or nothing is checkable
+     * @throws SandboxNotFoundException
+     *             when the sandbox is gone
+     * @throws SandboxProviderException
+     *             (transient) when a check could not run
+     */
+    default List<VerificationFailure> verify(ProviderSandboxRef ref, Set<Capability> required) {
+        return List.of();
+    }
 
     /** Releases client resources. Never destroys sandboxes. */
     @Override

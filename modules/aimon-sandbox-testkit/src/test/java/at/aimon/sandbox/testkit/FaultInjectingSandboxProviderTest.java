@@ -81,6 +81,16 @@ class FaultInjectingSandboxProviderTest {
     }
 
     @Test
+    void verifyPassesThroughAndCanFail() {
+        final ProviderSandboxRef ref = faults.create(spec("v"));
+        faults.injectOnce(Operation.VERIFY, Fault.notFound());
+
+        assertThatThrownBy(() -> faults.verify(ref, java.util.Set.of())).isInstanceOf(SandboxNotFoundException.class);
+        assertThat(faults.verify(ref, java.util.Set.of())).isEmpty();
+        assertThat(faults.calls(Operation.VERIFY)).isEqualTo(2);
+    }
+
+    @Test
     void connectionsAndFilesAreWrappedToo() throws Exception {
         final SandboxConnection connection = faults.connect(faults.create(spec("d")));
         faults.inject(Operation.FILES_WRITE, Fault.delay(Duration.ofMillis(50)));

@@ -11,6 +11,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Predicate;
 import java.util.function.UnaryOperator;
 
@@ -40,17 +41,17 @@ import at.aimon.sandbox.provider.SandboxProviderException;
  * <p>
  * Build it through {@code WorkspaceSandbox}: {@link #builder()} runs none of the startup validation (§13.2), so a
  * hand-wired manager would silently accept profiles this version refuses — {@code pause-after}, {@code seed},
- * shared access, credentials — and act on them as if they were not there.
+ * shared access, unchecked credential bindings — and act on them as if they were not there.
  *
  * <p>
  * Every write is read → decide → {@code update(id, expectedVersion, next)}; on {@link StaleVersionException} the
  * record is re-read and the decision re-made, up to {@code casRetries} times (§5.3). Provider calls happen only after
  * the CAS that authorises them. A CAS lost after a provider call never destroys what the call made — the sandbox may be
- * the winner's (§21); implementation step 3 leaves such a sandbox to provider expiry until reconciliation arrives
- * with step 4.
+ * the winner's (§21); the janitor's reconciliation ({@code SandboxReconciler}) reclaims it once it is provably
+ * nobody's.
  *
  * <p>
- * Implementation step 3 provisions {@code primary} only, on a single node, without {@code PAUSE_RESUME}.
+ * Provisions {@code primary} only, without {@code PAUSE_RESUME} (implementation steps 3–4).
  */
 public final class SandboxWorkspaceManager {
 
@@ -97,7 +98,7 @@ public final class SandboxWorkspaceManager {
         this.callers = Objects.requireNonNull(builder.callers, "callers must not be null");
         this.clock = Objects.requireNonNull(builder.clock, "clock must not be null");
         this.scheduler = Objects.requireNonNull(builder.scheduler, "scheduler must not be null");
-        this.seeder = new SandboxSeeder(settings.provisionTimeout());
+        this.seeder = new SandboxSeeder(settings.provisionTimeout(), provider.capabilities().controlPlaneEndpoints());
     }
 
     /**
@@ -398,7 +399,7 @@ public final class SandboxWorkspaceManager {
                 current -> sameClaim(current, slot).map(s -> current.withSlot(s.toBuilder().state(SlotState.RUNNING)
                         .providerRef(ref).provisioning(null).failure(null).build())).orElse(null));
         if (running.isEmpty()) {
-            log.warn("Lost the RUNNING CAS after creating {} ({}); it is left to provider expiry", ref, key);
+            log.warn("Lost the RUNNING CAS after creating {} ({}); it is left to reconciliation", ref, key);
             return;
         }
         emit(SandboxEvent.Type.PROVISIONED, running.get(), running.get().slot(slot.name()).orElseThrow(), key);
@@ -440,19 +441,27 @@ public final class SandboxWorkspaceManager {
                 .orElseGet(() -> new SandboxUnavailableException("the sandbox could not be provisioned: " + reason));
     }
 
-    /** Seeds the generation (§6.9) and records {@code seeded=true}, or FAILED(permanent) on a failed check. */
+    /**
+     * Seeds the generation (§6.9) and records {@code seeded=true}, or FAILED(permanent) on a failed check. The
+     * provider's own checks ({@link SandboxProvider#verify}: egress enforcement, vault bindings) run first, then the
+     * seed script (§11.3).
+     */
     private void seed(SandboxWorkspace workspace, SandboxSlot slot, SandboxProfile profile,
             SandboxConnection connection, String root) {
-        final Optional<SandboxSeeder.Failure> failure;
+        final ProviderSandboxRef ref = slot.providerRef().orElseThrow();
+        Optional<SandboxSeeder.Failure> failure;
         try {
-            failure = seeder.seed(connection, profile, root);
+            failure = provider.verify(ref, profile.requiredCapabilities()).stream().findFirst()
+                    .map(f -> new SandboxSeeder.Failure(f.step(), f.reason()));
+            if (failure.isEmpty()) {
+                failure = seeder.seed(connection, profile, root);
+            }
         } catch (SandboxNotFoundException e) {
             activity(workspace, slot, profile).markLost();
             throw new SandboxUnavailableException(LOST_MESSAGE, e);
         } catch (RuntimeException e) {
             throw new SandboxUnavailableException("the sandbox could not be prepared: " + e.getMessage(), e);
         }
-        final ProviderSandboxRef ref = slot.providerRef().orElseThrow();
         if (failure.isPresent()) {
             final Instant now = clock.instant();
             final SlotFailure recorded = SlotFailure.builder().at(now).kind(SlotFailure.Kind.PERMANENT)
@@ -728,6 +737,68 @@ public final class SandboxWorkspaceManager {
                 (name, slot) -> slots.put(name, slot.state() == SlotState.TERMINATED ? slot : slot.terminated(now)));
         return workspace.toBuilder().state(WorkspaceState.OPEN).incarnation(newIncarnation()).stateSince(now)
                 .closeCause(null).slots(slots).build();
+    }
+
+    // ---------------------------------------------------------------------------------------------------------------
+    // reconciliation (§10.4 item 2) — every write guarded on generation, providerRef and state
+    // ---------------------------------------------------------------------------------------------------------------
+
+    private static Optional<SandboxSlot> sameSandbox(SandboxWorkspace current, SandboxSlot slot) {
+        return current.slot(slot.name()).filter(s -> (s.state() == SlotState.RUNNING || s.state() == SlotState.PAUSED)
+                && s.generation() == slot.generation() && s.providerRef().equals(slot.providerRef()));
+    }
+
+    /**
+     * Records that reconciliation found the slot's sandbox missing, unless it already was.
+     *
+     * @return whether this call recorded it
+     */
+    boolean markMissing(SandboxWorkspaceId id, SandboxSlot slot, Instant now) {
+        return mutate(id, current -> sameSandbox(current, slot).filter(s -> s.missingSince().isEmpty())
+                .map(s -> current.withSlot(s.toBuilder().missingSince(now).build())).orElse(null)).isPresent();
+    }
+
+    /**
+     * Clears a {@code missingSince} after the sandbox was seen again.
+     *
+     * @return whether this call cleared it
+     */
+    boolean clearMissing(SandboxWorkspaceId id, SandboxSlot slot) {
+        return mutate(id, current -> sameSandbox(current, slot).filter(s -> s.missingSince().isPresent())
+                .map(s -> current.withSlot(s.toBuilder().missingSince(null).build())).orElse(null)).isPresent();
+    }
+
+    /**
+     * Declares the slot's sandbox LOST once it has been missing for {@code lost-confirm-after} (§10.4): TERMINATED with
+     * {@code lostAt}, the connection evicted, a {@code LOST} event. The next call provisions a new generation and tells
+     * the model {@code /workspace} was reset.
+     *
+     * @return whether this call declared it lost
+     */
+    boolean confirmLost(SandboxWorkspaceId id, SandboxSlot slot, Instant now) {
+        // The missingSince the CAS acted on, which may be newer than the caller's snapshot.
+        final AtomicReference<Instant> missingSince = new AtomicReference<>();
+        final Optional<SandboxWorkspace> lost = mutate(id,
+                current -> sameSandbox(current, slot)
+                        .filter(s -> s.missingSince()
+                                .map(since -> !now.isBefore(since.plus(settings.lostConfirmAfter()))).orElse(false))
+                        .map(s -> {
+                            missingSince.set(s.missingSince().orElseThrow());
+                            return current
+                                    .withSlot(s.terminated(now).toBuilder().missingSince(null).lostAt(now).build());
+                        }).orElse(null));
+        if (lost.isEmpty()) {
+            return false;
+        }
+        slot.providerRef().ifPresent(connections::evict);
+        final SandboxWorkspace stored = lost.get();
+        emit(SandboxEvent.Type.LOST, stored, stored.slot(slot.name()).orElseThrow(),
+                "reconciliation found the sandbox missing since " + missingSince.get());
+        return true;
+    }
+
+    SandboxProvider provider() {
+        return provider;
     }
 
     // ---------------------------------------------------------------------------------------------------------------

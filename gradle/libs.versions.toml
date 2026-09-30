@@ -30,6 +30,10 @@ junit = "5.12.2"
 assertj = "3.27.7"
 mockito = "5.23.0"
 
+# The docker test tier of aimon-sandbox-opensandbox starts an OpenSandbox server per run (docs/design/workspace-sandbox.md
+# §16). 2.x is the line that speaks to Docker Engine 29's minimum API version.
+testcontainers = "2.0.5"
+
 checkstyle = "10.12.5"
 spotless = "6.25.0"
 maven-publish = "0.32.0"
@@ -53,6 +57,7 @@ junit-platform-launcher = { module = "org.junit.platform:junit-platform-launcher
 assertj-core = { module = "org.assertj:assertj-core", version.ref = "assertj" }
 mockito-core = { module = "org.mockito:mockito-core", version.ref = "mockito" }
 mockito-junit-jupiter = { module = "org.mockito:mockito-junit-jupiter", version.ref = "mockito" }
+testcontainers = { module = "org.testcontainers:testcontainers", version.ref = "testcontainers" }
 
 [bundles]
 testing = ["junit-jupiter", "assertj-core", "mockito-core", "mockito-junit-jupiter"]
