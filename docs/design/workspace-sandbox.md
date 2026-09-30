@@ -1299,7 +1299,7 @@ artifact 는 샌드박스보다 오래 살아야 한다. 샌드박스 파일을 
 | 프로파일: egress 허용 목록 | 데이터 유출, 메타데이터 엔드포인트, 내부망 | OpenSandbox network policy(`dns+nft`). **기본 전부 차단** — 차단 범위는 아래 표 |
 | 프로파일: 자격 증명 바인딩 | 토큰 탈취, 토큰 오남용 | OpenSandbox credential vault — 샌드박스에는 가짜 값만, egress 에서 실제 값 주입. 범위는 아래 |
 | 프로파일: 자원 | 자원 고갈 | cpu · memory · disk · pids |
-| 비루트 · 권한 상승 금지 · capability 제거 · 서비스 계정 토큰 미마운트 | 권한 상승, K8s API 접근 | 파드 SecurityContext. `HARDENED_SECURITY_CONTEXT` 를 광고하지 않으면 기동 거부하고, seed 가 uid 와 토큰 경로를 다시 검사한다(§6.4, §11.3) |
+| 비루트 · 권한 상승 금지 · capability 제거 · 서비스 계정 토큰 미마운트 | 권한 상승, K8s API 접근 | 샌드박스 컨테이너의 SecurityContext(OpenSandbox 서버의 템플릿, §13.3). `HARDENED_SECURITY_CONTEXT` 를 광고하지 않으면 기동 거부하고, seed 가 uid 와 토큰 경로를 다시 검사한다(§6.4, §11.3) |
 | 프로파일: `sharedAccess` | `/shared` 를 거친 슬롯 간 영향(bare 저장소 훅·ref, 공유 문서) | 볼륨 마운트 모드(§11.3). **기본 `none`** |
 | 쿼터 + admission | 워크스페이스·테넌트가 샌드박스를 무한히 만들기 | `WorkspaceQuota` + `SandboxAdmission`(§12.2) |
 
@@ -1426,6 +1426,8 @@ aimon:
       egress-enforcement: dns+nft    # operator-declared; without it EGRESS_POLICY is not advertised (§6.4)
       volume-reclaimer: kubernetes   # kubernetes | docker | none; none -> SHARED_VOLUME not advertised
       network-isolation: declared    # operator put east-west/control-plane blocking in place (§12.1)
+      hardened-security-context: declared   # operator hardened the server's sandbox-container template (§13.3)
+      runtime-class: gvisor          # the server's k8s_runtime_class; profiles' runtime-class must equal it (§6.4)
     default-profile: standard
     profiles:
       standard:
@@ -1475,6 +1477,7 @@ aimon:
 - `retain-for ≤ closed-retention`
 - 한 프로파일의 자격 증명 바인딩끼리 host · 경로 범위가 겹치지 않는다(§12.1)
 - 프로파일이 요구하는 capability 를 프로바이더가 광고한다(§6.4)
+- 프로파일의 `runtime-class` 는 프로바이더가 선언한 서버의 class 와 같다 — OpenSandbox 는 요청마다 class 를 받지 않는다(§6.4)
 - `require-principal: true` 이면 `SandboxTenantResolver` 와 `SessionOwnerLookup` 빈이 있다
 - `default-profile` 과 `allowed-profiles` 가 모두 정의된 프로파일이다
 - `insecure-allow` 는 `HARDENED_SECURITY_CONTEXT` · `RUNTIME_CLASS` · `NETWORK_ISOLATION` 만 면제한다
@@ -1506,6 +1509,7 @@ aimon:
 **OpenSandbox 서버의 엔드포인트는 AIMON 노드만 닿는 네트워크에 둔다.** 단일 테넌트 모드의 서버 프록시 경로
 (`/v1/sandboxes/{id}/proxy/{port}`)는 API 키를 검사하지 않고, execd 도 토큰을 검사하지 않는다 — 서버나 execd 포트에 닿는
 누구든 샌드박스 id 만 알면 root 로 명령을 실행한다(스파이크 §4-5). 그래서 샌드박스 id 는 INFO 로그에 남기지 않는다.
+span 속성 `aimon.sandbox.provider_id`(§14)는 tracing 백엔드를 읽을 수 있는 사람이 이 네트워크에도 닿는다는 전제로 둔다.
 Docker 런타임은 이 경계를 세울 수 없으므로 로컬 개발 전용이다(`insecure-allow: [NETWORK_ISOLATION, HARDENED_SECURITY_CONTEXT]`).
 
 ---
@@ -1624,7 +1628,8 @@ found·"생성은 됐지만 응답 유실"·노드 종료(호출 경로를 그 �
 계약 스위트를 돌린다. 서버는 Docker 소켓 마운트가 필요하고, egress 시나리오는 사이드카에 `NET_ADMIN`/nft 권한이
 필요하다. CI 러너가 이를 허용하지 않으면 공유 테스트 서버를 쓰되 실행마다 다른 `deployment`(`ci-{runId}`)를 주어 서로의
 샌드박스를 조정하지 않게 한다. 어느 쪽을 쓰는지는 2단계 스파이크가 정했다 — 러너의 Docker 소켓으로 충분하므로(DinD 불필요, 서버 기동 약 1초)
-실행마다 서버를 띄운다. K8s 런타임(kind, 준비 3–4분)은 릴리스 전과 수동 실행이다(스파이크 §9).
+실행마다 서버를 띄운다. 단 amd64 execd 이미지와 러너 커널의 `dns+nft` 는 아직 러너에서 돌려 보지 않았으므로 4단계의 첫 CI 가
+확인한다. K8s 런타임(kind, 준비 3–4분)은 릴리스 전과 수동 실행이다(스파이크 §9).
 
 **K8s 런타임 검증**(`@Tag("k8s")`) — K8s 에서만 드러나는 항목을 kind 클러스터 + OpenSandbox K8s 런타임으로 확인한다.
 단계마다 그 단계의 기능만 통과 조건이 된다 — 4단계: 라벨 검증, runtimeClass·SecurityContext 적용, east-west·제어면 차단.

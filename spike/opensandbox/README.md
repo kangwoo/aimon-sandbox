@@ -16,7 +16,7 @@ API 키(`spike-docker-key-…`, `spike-key`)는 로컬에서 쓰고 버린 값�
 ## Docker 런타임
 
 ```bash
-git clone https://github.com/alibaba/OpenSandbox && git -C OpenSandbox checkout 3738975
+git clone https://github.com/opensandbox-group/OpenSandbox && git -C OpenSandbox checkout 3738975
 docker build -t spike-docker-base:1 spike/opensandbox/docker/image
 OPENSANDBOX_SRC=$PWD/OpenSandbox spike/opensandbox/docker/start-server.sh &   # :8090
 cd spike/opensandbox/docker && uv run --with httpx python probes/a_lifecycle.py

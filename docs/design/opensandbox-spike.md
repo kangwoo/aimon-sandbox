@@ -1,7 +1,7 @@
 # OpenSandbox 스파이크 — 2단계 결과
 
 > Status: **DONE** — [`workspace-sandbox.md`](workspace-sandbox.md) §18 의 2단계. §6.4 의 "구현 시 확인" 칸을 실서버에
-> 대고 닫았다. 결론과 설계 변경은 `workspace-sandbox.md` 에 옮겼고(§6.1 · §6.4 · §9 · §10.2 · §12.1 · §20), 이 문서는
+> 대고 닫았다. 결론과 설계 변경은 `workspace-sandbox.md` 에 옮겼고(§6.1 · §6.4 · §9 · §10.3 · §12.1 · §13.3 · §16 · §18 · §20), 이 문서는
 > 그 근거와 4단계 구현이 알아야 할 서버 동작을 모은다. SPI 의 모양(메서드와 타입)은 바뀌지 않았다 — 바뀐 것은 계약의
 > 설명과 capability 를 광고하는 조건이다. 출력의 바이트 보존(§4-3)만 4단계가 정할 문제로 남는다.
 
@@ -87,9 +87,9 @@ file:line · `B-docker.md` · `C-k8s.md` 는 실측), REST 를 직접 부르는 
    같은 값)에서 온다. `timeout` 을 빼면 영원히 살므로 프로바이더는 **항상** `timeout` 을 보낸다. (§6.1, §6.4)
 2. **pause 는 만료를 멈추지 않고, K8s 에서는 pause 중 renew 가 샌드박스를 망가뜨린다.** 멈춘 샌드박스도 `expiresAt` 에
    지워진다. K8s 에서 멈춘 샌드박스를 renew 하면 컨트롤러가 **원래 이미지로** 파드를 다시 만들고 `Failed` 가 되며
-   resume 은 409 다(스냅숏 상태를 잃는다 — 업스트림 버그). → pause 하기 **전에** 만료를 `pausedUntil` 너머로 늘리고,
+   resume 은 409 다(스냅숏 상태를 잃는다 — 업스트림 버그). → pause 하기 **전에** 만료를 `now + terminateAfter` 로 민 뒤 멈추고,
    멈춘 샌드박스에는 `extendExpiry` 를 부르지 않는다. 프로바이더는 `Paused` 상태의 `extendExpiry` 를 거부한다. pause 중의
-   execd 호출은 실패하지 않고 **멈춘다**(Docker) — 모든 execd 호출에 클라이언트 타임아웃을 둔다. (§10.2, 7단계)
+   execd 호출은 실패하지 않고 **멈춘다**(Docker) — 모든 execd 호출에 클라이언트 타임아웃을 둔다. (§10.3, 7단계)
 3. **출력은 줄 단위로 온다.** SPI 의 `ExecOutcome` 은 바이트를 약속하지만 SSE 로는 바이트를 되살릴 수 없다. 프로바이더는
    이벤트를 줄로 이어 붙이고(`"\n"` 이벤트는 빈 줄) 줄마다 `\n` 을 붙인다. 그 결과 `\r` 은 줄바꿈이 되고, 마지막 줄바꿈은
    늘 있으며, 잘못된 UTF-8 은 U+FFFD 다. §9 는 이것으로 충분하다 — 트레일러는 줄 하나이고 앞에 `\n` 이 있으며, 잘림은
@@ -107,7 +107,7 @@ file:line · `B-docker.md` · `C-k8s.md` 는 실측), REST 를 직접 부르는 
    인터페이스에 열린다. 서버의 프록시 경로 `/v1/sandboxes/{id}/proxy/{port}` 는 단일 테넌트 모드에서 **API 키 검사를
    건너뛴다** — 샌드박스 id 만 알면 누구든 root 로 명령을 실행한다(실측). K8s 도 단일 테넌트면 프록시 경로가 같다. →
    OpenSandbox 서버의 엔드포인트는 AIMON 노드만 닿는 네트워크에 둔다(운영 계약). 샌드박스 id 를 INFO 로그에 남기지
-   않는다. Docker 런타임은 로컬 개발 전용이다. (§12.1, §13.3)
+   않는다. Docker 런타임은 로컬 개발 전용이다. (§13.3)
 6. **egress 모드는 선언만이 아니라 대조할 수 있다.** `GET /sandboxes/{id}/networkpolicy` 가 `enforcementMode` 를 준다. →
    기동 시에는 여전히 선언(`egress-enforcement: dns+nft`)으로 광고하고, egress 가 있는 프로파일의 seed 가 첫 프로비저닝에서
    실제 모드를 대조해 다르면 FAILED(영구, step `egress`)로 둔다. 선언이 틀린 배포가 조용히 열린 채 돌지 않는다. (§6.4, §11.3)
