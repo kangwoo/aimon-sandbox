@@ -88,6 +88,19 @@ final class VaultClient {
         }
     }
 
+    /** Removes the vault; an absent vault is already removed. */
+    void delete() {
+        final HttpResponse<byte[]> response = sidecar.send(ep -> ep.request("/credential-vault").DELETE(),
+                "delete credential vault");
+        try {
+            HttpErrors.check(response, "delete credential vault");
+        } catch (HttpErrors.NotFound e) {
+            sidecar.requireSandbox();
+        } catch (SandboxProviderException e) {
+            throw classify(response.statusCode(), e);
+        }
+    }
+
     /** 412 is the sidecar's "not in dns+nft, or no MITM": the server's configuration, not a passing fault. */
     private static SandboxProviderException classify(int status, SandboxProviderException e) {
         if (status == 412) {

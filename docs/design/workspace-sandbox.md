@@ -1443,7 +1443,7 @@ RUNNING CAS 순서라 두 슬롯이 동시에 resume 하면 잠깐 넘칠 수 �
 | `image` | `ghcr.io/kangwoo/aimon-sandbox-runtime:1` |
 | `platform` · `osVersion` · `shellName` | `linux` · `Linux 6.x` · `bash` — 서술자에 그대로 들어간다(§7). seed 가 실제 이미지와 대조한다 |
 | `cpu` · `memory` · `disk` · `pids` | `2` · `4Gi` · `20Gi` · `512` |
-| `runtimeClass` | `gvisor` |
+| `runtimeClass` | `kata` — 프로바이더가 선언한 서버의 class 와 같아야 한다(§6.4). gVisor 는 egress 정책과 같이 쓸 수 없다 |
 | `egress` | `[]` (전부 차단, `defaultAction: deny` 로 명시해 보낸다 — §6.4) |
 | `credentials` | 자격 증명 바인딩 이름 목록 — vault 쪽 정의(host · 경로 prefix · 메서드, §12.1)를 가리킨다 |
 | `env` | 정적 환경 변수. **비밀 금지**(§12.1) |

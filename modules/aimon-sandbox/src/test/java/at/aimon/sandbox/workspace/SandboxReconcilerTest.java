@@ -28,6 +28,7 @@ import at.aimon.sandbox.SandboxHarness;
 import at.aimon.sandbox.provider.ProviderSandbox;
 import at.aimon.sandbox.provider.ProviderSandboxRef;
 import at.aimon.sandbox.provider.ProviderSandboxState;
+import at.aimon.sandbox.provider.SandboxConnection;
 import at.aimon.sandbox.provider.SandboxLabels;
 import at.aimon.sandbox.provider.SandboxProvider;
 import at.aimon.sandbox.provider.SandboxProviderException;
@@ -389,6 +390,23 @@ class SandboxReconcilerTest {
             final String next = bash(harness.mainTurn(session, ALICE), "echo back").stdout();
             assertThat(next).isEqualTo("back\n");
             assertThat(harness.primary(session).generation()).isEqualTo(2);
+        }
+
+        @Test
+        void aLostConfirmationTheRecordNoLongerSupportsLeavesTheConnectionAndEmitsNothing() throws Exception {
+            final SessionId session = started();
+            final SandboxSlot slot = harness.primary(session);
+            final ProviderSandboxRef ref = slot.providerRef().orElseThrow();
+            final SandboxConnection before = harness.sandbox.manager().connections().get(ref);
+
+            // Another pass saw the sandbox again and cleared the mark: this caller's snapshot is out of date.
+            assertThat(harness.sandbox.manager().confirmLost(harness.record(session).id(),
+                    slot.toBuilder().missingSince(harness.clock.instant().minusSeconds(3600)).build(),
+                    harness.clock.instant())).isFalse();
+
+            assertThat(harness.sandbox.manager().connections().get(ref)).isSameAs(before);
+            assertThat(events()).doesNotContain(SandboxEvent.Type.LOST);
+            assertThat(harness.primary(session).state()).isEqualTo(SlotState.RUNNING);
         }
 
         @Test

@@ -25,6 +25,7 @@ import org.junit.jupiter.api.Test;
 
 import at.aimon.core.filesystem.exception.FileAlreadyExistsException;
 import at.aimon.core.filesystem.exception.FileNotFoundException;
+import at.aimon.core.filesystem.exception.VirtualFileSystemException;
 import at.aimon.sandbox.provider.Capability;
 import at.aimon.sandbox.provider.CreateSpec;
 import at.aimon.sandbox.provider.ExecOutcome;
@@ -367,6 +368,19 @@ public abstract class SandboxProviderContract {
 
         assertThatThrownBy(() -> connection.files().write("/workspace/a.txt", new ByteArrayInputStream(new byte[1]), 1,
                 WriteMode.CREATE_NEW)).isInstanceOf(FileAlreadyExistsException.class);
+    }
+
+    @Test
+    void writeRefusesAnExistingDirectoryInEitherMode() {
+        final SandboxConnection connection = provider.connect(newSandbox());
+        connection.files().createDirectories("/workspace/d");
+
+        for (WriteMode mode : WriteMode.values()) {
+            assertThatThrownBy(
+                    () -> connection.files().write("/workspace/d", new ByteArrayInputStream(new byte[1]), 1, mode))
+                    .as(mode.name()).isInstanceOf(VirtualFileSystemException.class);
+        }
+        assertThat(connection.files().list("/workspace/d", false, 100)).isEmpty();
     }
 
     @Test

@@ -8,7 +8,11 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.net.http.HttpTimeoutException;
 import java.time.Duration;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Semaphore;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -79,13 +83,29 @@ final class Transport {
         }
     }
 
-    /** A streamed response: returns once the headers arrived; takes no permit and has no overall timeout. */
+    /**
+     * A streamed response: returns once the headers arrived; takes no permit. The headers must arrive within
+     * {@code request-timeout} (execd answers {@code /command} with its {@code init} event at once, so a server that
+     * sends nothing is hung); the body has no overall timeout.
+     */
     HttpResponse<InputStream> stream(HttpRequest request, String what) {
+        final CompletableFuture<HttpResponse<InputStream>> response = client.sendAsync(request,
+                HttpResponse.BodyHandlers.ofInputStream());
         try {
-            return client.send(request, HttpResponse.BodyHandlers.ofInputStream());
-        } catch (IOException e) {
-            throw transportFailure(what, e);
+            return response.get(requestTimeout.toMillis(), TimeUnit.MILLISECONDS);
+        } catch (TimeoutException e) {
+            response.cancel(true);
+            throw new SandboxProviderException(
+                    "OpenSandbox sent no response headers within " + requestTimeout + " (" + what + ")",
+                    SandboxProviderException.Kind.TRANSIENT, e);
+        } catch (ExecutionException e) {
+            if (e.getCause() instanceof IOException io) {
+                throw transportFailure(what, io);
+            }
+            throw new SandboxProviderException("OpenSandbox call failed (" + what + "): " + e.getCause(),
+                    SandboxProviderException.Kind.TRANSIENT, e.getCause());
         } catch (InterruptedException e) {
+            response.cancel(true);
             Thread.currentThread().interrupt();
             throw new SandboxProviderException("interrupted while calling OpenSandbox (" + what + ")");
         }

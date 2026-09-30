@@ -11,6 +11,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Predicate;
 import java.util.function.UnaryOperator;
 
@@ -775,15 +776,25 @@ public final class SandboxWorkspaceManager {
      * @return whether this call declared it lost
      */
     boolean confirmLost(SandboxWorkspaceId id, SandboxSlot slot, Instant now) {
-        final Optional<SandboxWorkspace> lost = mutate(id, current -> sameSandbox(current, slot)
-                .filter(s -> s.missingSince().map(since -> !now.isBefore(since.plus(settings.lostConfirmAfter())))
-                        .orElse(false))
-                .map(s -> current.withSlot(s.terminated(now).toBuilder().missingSince(null).lostAt(now).build()))
-                .orElse(null));
+        // The missingSince the CAS acted on, which may be newer than the caller's snapshot.
+        final AtomicReference<Instant> missingSince = new AtomicReference<>();
+        final Optional<SandboxWorkspace> lost = mutate(id,
+                current -> sameSandbox(current, slot)
+                        .filter(s -> s.missingSince()
+                                .map(since -> !now.isBefore(since.plus(settings.lostConfirmAfter()))).orElse(false))
+                        .map(s -> {
+                            missingSince.set(s.missingSince().orElseThrow());
+                            return current
+                                    .withSlot(s.terminated(now).toBuilder().missingSince(null).lostAt(now).build());
+                        }).orElse(null));
+        if (lost.isEmpty()) {
+            return false;
+        }
         slot.providerRef().ifPresent(connections::evict);
-        lost.ifPresent(w -> emit(SandboxEvent.Type.LOST, w, slot,
-                "reconciliation found the sandbox missing since " + slot.missingSince().orElse(null)));
-        return lost.isPresent();
+        final SandboxWorkspace stored = lost.get();
+        emit(SandboxEvent.Type.LOST, stored, stored.slot(slot.name()).orElseThrow(),
+                "reconciliation found the sandbox missing since " + missingSince.get());
+        return true;
     }
 
     SandboxProvider provider() {

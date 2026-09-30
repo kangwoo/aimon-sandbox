@@ -143,8 +143,14 @@ public final class OpenSandboxProvider implements SandboxProvider {
         }
         if (!spec.credentials().isEmpty()) {
             final VaultClient vault = vault(ref);
+            // verify() demands exactly these bindings, so a vault holding more or fewer (an earlier create of the
+            // same key with other credentials) is replaced, not topped up.
             final Optional<TreeSet<String>> held = vault.bindingNames();
-            if (held.isEmpty() || !held.get().containsAll(spec.credentials())) {
+            final boolean exact = held.isPresent() && held.get().equals(new TreeSet<>(spec.credentials()));
+            if (!exact) {
+                if (held.isPresent()) {
+                    vault.delete();
+                }
                 vault.create(spec.credentials(), config.credentials());
             }
         }

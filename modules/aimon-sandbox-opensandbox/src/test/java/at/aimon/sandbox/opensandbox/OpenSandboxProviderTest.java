@@ -29,6 +29,7 @@ import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.node.ArrayNode;
 
 import at.aimon.core.filesystem.exception.FileAlreadyExistsException;
 import at.aimon.core.filesystem.exception.FileNotFoundException;
@@ -794,6 +795,21 @@ class OpenSandboxProviderTest {
 
             assertThat(vaulted.verify(ref, Set.of(Capability.CREDENTIAL_INJECTION)))
                     .extracting(VerificationFailure::step).containsExactly("credentials");
+        }
+
+        @Test
+        void aVaultHoldingOtherBindingsIsReplacedSoVerificationPasses() {
+            final CreateSpec spec = spec("ws:v", 1).egress(List.of("github.com")).credentials(List.of("gh")).build();
+            vaulted.create(spec);
+            final ArrayNode bindings = FakeOpenSandboxServer.JSON.createObjectNode().putArray("bindings");
+            bindings.addObject().put("name", "gh");
+            bindings.addObject().put("name", "other");
+            server.vault = FakeOpenSandboxServer.JSON.createObjectNode().set("bindings", bindings);
+
+            final ProviderSandboxRef ref = vaulted.create(spec);
+
+            assertThat(server.vault.path("bindings")).extracting(b -> b.path("name").asText()).containsExactly("gh");
+            assertThat(vaulted.verify(ref, Set.of(Capability.CREDENTIAL_INJECTION))).isEmpty();
         }
 
         @Test

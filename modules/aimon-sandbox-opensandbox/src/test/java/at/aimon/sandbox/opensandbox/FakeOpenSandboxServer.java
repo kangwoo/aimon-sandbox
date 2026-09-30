@@ -425,8 +425,16 @@ final class FakeOpenSandboxServer implements AutoCloseable {
             return Reply.status(404);
         }
         if ("POST".equals(request.method)) {
+            if (vault != null) {
+                return Reply.error(409, "CONFLICT", "vault exists");
+            }
             vault = request.json();
             return Reply.json(201, vault);
+        }
+        if ("DELETE".equals(request.method)) {
+            final boolean existed = vault != null;
+            vault = null;
+            return existed ? Reply.status(204) : Reply.error(404, "NOT_FOUND", "no vault");
         }
         return vault == null ? Reply.error(404, "NOT_FOUND", "no vault") : Reply.json(200, vault);
     }

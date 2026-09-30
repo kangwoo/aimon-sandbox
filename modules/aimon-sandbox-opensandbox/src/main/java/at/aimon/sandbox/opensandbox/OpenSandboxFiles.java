@@ -106,10 +106,11 @@ final class OpenSandboxFiles implements SandboxFiles {
         final String temporary = (directory.equals("/") ? "" : directory) + "/." + path.substring(slash + 1)
                 + ".aimon-tmp-" + UUID.randomUUID();
         upload(temporary, bytes);
-        final String script = mode == WriteMode.CREATE_NEW
-                ? "ln -- \"$1\" \"$2\"; r=$?; rm -f -- \"$1\"; exit $r"
-                : "if [ -d \"$2\" ]; then rm -f -- \"$1\"; echo \"$2: Is a directory\" >&2; exit 21; fi; "
-                        + "mv -f -- \"$1\" \"$2\" || { r=$?; rm -f -- \"$1\"; exit $r; }";
+        // ln and mv both descend into an existing directory target, so a directory is refused first in either mode.
+        final String script = "if [ -d \"$2\" ]; then rm -f -- \"$1\"; echo \"$2: Is a directory\" >&2; exit 21; fi; "
+                + (mode == WriteMode.CREATE_NEW
+                        ? "ln -- \"$1\" \"$2\"; r=$?; rm -f -- \"$1\"; exit $r"
+                        : "mv -f -- \"$1\" \"$2\" || { r=$?; rm -f -- \"$1\"; exit $r; }");
         final ExecOutcome outcome = helper(script, temporary, path);
         if (outcome.exitCode() == 0) {
             return;
@@ -123,8 +124,12 @@ final class OpenSandboxFiles implements SandboxFiles {
 
     private static byte[] readContent(InputStream content, long length, String path) {
         try (content) {
+            if (length > Integer.MAX_VALUE - 8) {
+                throw new VirtualFileSystemException(
+                        "cannot write " + path + ": " + length + " bytes exceeds the largest single upload");
+            }
             if (length >= 0) {
-                return content.readNBytes((int) Math.min(length, Integer.MAX_VALUE - 8));
+                return content.readNBytes((int) length);
             }
             final ByteArrayOutputStream out = new ByteArrayOutputStream();
             content.transferTo(out);
