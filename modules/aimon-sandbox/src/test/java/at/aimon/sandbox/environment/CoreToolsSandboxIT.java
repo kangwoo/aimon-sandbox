@@ -100,7 +100,7 @@ class CoreToolsSandboxIT {
 
             assertThat(started.isSuccess()).as(started.getContent()).isTrue();
             assertThat(started.getContent()).contains("Use KillShell(taskId=\"")
-                    .contains("The environment stops it after 1 hour if it is still running.");
+                    .contains("The environment stops it after 24 hours if it is still running.");
             final Matcher id = Pattern.compile("ID: (\\S+)").matcher(started.getContent());
             assertThat(id.find()).isTrue();
             final String taskId = id.group(1);

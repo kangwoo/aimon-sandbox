@@ -23,21 +23,24 @@ the design and where the implementation departed from it is
   background task as `KILLED`, not `FAILED`. An interrupt without a cancel is still "interrupted and killed". A
   provider whose `kill()` throws no longer makes `execute` throw that exception before the command ended; the partial
   output of a timeout or a cancellation is flagged truncated when it was cut at the capture cap.
-- **Background commands now end after one hour by default**, where they could run for up to 24 hours. Profiles gain
-  `background-command-timeout` (`SandboxProfile.backgroundCommandTimeout`), which the environment returns as core's
-  `backgroundCommandTimeout()`. Unset, it equals `background-heartbeat-limit` (1h): the command ends when it stops
-  being allowed to keep its sandbox awake. Set it higher for commands that must outlive that window. An explicit value
-  must be positive.
+- **Background commands have a stated ceiling, 24 hours by default** — the length they could already run. Profiles
+  gain `background-command-timeout` (`SandboxProfile.backgroundCommandTimeout`, default
+  `SandboxProfile.DEFAULT_BACKGROUND_COMMAND_TIMEOUT`), which the environment returns as core's
+  `backgroundCommandTimeout()`, so core tells the model when the command will be stopped. It is independent of
+  `background-heartbeat-limit` (1h): set the two equal to end a command when it stops being allowed to keep its
+  sandbox awake. An explicit value must be positive.
 - The new field is part of `SandboxProfile.contentHash()`, so every profile's hash changes with this version and a
   slot that failed permanently is retried once after the upgrade.
 - **`bindRuntime` is not overridden.** The provider keeps nothing per `AgentRuntime`; the inherited
   `RuntimeBinding.NONE` meets the contract, and tests pin it (closing a binding stops no command; `resolve` answers
   for an id nobody bound). Close the core stack before `WorkspaceSandbox`.
-- **Skill-declared shell hooks are no longer refused by necessity.** aimon-core 0.3.1 runs them in the execution's
-  sandbox shell, not on the host, so `WorkspaceSandbox.markdownSkillParser()` / `skillHookSetParser()` are now an
-  optional stricter policy; their behaviour is unchanged. With such hooks enabled, a `preTool` shell guard blocks its
-  tool call and an `onStart` shell guard keeps its skill fork from starting when the sandbox is unavailable; hooks that
-  only observe should set `failOpen: true`.
+- **Skill-declared shell hooks are no longer refused.** aimon-core 0.3.1 runs them in the execution's sandbox shell,
+  not on the host, so `WorkspaceSandbox.markdownSkillParser()` and `skillHookSetParser()` are removed (they were never
+  released); a host that wants no skill-declared shell code builds core's `SkillHookSetParser` with
+  `NoOpShellActionExecutor`. A `preTool` shell guard blocks its tool call and an `onStart` shell guard keeps its skill
+  fork from starting when the sandbox is unavailable; hooks that only observe should set `failOpen: true`. New
+  end-to-end tests run a skill's `preTool` shell guard through a real `OrcaAgentExecutor`: it runs in the sandbox, its
+  exit 2 blocks the tool, and it blocks when the sandbox is unavailable unless it declares `failOpen`.
 - README gains a "Wiring" section (`ExecutionEnvironmentSpec.shared`, close order, the notes above).
 - Tests compile against core's `UserLocale` (was `Environment`).
 

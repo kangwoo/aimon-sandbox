@@ -177,8 +177,7 @@ aimon-core (repo: aimon-core)
 **어셈블리는 루트 패키지의 `WorkspaceSandbox` 다.** §3.2 의 애플리케이션 싱글턴은 만드는 순서와 닫는 의무가 있고,
 기동 시 검사(§13.2)는 그 전부를 한 번에 봐야 한다. 이 모듈은 DI 컨테이너를 가정하지 않으므로 `WorkspaceSandbox.builder()`
 가 설정(`SandboxSettings` — §13.2 의 키 가운데 그 단계가 읽는 것만)과 프로바이더를 받아 검사하고, 싱글턴을 만들고,
-`close()` 로 닫는다. 샌드박스는 닫지 않는다 — 워크스페이스 수명이다(§3.2). 스킬 셸 훅을 거부하려는 배치(§12.1)가 쓸 파서도 여기서
-준다(`WorkspaceSandbox.markdownSkillParser()`). 이후 Spring 스타터가 생기면 그 속성이 `SandboxSettings` 로 옮겨 담긴다.
+`close()` 로 닫는다. 샌드박스는 닫지 않는다 — 워크스페이스 수명이다(§3.2). 이후 Spring 스타터가 생기면 그 속성이 `SandboxSettings` 로 옮겨 담긴다.
 
 `aimon-sandbox-testkit` 은 발행한다 — 이 저장소 밖의 프로바이더와 저장소 구현도 계약 스위트를 통과해야 하기
 때문이다(§16). 계약 스위트는 JUnit 5 추상 클래스이므로 testkit 은 JUnit·AssertJ 를 `api` 로 싣는다.
@@ -339,13 +338,12 @@ janitor 가 `pauseAfter` 로 멈추지 않는다. 카운터를 레코드에 두�
 
 **백그라운드 명령 자체에도 상한이 있다.** 프로파일의 `backgroundCommandTimeout` 이고, 환경이 코어의
 `backgroundCommandTimeout()` 으로 이 값을 돌려준다(§7). 코어의 `Bash` 는 이 값을 백그라운드 명령의 타임아웃으로 쓰고,
-시작 응답에서 모델에게 "환경이 이 시간 뒤에 멈춘다" 고 알린다. 설정하지 않으면 `backgroundHeartbeatLimit` 과 같다 —
-명령이 슬롯을 깨워 둘 자격을 잃는 바로 그 시각에 끝난다. 상한이 없으면 heartbeat 가 멈춘 뒤의 명령은 다른 활동이 있고
-없음에 따라 운명이 갈린다. 활동이 없으면 `pauseAfter` 에 얼어붙었다가 `terminateAfter` 에 샌드박스와 함께 사라져
-"샌드박스 소실" 로 끝나고, 활동이 있으면 코어의 워커 스레드 하나를 붙든 채 하루까지 돈다. 상한은 그 대신 설명할 수 있는
-끝 하나를 준다 — 부분 출력을 가진 타임아웃이다. 개발 서버처럼 더 오래 돌아야 하는 명령이 있으면 운영자가
-`backgroundCommandTimeout` 을 `backgroundHeartbeatLimit` 보다 크게 잡는다. 그 명령은 heartbeat 상한 뒤로는 다른 활동이
-슬롯을 깨워 두는 동안에만 산다.
+시작 응답에서 모델에게 "환경이 이 시간 뒤에 멈춘다" 고 알린다. 설정하지 않으면 24시간이다 — 이 모듈이 코어 0.3.1 이전에
+허용하던 길이를 그대로 두어, 첫 릴리스가 백그라운드 명령을 조용히 짧게 끊지 않게 했다. 두 상한은 서로 독립이다.
+heartbeat 상한이 지난 명령은 다른 활동이 있고 없음에 따라 운명이 갈린다. 활동이 없으면 `pauseAfter` 에 얼어붙었다가
+`terminateAfter` 에 샌드박스와 함께 사라져 "샌드박스 소실" 로 끝나고, 활동이 있으면 24시간까지 돌다가 부분 출력을 가진
+타임아웃으로 끝난다. 명령이 슬롯을 깨워 둘 자격을 잃는 시각에 끝내고 싶은 운영자는 `backgroundCommandTimeout` 을
+`backgroundHeartbeatLimit` 과 같게 잡는다.
 
 **명령을 시작하기 전에 슬롯이 RUNNING 인지 다시 본다.** 명령마다 레코드를 읽고(쓰기는 스로틀해도 읽기는 매번),
 활동을 기록했다면 그 CAS 가 성공한 레코드를 기준으로, 슬롯이 RUNNING 이고 generation 이 연결 캐시와 같을 때만 명령을
@@ -588,7 +586,7 @@ EE-42(워크플로 스크립트의 인라인 서브에이전트가 속성을 싣
 | `fork()` 가 있는 요청(포크) | 부모와 같은 워크스페이스, shellKey 는 `exec:{executionId}`. 슬롯은 기본적으로 부모와 같고, 바인딩 정책이 `ForkDefinition` 의 속성을 보고 바꿀 수 있다(§8.2). 부모 환경이 없거나, 샌드박스 환경이 아니거나, 사용 불가면 포크도 사용 불가 |
 | `ShellCommandResult.notices()` | 셸 상태 소실, generation 변경, 샌드박스 소실 후 재생성, 앞 노드가 남긴 명령의 정리를 알린다 |
 | 취소 — `ShellFeature.CANCELLATION` · `ExecutionOptions.getCancellation()` | `SandboxShell` 이 선언한다. 포그라운드와 백그라운드를 가리지 않는다. 신호가 걸리면 `RunningCommand.kill()` 로 그 exec 의 프로세스 그룹을 끝내고, `execute` 는 그때까지의 출력을 실은 `ShellCancelledException` 을 던진다. 걸린 쪽 스레드는 종료 요청을 보내고 돌아온다. 이미 걸린 신호면 명령을 띄우지 않고 프로비저닝도 하지 않는다. 닿는 범위는 프로세스 그룹까지다(§9). 그래서 코어의 `KillShell` 이 샌드박스의 백그라운드 명령을 끝낸다 |
-| `backgroundCommandTimeout()` | 선언한 프로파일의 `backgroundCommandTimeout` 을 돌려준다. 항상 값이 있고, 기본은 `backgroundHeartbeatLimit`(1시간)이다(§5.3) |
+| `backgroundCommandTimeout()` | 선언한 프로파일의 `backgroundCommandTimeout` 을 돌려준다. 항상 값이 있고, 기본은 24시간이다(§5.3) |
 | `bindRuntime(id)` | 재정의하지 않는다 — 코어의 기본값 `RuntimeBinding.NONE` 을 쓴다. 이 제공자는 런타임 단위로 쥐는 것이 없다. 워크스페이스는 세션·실행 id 로, 연결은 샌드박스로, 셸 락은 샌드박스와 shellKey 로 잡힌다(§3.2). 그래서 핸들을 닫아도 도는 명령이 멈추지 않고, 같은 id 의 다른 바인딩이 쓰는 것을 놓지 않으며, 바인딩하지 않은 id 의 `resolve` 도 답한다. 나중에 런타임 id 로 무언가를 쥐게 되면 그때 `bindRuntime` 을 구현하고, 그 `close()` 는 도는 명령을 건드리지 않는다. 닫는 순서: 코어 스택(또는 런타임)을 먼저, `WorkspaceSandbox` 를 나중에 닫는다 — 스택 종료가 도는 명령에 거는 취소는 이 어셈블리가 쥔 연결로 나간다 |
 
 코어의 백그라운드 작업 목록(`BackgroundBashManager` · `BackgroundBashStore`)은 코어 것을 그대로 쓴다. 이 모듈은 그 저장소를
@@ -1438,25 +1436,26 @@ egress 정책이 허용하지 않는 host 의 바인딩을 거부하고 `default
 시작에 해석한 그 환경을 싣는다. 새 경로가 생길 때 이 성질이 깨지지 않았는지는 이 모듈의 통합 테스트가 슬래시 커맨드
 경로를 덮어 확인한다(§16).
 
-**스킬 선언 훅의 셸 액션은 샌드박스에서 돈다. 거부는 선택이다.** aimon-core 0.3.1 부터 코어의 셸 액션 실행기
+**스킬 선언 훅의 셸 액션은 샌드박스에서 돈다.** aimon-core 0.3.1 부터 코어의 셸 액션 실행기
 (`DefaultShellActionExecutor`)는 셸을 쥐지 않고, 훅을 일으킨 실행의 `environment.shell()` 에서 액션을 돌린다(코어 EE-12).
 그 실행의 환경이 샌드박스이면 스킬이 선언한 훅도 샌드박스에서 돌고, 호스트에서는 돌지 않는다(코어 기본
-`DefaultShellActionExecutor` 를 쓸 때의 이야기다 — 호스트가 다른 실행기를 끼우면 그 실행기가 정한다). 이 문서의 이전 판은 그
-실행기가 호스트에서 돈다는 이유로 샌드박스 모드에서 셸 액션 훅을 가진 스킬을 거부했는데, 그 이유는 이제 성립하지 않는다.
-거부는 더 엄격한 정책으로 남는다 — 스킬 파일이 선언한 셸 코드를 아예 받지 않으려는 배치는 스킬을
-`WorkspaceSandbox.markdownSkillParser()`(또는 `skillHookSetParser()`)로 파싱한다. 그 파서는 `NoOpShellActionExecutor` 를
-쓰므로 `action.type: shell` 훅을 파싱 단계에서 거부하고, 그런 스킬은 로드되지 않으며 이유가 기동 로그에 남는다.
+`DefaultShellActionExecutor` 를 쓸 때의 이야기다 — 호스트가 다른 실행기를 끼우면 그 실행기가 정한다). 그래서 이 모듈은 셸
+액션 훅을 거부하는 파서를 따로 주지 않는다. 스킬 파일이 선언한 셸 코드를 아예 받지 않으려는 배치는 코어의
+`NoOpShellActionExecutor` 로 `SkillHookSetParser` 를 만들면 된다 — 코어가 이미 주는 조립이다.
 
-거부하지 않는 배치에서 알아야 할 것은 셋이다. 이 문단의 동작은 코어의 계약과 코어의 테스트에서 가져온 것이고, **이
-저장소의 테스트가 직접 확인한 것은 아니다**(§20).
+알아야 할 것은 셋이다. 앞의 둘은 이 저장소의 종단 테스트(`OrcaRuntimeSandboxE2ETest`)가 실제 `OrcaAgentExecutor` 와 코어의
+파서로 만든 훅으로 확인한다.
 
 - **가드는 fail-closed 다.** 샌드박스가 사용 불가(`ExecutionEnvironmentUnavailableException` — 바인딩 거부, 프로비저닝
   실패, 프로바이더 접속 불가)이면 스킬의 `preTool` 셸 가드가 걸린 도구 호출은 이유와 함께 **막히고**, `onStart` 셸 가드가
   있는 스킬 포크는 **시작하지 않는다**(코어 EE-51 · EE-70). 관찰만 하는 훅에는 `failOpen: true` 를 준다. `hooks.json` 의
   훅은 호스트 셸에서 돌고 샌드박스의 가용성과 무관하다
-- **훅은 그 세션 shellKey 의 포그라운드 명령이다.** 셸 락을 잡으므로, 셸 가드가 걸린 도구 호출이 병렬로 돌면
-  `shellLockWait` 뒤에 "shell is busy" 를 만날 수 있고 가드는 그것을 차단으로 읽는다
-- **훅의 `cd` 와 `export` 는 모델의 셸 상태에 저장된다.** 같은 이유다 — 포그라운드 명령의 끝에 래퍼가 상태를 저장한다(§9)
+- **가드의 판정은 샌드박스에서 나온다.** 훅 명령의 상대 경로는 샌드박스의 루트를 기준으로 하고, 종료 코드 2 는 도구
+  호출을 막는다
+- **훅은 지금 그 세션 shellKey 의 포그라운드 명령이다.** 셸 락을 잡으므로, 셸 가드가 걸린 도구 호출이 병렬로 돌면
+  `shellLockWait` 뒤에 "shell is busy" 를 만날 수 있고 가드는 그것을 차단으로 읽는다. 훅의 `cd` 와 `export` 도 모델의 셸
+  상태에 저장된다. 코어가 훅 명령에 표시(`ExecutionOptions.isHook()`)를 싣도록 바꾸는 중이고, 그 코어가 나오면
+  `SandboxShell` 은 그 명령을 백그라운드 명령처럼 셸 락 없이 돌리고 상태를 저장하지 않는다(§20)
 
 ### 12.2 쿼터
 
@@ -1494,7 +1493,7 @@ RUNNING CAS 순서라 두 슬롯이 동시에 resume 하면 잠깐 넘칠 수 �
 | `env` | 정적 환경 변수. **비밀 금지**(§12.1) |
 | `pauseAfter` · `terminateAfter` | §10.2. `terminateAfter` 는 필수, `pauseAfter` 는 `PAUSE_RESUME` 을 요구한다 |
 | `backgroundHeartbeatLimit` | `1h` — 백그라운드 명령이 샌드박스를 깨워 두는 상한(§5.3) |
-| `backgroundCommandTimeout` | 없음 → `backgroundHeartbeatLimit` 과 같다. 백그라운드 명령이 도는 상한이고, 환경이 코어에 이 값을 돌려준다(§5.3, §7). 설정했다면 양수여야 한다. `backgroundHeartbeatLimit` 보다 커도 된다 |
+| `backgroundCommandTimeout` | `24h` — 백그라운드 명령이 도는 상한이고, 환경이 코어에 이 값을 돌려준다(§5.3, §7). 설정했다면 양수여야 한다. `backgroundHeartbeatLimit` 과는 독립이다 |
 | `sharedAccess` | `none` (`rw` · `ro` · `none`, §11.3) |
 | `seed` | `git`(원격 URL · ref · 자격 증명 이름 — 런타임 자격 증명이 같은 저장소를 덮으면 생략, 아니면 읽기 전용, §12.1) 또는 없음 |
 | `insecureAllow` | `[]` — 일부러 풀 격리 capability(`HARDENED_SECURITY_CONTEXT`, `RUNTIME_CLASS`, `NETWORK_ISOLATION`). 로컬 개발 전용, 기동 시 경고(§6.4) |
@@ -1569,7 +1568,7 @@ aimon:
         pause-after: 15m                          # requires PAUSE_RESUME (implementation stage 7)
         terminate-after: 2h
         background-heartbeat-limit: 1h            # how long a background command keeps the sandbox awake (§5.3)
-        background-command-timeout: 1h            # how long it may run; default: background-heartbeat-limit (§5.3)
+        background-command-timeout: 24h           # how long it may run (§5.3)
         shared-access: rw                         # multi-slot collaboration (§11.3); default is none
         seed: { git: { url: "https://github.com/acme/app.git", ref: main } }   # uses github-acme-app-rw
       review:
@@ -1733,7 +1732,6 @@ orphan-destroyed · duplicate-destroyed · volume-deleted · workspace-closed ·
 | 주체 없음 · 시스템 주체 + `require-principal` | 바인딩 거부 — `UnavailableExecutionEnvironment` 가 이유를 담는다(§8.3) |
 | `sharedAccess: ro` 슬롯의 `/shared` 쓰기 | 파일 시스템의 읽기 전용 에러를 그대로 돌려준다 |
 | 읽은 뒤 파일이 바뀜 | `Edit`/`Write` 에러 — 다시 읽으라고 안내(§7) |
-| 셸 액션 훅을 선언한 스킬, 스킬을 `WorkspaceSandbox.markdownSkillParser()` 로 파싱한 배치 | 로드 거부, 기동 로그에 이유(§12.1) |
 | 설정 검사 실패 | 기동 거부(§13.2) |
 
 ---
@@ -1818,13 +1816,12 @@ CI 워크플로가 없으므로 "4단계의 첫 CI" 는 아직 오지 않았다(
 | 취소한 명령의 kill 이 닿지 못하고 타임아웃이 명령을 끝냄 | 타임아웃이 아니라 취소로 보고한다. 백그라운드 명령이 exec 최후 방어선에서 끝나도 같다 | 코어 0.3.1 |
 | 취소한 명령의 kill 이 닿지 못하고 기다리던 스레드가 인터럽트됨 | 인터럽트 실패가 아니라 부분 출력을 실은 취소로 보고하고, 인터럽트 플래그는 남는다 | 코어 0.3.1 |
 | 프로바이더의 `kill()` 이 예외를 던짐 | `execute` 가 그 예외를 그대로 던지지 않고 명령을 기다려 끝까지 판정한다 | 코어 0.3.1 |
-| 백그라운드 `Bash` → `KillShell` → `BashOutput` (코어 도구 그대로) | 시작 응답이 `KillShell` 과 "환경이 1시간 뒤에 멈춘다" 를 알리고, `KillShell` 이 성공하고, 상태는 `Killed` | 코어 0.3.1 |
-| 환경의 `backgroundCommandTimeout()` | 선언한 프로파일의 값. 기본은 `backgroundHeartbeatLimit`, 포크는 자기가 선언한 프로파일의 값 | 코어 0.3.1 |
+| 백그라운드 `Bash` → `KillShell` → `BashOutput` (코어 도구 그대로) | 시작 응답이 `KillShell` 과 "환경이 24시간 뒤에 멈춘다" 를 알리고, `KillShell` 이 성공하고, 상태는 `Killed` | 코어 0.3.1 |
+| 환경의 `backgroundCommandTimeout()` | 선언한 프로파일의 값. 기본은 24시간, 포크는 자기가 선언한 프로파일의 값 | 코어 0.3.1 |
 | 백그라운드 명령이 그 상한을 타임아웃으로 받음 | 상한에서 kill 되고 부분 출력과 함께 타임아웃 | 코어 0.3.1 |
 | 런타임 A·B 가 각자 백그라운드 명령을 돌리는 중 A 의 바인딩을 닫음(두 번) | 두 명령 모두 끝까지 돌고, 두 환경 모두 새 명령을 받는다. 같은 id 의 다른 바인딩도 영향 없음. 바인딩하지 않은 id 의 `resolve` 도 답한다 | 코어 0.3.1 |
 | 첫 턴에 명령을 치지 않는 세션 | 프로비저닝 없음. 프롬프트의 환경 블록은 프로파일 선언값이다 | 3 |
 | 슬래시 커맨드(`/skill`)로 부른 스킬의 `Bash` (INLINE · FORK 모두) | 샌드박스에서 돈다 (호스트 아님). FORK 는 같은 워크스페이스 | 3 |
-| 셸 액션 훅을 선언한 스킬, 엄격한 파서(`WorkspaceSandbox.markdownSkillParser()`) | 로드 거부, 호스트에서 아무것도 실행되지 않음 | 3 |
 | `Write /workspace/.aimon-staged/…` · `.aimon-shell/…` | "Access denied" 에러. 같은 경로에 `Bash` 로 쓰는 것은 된다 | 3 |
 | 셸로 `.aimon-staged/{name}/{contentKey}/` 에 다른 스크립트와 마커를 심은 뒤 스킬 활성화 | 해시 불일치로 다시 복사, 심은 내용은 돌지 않음 | 3 |
 | 닫힌(CLOSED) 워크스페이스로 `connect` | "workspace closed". `reopen` 뒤에는 새 generation 으로 동작 | 3 |
@@ -2017,21 +2014,19 @@ docker 계층, K8s 에서만 드러나는 것은 k8s 계층 — 는 [`workspace-
   것은 모델에게 슬롯 선택권을 주는 일이다. 허용 목록으로 좁혀 열지, 워크플로에만 둘지 정해야 한다
 - ~~**스킬 선언 훅을 샌드박스에서 돌리기**~~ *(코어 0.3.1 이 닫았다)* — 코어의 훅 실행기가 실행 환경을 받는다(코어 EE-12).
   스킬이 선언한 셸 훅은 그 실행의 샌드박스 셸에서 돌고, 거부는 선택이 되었다(§12.1). 남은 것은 다음 항목이다
-- **샌드박스에서 도는 스킬 셸 훅의 뒷일** *(3·4단계 릴리스 전에 닫는다)* — 셋이 정해지지 않았다
-  ([코어 0.3.1 이행 설계](workspace-sandbox-core-031.md) §9 Q2). (a) `WorkspaceSandbox.skillHookSetParser()` ·
-  `markdownSkillParser()` 와 `SkillHookRejectionTest` 를 엄격한 정책으로 계속 둘지, deprecated 로 돌리거나 지울지. (b)
-  `preTool` 셸 가드가 샌드박스 안에서 돌고 샌드박스가 사용 불가일 때 막는다는 것을 이 저장소가 종단 테스트로 가질지 —
-  §12.1 의 문장은 코어의 계약과 코어 테스트(`DefaultShellActionExecutorTest`)에서 가져왔고 여기서 확인하지 않았다. (c) 훅은
-  세션 shellKey 의 포그라운드 명령이라 셸 락을 잡고 `cd`/`export` 가 모델의 셸 상태에 저장된다. 훅에 따로 shellKey 를 주려면
-  코어가 "이 호출은 훅이다" 를 셸에 알릴 길이 있어야 한다
+- ~~**샌드박스에서 도는 스킬 셸 훅의 뒷일**~~ *(3·4단계 릴리스 전에 닫았다)* — (a) 거부용 헬퍼
+  `WorkspaceSandbox.skillHookSetParser()` · `markdownSkillParser()` 와 `SkillHookRejectionTest` 는 지웠다. 거부가 필요한 배치는
+  코어의 `NoOpShellActionExecutor` 로 파서를 만든다. (b) `OrcaRuntimeSandboxE2ETest` 가 코어 파서로 만든 `preTool` 셸 가드를
+  실제 `OrcaAgentExecutor` 로 돌려, 샌드박스에서 돌고 종료 코드 2 로 막고 샌드박스가 사용 불가일 때 막는(`failOpen` 이면
+  통과하는) 것을 확인한다. (c) 코어가 훅 명령에 `ExecutionOptions.isHook()` 을 싣게 하는 변경을 코어에 올렸다. 그 코어가
+  나오면 `SandboxShell` 이 훅 명령을 락 없이, 상태를 저장하지 않고 돌린다(§12.1) — 이 저장소 쪽 변경은 그 코어 릴리스를
+  기다린다
 - ~~**백그라운드 명령을 끝내는 도구**~~ *(코어 0.3.1 과 이 모듈의 취소 지원으로 닫았다)* — 코어의 `KillShell` 이 취소 신호를
   걸고 `SandboxShell` 이 그 신호로 원격 명령을 끝낸다(§7, §9). 끝내지 않은 명령은 `backgroundCommandTimeout` 에서 끝난다(§5.3).
   남은 한계는 다음 두 항목이다
-- **백그라운드 상한의 기본값** *(3·4단계 릴리스 전에 닫는다)* — 기본값을 `backgroundHeartbeatLimit`(1시간)로 두었다. 그 전에는
-  다른 활동이 슬롯을 깨워 두는 한 백그라운드 명령이 24시간까지 돌 수 있었으므로 관찰되는 동작이 바뀐다. 기본을 조이지 않으려면
-  설정하지 않았을 때 `backgroundHeartbeatLimit + terminateAfter` 를 돌려주는 대안이 있다 — idle 정책이 샌드박스를 가져가기
-  전에는 걸리지 않는 값이다. 바꾸는 곳은 `SandboxProfile` 한 줄과 §5.3 · §13.1 의 문장이다
-  ([코어 0.3.1 이행 설계](workspace-sandbox-core-031.md) §9 Q1)
+- ~~**백그라운드 상한의 기본값**~~ *(3·4단계 릴리스 전에 닫았다)* — 24시간(`SandboxProfile.DEFAULT_BACKGROUND_COMMAND_TIMEOUT`).
+  코어 0.3.1 이전에 허용하던 길이를 그대로 두어 첫 릴리스가 관찰되는 동작을 조이지 않게 했고, `backgroundHeartbeatLimit` 과는
+  독립이다. 슬롯을 깨워 둘 자격을 잃는 시각에 끝내고 싶은 운영자는 두 값을 같게 잡는다(§5.3)
 - **프로세스 그룹 밖까지 닿는 kill** — 취소와 타임아웃의 kill 은 exec 의 프로세스 그룹까지 닿는다(§9). 명령이 `setsid` ·
   `set -m` 으로 그룹 밖에 둔 작업은 샌드박스가 사라질 때까지 남고, 코어 계약의 "명령이 띄운 모든 것" 을 그만큼 못 채운다
   (코어 `LocalShell` 의 EE-55 와는 모양이 다른 한계다 — 그룹째 죽이므로 나중에 태어난 손자 프로세스도 잡지만, 그룹을 떠난
@@ -2069,8 +2064,8 @@ docker 계층, K8s 에서만 드러나는 것은 k8s 계층 — 는 [`workspace-
   `credentialsAreInjectedOnlyWithinTheirScope` 가 검증을 켠 채 확인한다. 그 전까지 `CREDENTIAL_INJECTION` 은 설정대로 광고하되
   모듈 README 가 경고한다(단계 4 구현 설계 §12 Q4)
 - **러너에서의 docker 계층** *(3·4단계 릴리스 전에 닫는다)* — docker 계층은 macOS(Docker Desktop, arm64)에서만 돌았다. Linux
-  러너에서의 서버 컨테이너 도달(`host.docker.internal` + host-gateway), amd64 execd 이미지, 러너 커널의 `dns+nft` 는 확인되지
-  않았다. 이 저장소에는 CI 워크플로가 없다 — 워크플로를 더해 한 번 돌리거나, 릴리스 전에 Linux 호스트에서 손으로 돌려 기록한다
+  러너에서의 서버 컨테이너 도달(`host.docker.internal` + host-gateway), amd64 execd 이미지, 러너 커널의 `dns+nft` 를 확인하려고
+  `.github/workflows/build.yml` 의 `integration` 잡이 PR 마다 `integrationTest` 를 돌린다. 그 잡이 초록이 되면 닫는다
   (§16, 단계 4 구현 설계 §12 Q10)
 - **내장 `VolumeReclaimer`** *(5단계에서 닫는다)* — 4단계는 `VolumeReclaimer` 인터페이스만 두고 주입된 인스턴스를 받는다.
   §13.2 의 `volume-reclaimer: kubernetes | docker` 처럼 속성으로 고르는 내장 구현(K8s PVC · Docker 볼륨 API)과 볼륨 조정은
@@ -2078,12 +2073,11 @@ docker 계층, K8s 에서만 드러나는 것은 k8s 계층 — 는 [`workspace-
 - **프로바이더 설정의 속성 바인딩** — `OpenSandboxProviderConfig` 는 빌더다. `api-key` 와 자격 증명 비밀은 `Supplier` 로,
   `volume-reclaimer` 는 인스턴스로 받는다. Spring 스타터가 생기면 §13.2 의 속성을 이리로 옮기는 방법(비밀의 출처, 빈 이름)을
   그때 정한다
-- **§14 의 span 과 메트릭을 어느 단계가 가지는가** *(3·4단계 릴리스 전에 닫는다)* — §18 은 관측성을 어느 단계에도 두지
-  않았다. 3단계는 `SandboxEventListener` 의 수명 이벤트(§14 의 감사 쪽)만 넣었다. 메트릭은 Micrometer 의존성과 라벨
-  설계가 따라오므로 소비처가 생길 때 정한다(단계 3 구현 설계 §10 Q6)
-- **aimon-core SNAPSHOT 고정** *(3·4단계 릴리스 전에 닫는다)* — 3단계는 `aimon-core 0.3.1-SNAPSHOT` 을 `mavenLocal()` 에서
-  받는다(그룹과 스냅숏으로 걸러 둔다). aimon-core 0.3.1 이 Central 에 나오고, 고정을 올리고, `mavenLocal()` 을 지우기
-  전에는 이 저장소의 어떤 것도 릴리스하지 않는다(단계 3 구현 설계 §10 Q8)
+- ~~**§14 의 span 과 메트릭을 어느 단계가 가지는가**~~ *(3·4단계 릴리스 전에 닫았다)* — 어느 단계에도 두지 않는다. 첫
+  릴리스는 `SandboxEventListener` 의 수명 이벤트(§14 의 감사 쪽)만 낸다. span 과 메트릭은 Micrometer 의존성과 라벨 설계가
+  따라오므로, 그것을 읽을 소비처가 생길 때 그 소비처의 요구로 설계한다(단계 3 구현 설계 §10 Q6)
+- ~~**aimon-core SNAPSHOT 고정**~~ *(닫았다)* — aimon-core 0.3.1 이 Central 에 나왔고, 고정을 그 릴리스로 올리고
+  `mavenLocal()` 을 지웠다(PR #7, 단계 3 구현 설계 §10 Q8)
 - **`aimon-sandbox-testkit` 의 발행** *(3·4단계 릴리스에서 닫는다)* — 계약 스위트를 이 저장소 밖의 구현도 통과해야 하므로
   발행하기로 했다(`aimon.publishable`). 첫 릴리스 전까지는 되돌릴 수 있다(단계 3 구현 설계 §10 Q5)
 

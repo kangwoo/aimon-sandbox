@@ -1,16 +1,13 @@
 package at.aimon.sandbox;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.time.Duration;
-import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.Test;
 
-import at.aimon.core.skill.parser.SkillHookSetParser;
 import at.aimon.sandbox.testkit.LocalProcessSandboxProvider;
 import at.aimon.sandbox.testkit.SandboxTestProfiles;
 import at.aimon.sandbox.workspace.InMemorySandboxWorkspaceStore;
@@ -49,17 +46,6 @@ class WorkspaceSandboxTest {
         sandbox.close();
 
         assertThat(provider.baseDirectory()).doesNotExist();
-    }
-
-    @Test
-    void theSkillParsersRefuseShellHooks() {
-        final SkillHookSetParser parser = WorkspaceSandbox.skillHookSetParser();
-
-        assertThatThrownBy(() -> parser.parse("s",
-                Map.of("postTool",
-                        java.util.List.of(Map.of("action", Map.of("type", "shell", "command", "touch /tmp/x"))))))
-                .hasMessageContaining("shell hooks are not supported");
-        assertThat(WorkspaceSandbox.markdownSkillParser()).isNotNull();
     }
 
     @Test

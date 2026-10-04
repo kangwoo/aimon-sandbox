@@ -1,0 +1,82 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# The shape of aimon-core's build.yml, trimmed to the two tiers this repository has a runner for. `k8sTest` needs a
+# provisioned cluster and stays manual (modules/aimon-sandbox-opensandbox/README.md).
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
+
+      - name: Format check + checkstyle + tests
+        run: ./gradlew --no-daemon checkAll
+
+      # Red runs only, and never fatal: a full artifact quota must not overturn what the tests found.
+      - name: Upload test reports
+        if: failure()
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: test-reports
+          path: |
+            modules/*/build/reports/tests/
+            modules/*/build/test-results/*/*.xml
+          if-no-files-found: ignore
+          retention-days: 7
+
+  # The docker tier (@Tag("docker")): the OpenSandbox provider against a real server that OpenSandboxTestServer
+  # starts on the runner's Docker daemon. Its own job so it runs in parallel and a red check names the tier. This is
+  # also the only place the tier runs on Linux/amd64 -- the spike and step 4 ran it on macOS arm64 only
+  # (docs/design/workspace-sandbox.md §20, "러너에서의 docker 계층").
+  integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-read-only: ${{ github.ref != 'refs/heads/main' }}
+
+      - name: Docker integration tests
+        run: ./gradlew --no-daemon integrationTest
+
+      - name: Upload integration test reports
+        if: failure()
+        continue-on-error: true
+        uses: actions/upload-artifact@v7
+        with:
+          name: integration-test-reports
+          path: |
+            modules/*/build/reports/tests/
+            modules/*/build/test-results/*/*.xml
+          if-no-files-found: ignore
+          retention-days: 7

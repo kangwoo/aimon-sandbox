@@ -35,6 +35,7 @@ import at.aimon.core.filesystem.impl.local.LocalFileSystem;
 import at.aimon.core.filesystem.impl.local.LocalFileSystemConfig;
 import at.aimon.core.hook.DefaultHookExecutionManager;
 import at.aimon.core.hook.DefaultHookRegistry;
+import at.aimon.core.hook.HookEventType;
 import at.aimon.core.llm.LlmCallMetadata;
 import at.aimon.core.llm.LlmClient;
 import at.aimon.core.llm.LlmModel;
@@ -48,6 +49,10 @@ import at.aimon.core.skill.Skill;
 import at.aimon.core.skill.SkillContent;
 import at.aimon.core.skill.SkillMetadata;
 import at.aimon.core.skill.SkillRegistry;
+import at.aimon.core.skill.hook.declarative.DefaultShellActionExecutor;
+import at.aimon.core.skill.parser.MarkdownSkillParser;
+import at.aimon.core.skill.parser.SkillHookSetParser;
+import at.aimon.core.skill.render.ShellArgumentTokenizer;
 import at.aimon.core.subagent.DefaultSubagentExecutionManager;
 import at.aimon.core.subagent.Subagent;
 import at.aimon.core.subagent.SubagentContent;
@@ -55,6 +60,8 @@ import at.aimon.core.subagent.SubagentMetadata;
 import at.aimon.core.subagent.SubagentRegistry;
 import at.aimon.core.tools.bash.BashTool;
 import at.aimon.sandbox.SandboxHarness;
+import at.aimon.sandbox.provider.SandboxProviderException;
+import at.aimon.sandbox.testkit.FaultInjectingSandboxProvider.Fault;
 import at.aimon.sandbox.testkit.FaultInjectingSandboxProvider.Operation;
 import at.aimon.sandbox.testkit.SandboxTestProfiles;
 import at.aimon.sandbox.workspace.WorkspaceScan;
@@ -62,7 +69,9 @@ import at.aimon.sandbox.workspace.WorkspaceScan;
 /**
  * The sandbox behind a real {@link OrcaAgentExecutor} (§16 rows 14 and 15): the prompt describes the declared
  * profile without provisioning anything, and a slash-command skill's {@code Bash} runs in the sandbox, not on the host
- * — inline in the session's turn, and in a forked subagent.
+ * — inline in the session's turn, and in a forked subagent. A skill-declared {@code preTool} shell guard, parsed the
+ * way core's bootstrap parses it, runs in the sandbox too and blocks what it guards when the sandbox is unavailable
+ * (§12.1).
  */
 class OrcaRuntimeSandboxE2ETest {
 
@@ -75,6 +84,7 @@ class OrcaRuntimeSandboxE2ETest {
     private OrcaAgentExecutor executor;
     private final MapSkillRegistry skills = new MapSkillRegistry();
     private final MapSubagentRegistry subagentRegistry = new MapSubagentRegistry();
+    private final DefaultHookRegistry hookRegistry = new DefaultHookRegistry();
 
     @BeforeEach
     void setUp() {
@@ -103,7 +113,7 @@ class OrcaRuntimeSandboxE2ETest {
         return OrcaAgentRuntime.builder()
                 .agent(DefaultAgent.builder().name("sandboxed").maxIterations(3).systemPrompt("You are a test agent")
                         .model(LlmModel.builder().name("m").build()).build())
-                .toolRegistry(toolRegistry).hookRegistry(new DefaultHookRegistry()).commandRegistry(commands)
+                .toolRegistry(toolRegistry).hookRegistry(hookRegistry).commandRegistry(commands)
                 .subagentRegistry(subagentRegistry).skillRegistry(skills).controlFileSystem(control)
                 .userLocale(UserLocale.createDefault())
                 .executionEnvironmentProvider(harness.sandbox.environmentProvider()).build();
@@ -179,6 +189,87 @@ class OrcaRuntimeSandboxE2ETest {
         assertThat(harness.store.scan(WorkspaceScan.builder().build())).hasSize(1);
         assertThat(Files.exists(Path.of("fork-marker.txt"))).as("nothing on the host's cwd").isFalse();
         assertThat(Files.exists(tempDir.resolve("fork-marker.txt"))).isFalse();
+    }
+
+    /**
+     * Registers the {@code preTool} hooks of a skill parsed with core's shell-capable hook parser — the hook a
+     * skill's fork would get, without the fork around it.
+     */
+    private void guardWith(String hooksYaml) {
+        final MarkdownSkillParser parser = new MarkdownSkillParser(new ShellArgumentTokenizer(),
+                new SkillHookSetParser(new DefaultShellActionExecutor()));
+        final Skill skill = parser.parse("guard",
+                "---\nname: guard\ndescription: guards Bash\nhooks:\n  preTool:\n" + hooksYaml + "---\n\nGuard.");
+        assertThat(skill.getMetadata().getHooks().getPreToolHooks()).isNotEmpty();
+        skill.getMetadata().getHooks().getPreToolHooks()
+                .forEach(hook -> hookRegistry.register(HookEventType.PRE_TOOL, hook));
+    }
+
+    @Test
+    @DisplayName("§12.1: a skill's preTool shell hook runs in the sandbox, not on the host")
+    void skillShellHookRunsInTheSandbox() throws Exception {
+        guardWith("    - action: { type: shell, command: \"printf '%s' \\\"$AIMON_TOOL_NAME\\\" > hook-ran.txt\" }\n");
+        llm.respond(LlmResponse.tools(List.of(ToolUse.of("t1", "Bash", Map.of("command", "echo tool > tool.txt")))));
+        llm.respond(LlmResponse.text("Done."));
+        final SessionId session = SessionId.generate();
+
+        final OrcaAgentExecutionResult result = executor.execute(runtime(), OrcaAgentExecutionRequest.builder()
+                .userInput("go").sessionId(session).principal(SandboxHarness.ALICE).build());
+
+        assertThat(result.isSuccess()).as(result.getErrorMessage()).isTrue();
+        assertThat(harness.hostFile(session, "/workspace/repo/hook-ran.txt")).isEqualTo("Bash");
+        assertThat(harness.hostFile(session, "/workspace/repo/tool.txt")).isEqualTo("tool\n");
+        assertThat(Files.exists(Path.of("hook-ran.txt"))).as("nothing on the host's cwd").isFalse();
+        assertThat(Files.exists(tempDir.resolve("hook-ran.txt"))).isFalse();
+    }
+
+    @Test
+    @DisplayName("§12.1: a skill's preTool shell guard that exits 2 in the sandbox blocks the tool")
+    void skillShellGuardVetoBlocksTheTool() throws Exception {
+        guardWith("    - action: { type: shell, command: \"echo 'no writes here' >&2; exit 2\" }\n");
+        llm.respond(LlmResponse.tools(List.of(ToolUse.of("t1", "Bash", Map.of("command", "echo x > blocked.txt")))));
+        llm.respond(LlmResponse.text("Acknowledged."));
+        final SessionId session = SessionId.generate();
+
+        final OrcaAgentExecutionResult result = executor.execute(runtime(), OrcaAgentExecutionRequest.builder()
+                .userInput("go").sessionId(session).principal(SandboxHarness.ALICE).build());
+
+        assertThat(result.isSuccess()).as(result.getErrorMessage()).isTrue();
+        assertThat(llm.toolResults).anyMatch(text -> text.contains("no writes here"));
+        assertThat(harness.host(session, "/workspace/repo/blocked.txt")).doesNotExist();
+    }
+
+    @Test
+    @DisplayName("§12.1: a skill's preTool shell guard blocks the tool when the sandbox is unavailable (fail-closed)")
+    void skillShellGuardBlocksWhenTheSandboxIsUnavailable() {
+        guardWith("    - action: { type: shell, command: \"exit 0\" }\n");
+        harness.faults.inject(Operation.CREATE, Fault.fail(SandboxProviderException.Kind.PERMANENT));
+        llm.respond(LlmResponse.tools(List.of(ToolUse.of("t1", "Bash", Map.of("command", "echo x")))));
+        llm.respond(LlmResponse.text("Acknowledged."));
+
+        final OrcaAgentExecutionResult result = executor.execute(runtime(), OrcaAgentExecutionRequest.builder()
+                .userInput("go").sessionId(SessionId.generate()).principal(SandboxHarness.ALICE).build());
+
+        assertThat(result.isSuccess()).as(result.getErrorMessage()).isTrue();
+        assertThat(harness.faults.calls(Operation.CREATE)).isPositive();
+        assertThat(llm.toolResults)
+                .anyMatch(text -> text.contains("Blocked: guard hook 'guard' (preTool) could not" + " run its command")
+                        && text.contains("execution environment unavailable"));
+    }
+
+    @Test
+    @DisplayName("§12.1: a failOpen observer lets the tool through when the sandbox is unavailable")
+    void failOpenObserverDoesNotBlockWhenTheSandboxIsUnavailable() {
+        guardWith("    - action: { type: shell, command: \"exit 0\" }\n      failOpen: true\n");
+        harness.faults.inject(Operation.CREATE, Fault.fail(SandboxProviderException.Kind.PERMANENT));
+        llm.respond(LlmResponse.tools(List.of(ToolUse.of("t1", "Bash", Map.of("command", "echo x")))));
+        llm.respond(LlmResponse.text("Acknowledged."));
+
+        final OrcaAgentExecutionResult result = executor.execute(runtime(), OrcaAgentExecutionRequest.builder()
+                .userInput("go").sessionId(SessionId.generate()).principal(SandboxHarness.ALICE).build());
+
+        assertThat(result.isSuccess()).as(result.getErrorMessage()).isTrue();
+        assertThat(llm.toolResults).isNotEmpty().noneMatch(text -> text.contains("Blocked: guard hook"));
     }
 
     /** Answers from a queue and records the prompts and tool results it was sent. */

@@ -67,8 +67,8 @@ ExecutionEnvironmentSpec.shared(sandbox.environmentProvider());
   go.
 - **Background commands can be stopped, and they end.** `KillShell` stops a sandbox background command and what it
   started in its process group (a job the command moved out of the group with `setsid` or `set -m` survives until
-  the sandbox goes). A command nobody stops ends at the profile's `background-command-timeout`, by default the
-  `background-heartbeat-limit` of one hour (design §5.3).
+  the sandbox goes). A command nobody stops ends at the profile's `background-command-timeout`, 24 hours by
+  default (design §5.3).
 - **Runtimes can come and go.** The provider keeps nothing per `AgentRuntime`, so evicting one stops no command and
   touches no sandbox; sandboxes live as long as their workspaces (design §3.2, §7).
 - **Skill shell hooks run in the sandbox, and guards fail closed.** With aimon-core 0.3.1 a shell hook that a skill
@@ -77,9 +77,10 @@ ExecutionEnvironmentSpec.shared(sandbox.environmentProvider());
   was refused, provisioning failed, the provider cannot be reached — a tool call guarded by a skill's `preTool`
   shell hook is **blocked** with the reason, and a skill fork with an `onStart` shell guard **does not start**.
   Give hooks that only observe `failOpen: true`. Hooks from `hooks.json` run on the host shell and do not depend on
-  the sandbox. This behaviour is aimon-core's contract; this repository has no test of its own for it yet (design
-  §20). To refuse skill-declared shell hooks altogether, parse skills with `WorkspaceSandbox.markdownSkillParser()`
-  (design §12.1).
+  the sandbox. `OrcaRuntimeSandboxE2ETest` checks this against a real `OrcaAgentExecutor`. To refuse
+  skill-declared shell hooks altogether, build core's `SkillHookSetParser` with `NoOpShellActionExecutor` (design
+  §12.1). A hook currently runs as a foreground command of the session's shell: it takes the shell lock, and its
+  `cd`/`export` persist.
 
 ## Build
 

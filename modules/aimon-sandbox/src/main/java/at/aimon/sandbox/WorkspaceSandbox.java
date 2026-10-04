@@ -6,10 +6,6 @@ import java.util.Objects;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import at.aimon.core.skill.hook.declarative.NoOpShellActionExecutor;
-import at.aimon.core.skill.parser.MarkdownSkillParser;
-import at.aimon.core.skill.parser.SkillHookSetParser;
-import at.aimon.core.skill.render.ShellArgumentTokenizer;
 import at.aimon.sandbox.binding.CallerResolver;
 import at.aimon.sandbox.binding.DefaultSandboxBindingPolicy;
 import at.aimon.sandbox.binding.SandboxBindingPolicy;
@@ -51,10 +47,9 @@ import at.aimon.sandbox.workspace.SandboxWorkspaceStore;
  * sandboxes.
  *
  * <p>
- * Skills may be parsed with {@link #markdownSkillParser()} (or {@link #skillHookSetParser()}) to refuse
- * skill-declared shell hooks altogether: a skill that declares one is then not loaded. Without it, aimon-core 0.3.1
- * and later run such a hook in the execution's sandbox shell — never on the host — and a guard whose sandbox is
- * unavailable blocks what it guards (§12.1). The assembly also recommends against registering core's
+ * Skill-declared shell hooks need nothing from this assembly: aimon-core runs such a hook in the execution's sandbox
+ * shell — never on the host — and a guard whose sandbox is unavailable blocks what it guards (§12.1). The assembly
+ * recommends against registering core's
  * {@code GitStatusContextProvider} and {@code DirectorySummaryContextProvider}: they read the filesystem every turn
  * and so would provision a sandbox for turns that run no command (§11.1).
  */
@@ -120,21 +115,6 @@ public final class WorkspaceSandbox implements AutoCloseable {
     /** @return a new builder */
     public static Builder builder() {
         return new Builder();
-    }
-
-    /**
-     * The stricter hook parser, for a deployment that wants no skill-declared shell code at all: shell actions are
-     * refused at parse time, so a skill declaring one does not load (§12.1).
-     *
-     * @return a parser wired to {@link NoOpShellActionExecutor}
-     */
-    public static SkillHookSetParser skillHookSetParser() {
-        return new SkillHookSetParser(NoOpShellActionExecutor.INSTANCE);
-    }
-
-    /** @return a skill parser wired with {@link #skillHookSetParser()} */
-    public static MarkdownSkillParser markdownSkillParser() {
-        return new MarkdownSkillParser(new ShellArgumentTokenizer(), skillHookSetParser());
     }
 
     /** @return the provider to hand to aimon-core's runtime */
