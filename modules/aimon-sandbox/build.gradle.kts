@@ -19,3 +19,11 @@ dependencies {
     // source set; this edge is test-only, so there is no cycle in the task graph.
     testImplementation(project(":aimon-sandbox-testkit"))
 }
+
+// `ReleaseGateMatchesCiGateTest` reads these two files, which are not on any classpath. Declared so that editing
+// either one re-runs this module's `test` instead of reporting it UP-TO-DATE (or restoring it from the build cache)
+// on exactly the change the test exists to catch.
+tasks.test {
+    inputs.file(rootProject.file("scripts/release.sh")).withPropertyName("releaseScript")
+    inputs.file(rootProject.file(".github/workflows/build.yml")).withPropertyName("ciWorkflow")
+}

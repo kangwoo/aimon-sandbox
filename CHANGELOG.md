@@ -5,6 +5,25 @@ All notable aimon-sandbox changes are recorded here. The format is loosely based
 
 ## [Unreleased]
 
+### Added — release process, ported from aimon-core
+
+- **`scripts/release.sh`** cuts a release: it bumps `VERSION_NAME`, runs the gate, publishes to Maven Central,
+  commits, tags `vX.Y.Z`, moves `main` to the next `-SNAPSHOT`, and pushes. The gate is
+  `checkAll integrationTest jacocoTestCoverageVerification`, the tasks CI runs, so a release needs a Docker daemon.
+  The script refuses a real release without `--k8s-verified`, the maintainer's statement that the manual `k8sTest`
+  tier passed against a provisioned cluster. It also refuses to start while `OPENSANDBOX_TEST_ENDPOINT` or
+  `OPENSANDBOX_TEST_SANDBOX_IMAGE` is set. `ReleaseGateMatchesCiGateTest` fails the build if the gate and CI drift
+  apart. The procedure is in README › Releasing.
+- **`.github/workflows/release.yml`** creates the GitHub Release from the tag's `CHANGELOG.md` section, after
+  checking the tag against `VERSION_NAME`. Like core's, it does not publish to Central: the script already did.
+  Helpers `scripts/absolutize-release-links.py` and `scripts/cap-release-notes.py` are core's files.
+- **CI checks the coverage floors.** `gradle/coverage-baselines.properties` was never enforced in CI. The `build`
+  and `integration` jobs now hand their JaCoCo `.exec` data to a new `coverage` job, which runs `jacocoTestReport`
+  and `jacocoTestCoverageVerification` over both tiers.
+- **`.github/dependabot.yml`** sends weekly Gradle and GitHub Actions updates, grouped as in core. aimon-core bumps
+  always come as their own PR. Core's auto-merge workflow is not ported, because `main` here has no ruleset for it to
+  wait on.
+
 ### Changed — follows aimon-core 0.3.1 (shell cancellation, background ceiling, runtime bindings)
 
 The sandbox now meets the three rows aimon-core 0.3.1 added to its provider contract (core `61604b4`, PRs #204–#208);

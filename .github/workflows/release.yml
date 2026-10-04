@@ -1,0 +1,114 @@
+# Publish the GitHub Release for a tag that `scripts/release.sh` has already pushed.
+#
+# A port of aimon-core's release.yml, unchanged in behaviour. Like core's, this workflow deliberately does NOT
+# publish to Maven Central. That already happened: the script gates on `checkAll integrationTest
+# jacocoTestCoverageVerification`, publishes from the operator's machine, and only then commits, tags, and pushes --
+# publish is irreversible, so git history is moved last, after it succeeded. A tag-triggered workflow that published
+# would invert that order and leave tags pointing at versions Central never received. It is also why this repository
+# needs no Central or signing secrets: the credentials live in the publisher's ~/.gradle/gradle.properties, where
+# the script checks for them by name.
+#
+# So this runs after the fact and does two things: confirm the tag agrees with the tree it points at, and turn the
+# matching CHANGELOG.md section into a Release.
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build release notes for, e.g. v0.1.0"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  github-release:
+    name: Create the GitHub release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 0
+
+      # A tag can be created by hand as easily as by the script. If it disagrees with the tree it
+      # points at, the release notes would describe a version nobody published — say so instead.
+      - name: Cross-check the tag against VERSION_NAME
+        id: resolve
+        # The tag name reaches the shell through env, never by interpolation into the script:
+        # ref names may legally contain `"`, `;`, `$` and backticks, and this job holds a
+        # contents:write token.
+        env:
+          RAW_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          raw_tag="$RAW_TAG"
+          tag_version="${raw_tag#v}"
+          project_version="$(sed -n 's/^VERSION_NAME=//p' gradle.properties | head -1 | tr -d '[:space:]')"
+
+          echo "tag        : $raw_tag -> $tag_version"
+          echo "gradle.properties: VERSION_NAME=$project_version"
+
+          if [ "$tag_version" != "$project_version" ]; then
+            echo "::error::Tag $raw_tag points at a tree whose VERSION_NAME is $project_version." \
+                 "scripts/release.sh writes the bump and the tag together, so this tag was not made by it."
+            exit 1
+          fi
+
+          echo "version=$project_version" >> "$GITHUB_OUTPUT"
+
+      # Takes the section from the version's own `## ` heading down to the next one, so the Release
+      # body and the changelog cannot drift. `[0.1.1]` does not match `[0.1.10]` — the closing
+      # bracket is part of the needle.
+      - name: Extract release notes
+        env:
+          VERSION: ${{ steps.resolve.outputs.version }}
+          RAW_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          version="$VERSION"
+          awk -v v="$version" '
+            /^## / { if (found) exit; if (index($0, "[" v "]")) found = 1 }
+            found  { print }
+          ' CHANGELOG.md > release-notes.md
+
+          if [ ! -s release-notes.md ]; then
+            echo "::warning::CHANGELOG.md has no [$version] section; publishing a pointer instead."
+            # Absolute URL: a relative link in a Release body resolves against the release
+            # page itself and 404s.
+            printf 'See [CHANGELOG.md](%s/%s/blob/%s/CHANGELOG.md).\n' \
+              "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$RAW_TAG" > release-notes.md
+          fi
+
+          # The same rule applies to the extracted body: the changelog writes its links relative (to
+          # docs/design/*, for one), which is what renders on GitHub, so they are rewritten here, at the one
+          # point where the text leaves the repository.
+          python3 scripts/absolutize-release-links.py release-notes.md \
+            "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" "$RAW_TAG"
+
+          # GitHub rejects a release body over 125,000 characters with a 422, and that fails the whole
+          # `gh release create` call -- so an over-long section publishes nothing at all, not even the
+          # pointer above. Runs after absolutization, which only ever grows the text.
+          python3 scripts/cap-release-notes.py release-notes.md 125000 \
+            "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/blob/$RAW_TAG/CHANGELOG.md"
+
+          cat release-notes.md
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RAW_TAG: ${{ inputs.tag || github.ref_name }}
+          VERSION: ${{ steps.resolve.outputs.version }}
+        run: |
+          gh release create "$RAW_TAG" \
+            --title "$VERSION" \
+            --notes-file release-notes.md \
+            --verify-tag

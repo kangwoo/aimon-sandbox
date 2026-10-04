@@ -1,0 +1,98 @@
+# Dependency updates.
+#
+# A port of aimon-core's dependabot.yml, trimmed to the two ecosystems this repository has: Gradle resolves the
+# version catalog at `gradle/libs.versions.toml` plus every module's build file from the root, and GitHub Actions
+# reads `.github/workflows/`. Core's third, pip, pins its docs site; there is none here. Updates are grouped so a
+# quiet week produces a handful of reviewable PRs instead of a dozen.
+#
+# Every Gradle coordinate below appears in `gradle/libs.versions.toml`. Keep it that way: a pattern that matches
+# nothing is invisible, and the group it belongs to silently stops grouping.
+#
+# Not ported: core's dependabot-auto-merge.yml. It only *requests* auto-merge and relies on core's `main` ruleset
+# to hold the PR until every required check is green. This repository has no ruleset or branch protection on
+# `main` and auto-merge is off in its settings (2026-10-04), so the same workflow would either fail or merge on
+# nothing. Port it together with a ruleset that requires `build`, `integration` and `coverage`, not before.
+version: 2
+
+updates:
+  - package-ecosystem: gradle
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: Asia/Seoul
+    # Not a throttle -- the grouping decides how many PRs a week brings. Dependabot opens at most this many
+    # version-update PRs at a time and drops every other update it computed without saying so (core #129). The
+    # bound sits above the worst case on today's catalog: every version ref and the wrapper behind at once, each as
+    # its own PR, plus the groups. Raise it if the catalog outgrows it.
+    open-pull-requests-limit: 20
+    labels:
+      - dependencies
+    commit-message:
+      prefix: build
+      include: scope
+    groups:
+      # Test-only dependencies are the safest to take in bulk: a break shows up as a red build, never as a runtime
+      # surprise for a downstream user. Testcontainers is test-only here too; it drives the docker tier.
+      test-dependencies:
+        patterns:
+          - "org.junit:*"
+          - "org.junit.jupiter:*"
+          - "org.junit.platform:*"
+          - "org.assertj:*"
+          - "org.mockito:*"
+          - "org.testcontainers:*"
+        update-types:
+          - minor
+          - patch
+      # Everything else, patch level only. Minors and majors on production dependencies arrive as individual PRs so
+      # somebody reads the changelog before the merge.
+      production-patches:
+        patterns:
+          - "*"
+        exclude-patterns:
+          - "org.junit:*"
+          - "org.junit.jupiter:*"
+          - "org.junit.platform:*"
+          - "org.assertj:*"
+          - "org.mockito:*"
+          - "org.testcontainers:*"
+          - "at.aimon.core:*"
+        update-types:
+          - patch
+    # aimon-core is not a third-party library: it is the framework whose SPI this repository implements, it is 0.x,
+    # and the catalog's own note says raising it "is a deliberate act" that may need code changes here. A core
+    # release arrives as its own PR, never inside a group, so the bump and whatever it requires land together.
+    #
+    # Jackson and SLF4J are pinned to aimon-core's own runtime versions (the catalog says why), so a bot bump that
+    # runs ahead of core would put two versions on the consumer's classpath. Patches only; minors follow core's
+    # catalog by hand.
+    ignore:
+      - dependency-name: "com.fasterxml.jackson.core:*"
+        update-types:
+          - "version-update:semver-minor"
+          - "version-update:semver-major"
+      - dependency-name: "org.slf4j:*"
+        update-types:
+          - "version-update:semver-minor"
+          - "version-update:semver-major"
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:00"
+      timezone: Asia/Seoul
+    open-pull-requests-limit: 3
+    labels:
+      - dependencies
+      - ci
+    commit-message:
+      prefix: ci
+      include: scope
+    groups:
+      actions:
+        patterns:
+          - "*"
