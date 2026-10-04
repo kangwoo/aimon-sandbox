@@ -41,6 +41,12 @@ the design and where the implementation departed from it is
   fork from starting when the sandbox is unavailable; hooks that only observe should set `failOpen: true`. New
   end-to-end tests run a skill's `preTool` shell guard through a real `OrcaAgentExecutor`: it runs in the sandbox, its
   exit 2 blocks the tool, and it blocks when the sandbox is unavailable unless it declares `failOpen`.
+- **A fork without a principal no longer inherits its parent's caller.** The fallback was for cores whose skill forks
+  dropped the principal; every fork path of aimon-core 0.3.1 (Task, `Skill` and slash-command FORK skills, tool-call
+  Workflow/WorkflowJs, forks inside routines) forwards the principal its parent was resolved with. A principal-less
+  fork request now passes the same principal gate as a root request: refused under `require-principal`, anonymous
+  otherwise — and the owner check then decides whether it may use the parent's workspace. A host that builds fork
+  requests by hand must set the principal. Behaviour on 0.3.1 is unchanged.
 - **`OpenSandboxProvider.extendExpiry` rounds the target up to a whole microsecond.** The server keeps microseconds,
   so on a nanosecond clock (Linux) the stored expiry fell just short of the one asked for; the first CI run of the
   docker tier caught it in the provider contract suite.
