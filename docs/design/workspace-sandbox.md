@@ -2019,8 +2019,8 @@ docker 계층, K8s 에서만 드러나는 것은 k8s 계층 — 는 [`workspace-
   코어의 `NoOpShellActionExecutor` 로 파서를 만든다. (b) `OrcaRuntimeSandboxE2ETest` 가 코어 파서로 만든 `preTool` 셸 가드를
   실제 `OrcaAgentExecutor` 로 돌려, 샌드박스에서 돌고 종료 코드 2 로 막고 샌드박스가 사용 불가일 때 막는(`failOpen` 이면
   통과하는) 것을 확인한다. (c) 코어가 훅 명령에 `ExecutionOptions.isHook()` 을 싣게 하는 변경을 코어에 올렸다. 그 코어가
-  나오면 `SandboxShell` 이 훅 명령을 락 없이, 상태를 저장하지 않고 돌린다(§12.1) — 이 저장소 쪽 변경은 그 코어 릴리스를
-  기다린다
+  나오면 `SandboxShell` 이 훅 명령을 락 없이, 상태를 저장하지 않고 돌린다(§12.1). 첫 릴리스(0.1.0)는 코어 0.3.1 로 내고,
+  이 저장소 쪽 변경은 그 코어를 받는 다음 버전에 넣는다
 - ~~**백그라운드 명령을 끝내는 도구**~~ *(코어 0.3.1 과 이 모듈의 취소 지원으로 닫았다)* — 코어의 `KillShell` 이 취소 신호를
   걸고 `SandboxShell` 이 그 신호로 원격 명령을 끝낸다(§7, §9). 끝내지 않은 명령은 `backgroundCommandTimeout` 에서 끝난다(§5.3).
   남은 한계는 다음 두 항목이다
@@ -2065,8 +2065,10 @@ docker 계층, K8s 에서만 드러나는 것은 k8s 계층 — 는 [`workspace-
   모듈 README 가 경고한다(단계 4 구현 설계 §12 Q4)
 - **러너에서의 docker 계층** *(3·4단계 릴리스 전에 닫는다)* — docker 계층은 macOS(Docker Desktop, arm64)에서만 돌았다. Linux
   러너에서의 서버 컨테이너 도달(`host.docker.internal` + host-gateway), amd64 execd 이미지, 러너 커널의 `dns+nft` 를 확인하려고
-  `.github/workflows/build.yml` 의 `integration` 잡이 PR 마다 `integrationTest` 를 돌린다. 그 잡이 초록이 되면 닫는다
-  (§16, 단계 4 구현 설계 §12 Q10)
+  `.github/workflows/build.yml` 의 `integration` 잡이 PR 마다 `integrationTest` 를 돌린다. 첫 실행에서 서버 도달과 계약
+  스위트의 나머지는 통과했고, 하나가 드러났다 — Linux 의 `Instant.now()` 는 나노초까지 주는데 서버는 마이크로초만 저장해
+  `extendExpiry` 가 요청보다 1µs 미만 이른 만료를 남겼다. 프로바이더가 목표를 마이크로초로 올림해 보낸다. 그 잡이 초록이
+  되면 닫는다(§16, 단계 4 구현 설계 §12 Q10)
 - **내장 `VolumeReclaimer`** *(5단계에서 닫는다)* — 4단계는 `VolumeReclaimer` 인터페이스만 두고 주입된 인스턴스를 받는다.
   §13.2 의 `volume-reclaimer: kubernetes | docker` 처럼 속성으로 고르는 내장 구현(K8s PVC · Docker 볼륨 API)과 볼륨 조정은
   공유 볼륨과 함께 5단계에 들어간다(단계 4 구현 설계 §12 Q3)

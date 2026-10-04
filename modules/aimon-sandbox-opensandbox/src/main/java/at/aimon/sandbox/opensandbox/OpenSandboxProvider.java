@@ -4,6 +4,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.format.DateTimeParseException;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
@@ -382,7 +383,9 @@ public final class OpenSandboxProvider implements SandboxProvider {
     /**
      * Forward only and at most {@code max-expiry} from now — the server enforces neither on renew (spike §4-1). Two
      * nodes extending at once may race (read, then renew); both write about {@code now + terminateAfter}. A paused
-     * sandbox is refused: on Kubernetes renewing one breaks it (spike §4-2).
+     * sandbox is refused: on Kubernetes renewing one breaks it (spike §4-2). The target is rounded up to a whole
+     * microsecond: the server keeps microseconds and drops the rest, so a nanosecond clock (Linux) would otherwise get
+     * an expiry just before the one asked for.
      */
     @Override
     public void extendExpiry(ProviderSandboxRef ref, Instant until) {
@@ -392,8 +395,9 @@ public final class OpenSandboxProvider implements SandboxProvider {
                     SandboxProviderException.Kind.PERMANENT, null);
         }
         final Instant now = clock.instant();
-        final Instant cap = now.plus(config.maxExpiry());
-        final Instant target = until.isAfter(cap) ? cap : until;
+        final Instant cap = now.plus(config.maxExpiry()).truncatedTo(ChronoUnit.MICROS);
+        final Instant wanted = ceilToMicros(until);
+        final Instant target = wanted.isAfter(cap) ? cap : wanted;
         if (!target.isAfter(now) || current.expiresAt().map(expiry -> !target.isAfter(expiry)).orElse(false)) {
             return;
         }
@@ -402,6 +406,11 @@ public final class OpenSandboxProvider implements SandboxProvider {
         } catch (HttpErrors.NotFound e) {
             throw new SandboxNotFoundException(ref);
         }
+    }
+
+    static Instant ceilToMicros(Instant instant) {
+        final Instant truncated = instant.truncatedTo(ChronoUnit.MICROS);
+        return truncated.equals(instant) ? instant : truncated.plus(1, ChronoUnit.MICROS);
     }
 
     @Override

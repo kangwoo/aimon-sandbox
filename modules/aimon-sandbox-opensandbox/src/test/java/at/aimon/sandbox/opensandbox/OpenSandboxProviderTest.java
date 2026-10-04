@@ -16,6 +16,7 @@ import java.net.ServerSocket;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -286,6 +287,19 @@ class OpenSandboxProviderTest {
             final Instant capped = server.sandboxes.get(ref.sandboxId()).expiresAt;
             assertThat(capped).isBefore(Instant.now().plus(Duration.ofHours(2)).plusSeconds(5))
                     .isAfter(Instant.now().plus(Duration.ofHours(2)).minusSeconds(5));
+        }
+
+        @Test
+        void extendExpiryRoundsUpToAWholeMicrosecond() {
+            final ProviderSandboxRef ref = created();
+            final Instant until = Instant.now().plus(Duration.ofMinutes(90)).truncatedTo(ChronoUnit.MICROS)
+                    .plusNanos(1);
+
+            provider.extendExpiry(ref, until);
+
+            assertThat(server.sandboxes.get(ref.sandboxId()).expiresAt)
+                    .isEqualTo(until.truncatedTo(ChronoUnit.MICROS).plus(1, ChronoUnit.MICROS));
+            assertThat(OpenSandboxProvider.ceilToMicros(until.minusNanos(1))).isEqualTo(until.minusNanos(1));
         }
 
         @Test
