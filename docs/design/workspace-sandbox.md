@@ -2063,12 +2063,11 @@ docker 계층, K8s 에서만 드러나는 것은 k8s 계층 — 는 [`workspace-
   HTTPS 요청에는 주입이 되지 않는다(요청이 실패한다). 신뢰가 필요하면 이미지 계약이나 환경(CA 번들)에 더해야 한다. k8s 계층의
   `credentialsAreInjectedOnlyWithinTheirScope` 가 검증을 켠 채 확인한다. 그 전까지 `CREDENTIAL_INJECTION` 은 설정대로 광고하되
   모듈 README 가 경고한다(단계 4 구현 설계 §12 Q4)
-- **러너에서의 docker 계층** *(3·4단계 릴리스 전에 닫는다)* — docker 계층은 macOS(Docker Desktop, arm64)에서만 돌았다. Linux
-  러너에서의 서버 컨테이너 도달(`host.docker.internal` + host-gateway), amd64 execd 이미지, 러너 커널의 `dns+nft` 를 확인하려고
-  `.github/workflows/build.yml` 의 `integration` 잡이 PR 마다 `integrationTest` 를 돌린다. 첫 실행에서 서버 도달과 계약
-  스위트의 나머지는 통과했고, 하나가 드러났다 — Linux 의 `Instant.now()` 는 나노초까지 주는데 서버는 마이크로초만 저장해
-  `extendExpiry` 가 요청보다 1µs 미만 이른 만료를 남겼다. 프로바이더가 목표를 마이크로초로 올림해 보낸다. 그 잡이 초록이
-  되면 닫는다(§16, 단계 4 구현 설계 §12 Q10)
+- ~~**러너에서의 docker 계층**~~ *(3·4단계 릴리스 전에 닫았다)* — `.github/workflows/build.yml` 의 `integration` 잡이 PR 마다
+  Linux(ubuntu, amd64) 러너에서 `integrationTest` 를 돌린다. 서버 컨테이너 도달(`host.docker.internal` + host-gateway), amd64
+  execd 이미지, 러너 커널의 `dns+nft` 가 모두 통과했다. 첫 실행이 드러낸 것 하나는 고쳤다 — Linux 의 `Instant.now()` 는
+  나노초까지 주는데 서버는 마이크로초만 저장해 `extendExpiry` 가 요청보다 1µs 미만 이른 만료를 남겼으므로, 프로바이더가 목표를
+  마이크로초로 올림해 보낸다(§16, 단계 4 구현 설계 §12 Q10)
 - **내장 `VolumeReclaimer`** *(5단계에서 닫는다)* — 4단계는 `VolumeReclaimer` 인터페이스만 두고 주입된 인스턴스를 받는다.
   §13.2 의 `volume-reclaimer: kubernetes | docker` 처럼 속성으로 고르는 내장 구현(K8s PVC · Docker 볼륨 API)과 볼륨 조정은
   공유 볼륨과 함께 5단계에 들어간다(단계 4 구현 설계 §12 Q3)
