@@ -25,6 +25,9 @@ import org.slf4j.LoggerFactory;
  * <p>
  * A lock entry exists only while some thread holds or waits on it — it is removed the moment the last user leaves —
  * so an entry is never replaced under a running holder and the map never grows with dead sandboxes.
+ * <p>
+ * <b>Internal.</b> Public only for use across this library's packages: not supported API, and it may change in
+ * any release.
  */
 public final class SandboxConnectionCache implements AutoCloseable {
 

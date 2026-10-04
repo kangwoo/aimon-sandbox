@@ -5,6 +5,9 @@ package at.aimon.sandbox.workspace;
  * (docs/design/workspace-sandbox.md §5.3, §10.3). Only reachable through a {@link ConnectedSlot}, i.e. after
  * {@code connect}'s owner check, and bound to the generation and sandbox it was handed out for: once the slot moves on,
  * its writes are no-ops.
+ * <p>
+ * <b>Internal.</b> Public only for use across this library's packages: not supported API, and it may change in
+ * any release.
  */
 public interface SlotActivity {
 

@@ -55,11 +55,23 @@ import at.aimon.sandbox.provider.SandboxProviderException;
  */
 public final class SandboxWorkspaceManager {
 
-    /** The notice a caller gets when its workspace came back empty after an idle close (§10.5, §15). */
+    /**
+     * The notice a caller gets when its workspace came back empty after an idle close (§10.5, §15).
+     *
+     * <p>
+     * <b>Internal.</b> Public only for use across this library's packages: not supported API, and it may change in
+     * any release.
+     */
     public static final String RESET_NOTICE = "/workspace was reset: this workspace was closed after being idle, and "
             + "its files and shell state are gone";
 
-    /** The error of a command whose sandbox disappeared under it (§15). */
+    /**
+     * The error of a command whose sandbox disappeared under it (§15).
+     *
+     * <p>
+     * <b>Internal.</b> Public only for use across this library's packages: not supported API, and it may change in
+     * any release.
+     */
     public static final String LOST_MESSAGE = "the sandbox was lost mid-command; the environment will be recreated on "
             + "the next call and /workspace will be reset";
 
@@ -105,6 +117,10 @@ public final class SandboxWorkspaceManager {
      * For tests and custom assemblies. <b>Runs no startup validation</b>: build through {@code WorkspaceSandbox}, which
      * refuses the settings this version cannot honour (§13.2).
      *
+     * <p>
+     * <b>Internal.</b> Public only for use across this library's packages: not supported API, and it may change in
+     * any release.
+     *
      * @return a new builder
      */
     public static Builder builder() {
@@ -118,6 +134,10 @@ public final class SandboxWorkspaceManager {
     /**
      * Returns the binding's slot RUNNING and seeded, provisioning it first when needed (§10.1). Called before every
      * command and file operation — reads are per call, writes are throttled.
+     *
+     * <p>
+     * <b>Internal.</b> Public only for use across this library's packages: not supported API, and it may change in
+     * any release.
      *
      * @param binding
      *            the execution's binding
@@ -1003,7 +1023,13 @@ public final class SandboxWorkspaceManager {
         }
     }
 
-    /** Builder for {@link SandboxWorkspaceManager}; {@code WorkspaceSandbox} is the usual way to get one. */
+    /**
+     * Builder for {@link SandboxWorkspaceManager}; {@code WorkspaceSandbox} is the usual way to get one.
+     *
+     * <p>
+     * <b>Internal.</b> Public only for use across this library's packages: not supported API, and it may change in
+     * any release.
+     */
     public static final class Builder {
         private SandboxSettings settings;
         private SandboxProfileRegistry profiles;

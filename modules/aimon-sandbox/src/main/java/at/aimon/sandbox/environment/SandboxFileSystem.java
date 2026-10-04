@@ -37,7 +37,7 @@ import at.aimon.sandbox.workspace.SandboxWorkspaceManager;
  * next shell result. There is no other path restriction: nothing outside the sandbox is reachable, and inside it the
  * shell can do anything the file tools could.
  */
-public final class SandboxFileSystem implements VirtualFileSystem {
+final class SandboxFileSystem implements VirtualFileSystem {
 
     /** The read-only areas, relative to {@code /}. */
     static final List<PathRule> RULES = List.of(PathRule.readOnly("workspace/.aimon-staged"),

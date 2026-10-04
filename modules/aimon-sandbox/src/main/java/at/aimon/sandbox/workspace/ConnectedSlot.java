@@ -11,6 +11,9 @@ import at.aimon.sandbox.provider.SandboxConnection;
  * What {@link SandboxWorkspaceManager#connect} hands back: the record as read, the RUNNING and seeded slot, a
  * connection to its sandbox, the notices this call produced (reset, recreated, provisioning time) and the slot's
  * {@link SlotActivity}.
+ * <p>
+ * <b>Internal.</b> Public only for use across this library's packages: not supported API, and it may change in
+ * any release.
  */
 public final class ConnectedSlot {
 

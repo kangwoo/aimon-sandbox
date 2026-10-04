@@ -119,6 +119,15 @@ class OpenSandboxProviderTest {
         }
 
         @Test
+        void createWaitsUntilExecdAnswers() {
+            server.execdDown.set(2);
+
+            final ProviderSandboxRef ref = provider.create(spec("ws:a", 1).build());
+
+            assertThat(server.requests("GET", "/v1/sandboxes/" + ref.sandboxId() + "/proxy/44772/ping")).hasSize(3);
+        }
+
+        @Test
         void timeoutIsAlwaysSentAndClampedBetweenSixtySecondsAndMaxExpiry() {
             assertThat(provider.timeoutSeconds(Instant.now().plusSeconds(5))).isEqualTo(60);
             assertThat(provider.timeoutSeconds(Instant.now().plus(Duration.ofDays(3)))).isEqualTo(7200);
@@ -371,7 +380,8 @@ class OpenSandboxProviderTest {
                     request -> failures.getAndDecrement() > 0 ? Reply.error(503, "UNAVAILABLE", "busy") : null);
 
             assertThat(provider.status(ref)).isPresent();
-            assertThat(server.requests("GET", "/v1/sandboxes/" + ref.sandboxId())).hasSize(4);
+            assertThat(server.requests("GET", "/v1/sandboxes/" + ref.sandboxId()))
+                    .filteredOn(request -> request.path.equals("/v1/sandboxes/" + ref.sandboxId())).hasSize(4);
         }
 
         @Test
@@ -601,15 +611,21 @@ class OpenSandboxProviderTest {
                 closed = socket.getLocalPort();
             }
             try (OpenSandboxProvider direct = new OpenSandboxProvider(server.config().useServerProxy(false).build())) {
+                // Reachable while create waits for execd; the first resolution after it points at a closed port.
+                final AtomicInteger resolutions = new AtomicInteger(Integer.MIN_VALUE);
+                server.overrides.put("GET /v1/sandboxes/", request -> {
+                    final int at = request.path.indexOf("/endpoints/");
+                    if (at < 0) {
+                        return null;
+                    }
+                    final String id = request.path.substring("/v1/sandboxes/".length(), at);
+                    return Reply.json(200,
+                            Map.of("endpoint", resolutions.getAndIncrement() == 0
+                                    ? "127.0.0.1:" + closed + "/proxy/44772"
+                                    : server.endpoint().getAuthority() + "/v1/sandboxes/" + id + "/proxy/44772"));
+                });
                 final ProviderSandboxRef ref = direct.create(spec("ws:moved", 1).build());
-                final AtomicInteger resolutions = new AtomicInteger();
-                server.overrides.put("GET /v1/sandboxes/" + ref.sandboxId() + "/endpoints",
-                        request -> Reply.json(200,
-                                Map.of("endpoint",
-                                        resolutions.getAndIncrement() == 0
-                                                ? "127.0.0.1:" + closed + "/proxy/44772"
-                                                : server.endpoint().getAuthority() + "/v1/sandboxes/" + ref.sandboxId()
-                                                        + "/proxy/44772")));
+                resolutions.set(0);
                 final SandboxConnection connection = direct.connect(ref);
 
                 final ExecOutcome outcome = connection.run(ExecSpec.builder().command("x").build(), OutputSink.DISCARD)
