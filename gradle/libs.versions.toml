@@ -35,7 +35,7 @@ testcontainers = "2.0.5"
 
 checkstyle = "10.12.5"
 spotless = "6.25.0"
-maven-publish = "0.32.0"
+maven-publish = "0.37.0"
 
 [libraries]
 aimon-core = { module = "at.aimon.core:aimon-core", version.ref = "aimon-core" }
