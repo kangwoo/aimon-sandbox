@@ -12,6 +12,7 @@ import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -39,7 +40,9 @@ import at.aimon.core.shell.exception.ShellTimeoutException;
 import at.aimon.sandbox.RecordingProvider;
 import at.aimon.sandbox.SandboxHarness;
 import at.aimon.sandbox.binding.ShellKey;
+import at.aimon.sandbox.provider.CreateSpec;
 import at.aimon.sandbox.provider.ExecOutcome;
+import at.aimon.sandbox.provider.ProviderSandboxRef;
 import at.aimon.sandbox.provider.RunningCommand;
 import at.aimon.sandbox.testkit.FaultInjectingSandboxProvider.Operation;
 import at.aimon.sandbox.workspace.WorkspaceScan;
@@ -106,6 +109,28 @@ class SandboxShellIT {
         }
         assertThat(ProcessHandle.of(pid).map(ProcessHandle::isAlive).orElse(false)).as("process " + pid + " is alive")
                 .isFalse();
+    }
+
+    /** Waits until a thread is parked in the node-local shell lock: the lock is contended, not merely about to be. */
+    private static void awaitWaitingForTheShellLock(AtomicReference<Thread> waiter) throws InterruptedException {
+        final long deadline = System.nanoTime() + Duration.ofSeconds(15).toNanos();
+        while (!waitingForTheShellLock(waiter.get()) && System.nanoTime() < deadline) {
+            Thread.sleep(10);
+        }
+        assertThat(waitingForTheShellLock(waiter.get())).as("waiting for the shell lock").isTrue();
+    }
+
+    private static boolean waitingForTheShellLock(Thread thread) {
+        if (thread == null || thread.getState() != Thread.State.TIMED_WAITING) {
+            return false;
+        }
+        for (StackTraceElement frame : thread.getStackTrace()) {
+            if (frame.getClassName().equals(at.aimon.sandbox.provider.SandboxConnectionCache.class.getName())
+                    && frame.getMethodName().equals("lockShell")) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private String stateFile() {
@@ -731,9 +756,12 @@ class SandboxShellIT {
             recording[0].runs.clear();
             written.clear();
             final ShellCancellationSource source = ShellCancellationSource.create();
-            final Future<ShellCommandResult> waiting = executor.submit(
-                    () -> bash(otherEnv, "cat > /workspace/second-ran", cancellable(source).stdin("x").build()));
-            Thread.sleep(300);
+            final AtomicReference<Thread> waiter = new AtomicReference<>();
+            final Future<ShellCommandResult> waiting = executor.submit(() -> {
+                waiter.set(Thread.currentThread());
+                return bash(otherEnv, "cat > /workspace/second-ran", cancellable(source).stdin("x").build());
+            });
+            awaitWaitingForTheShellLock(waiter);
 
             source.cancel();
             final Throwable failure = failureOf(waiting);
@@ -865,6 +893,208 @@ class SandboxShellIT {
                         assertThat(e.stderr()).isEqualTo("warned\n");
                     });
         }
+    }
+
+    @Test
+    @DisplayName("§16: a signal tripped while a background command's sandbox is provisioned starts no exec")
+    void aSignalTrippedWhileProvisioningABackgroundCommandStartsNothing() throws Exception {
+        final CountDownLatch creating = new CountDownLatch(1);
+        final CountDownLatch release = new CountDownLatch(1);
+        final RecordingProvider[] recording = new RecordingProvider[1];
+        try (SandboxHarness recorded = SandboxHarness.builder()
+                .decorate((provider, clock) -> recording[0] = new RecordingProvider(provider) {
+                    @Override
+                    public ProviderSandboxRef create(CreateSpec spec) {
+                        creating.countDown();
+                        try {
+                            release.await(20, TimeUnit.SECONDS);
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                        }
+                        return super.create(spec);
+                    }
+                }).build()) {
+            final ExecutionEnvironment fresh = recorded.mainTurn(SessionId.generate(), ALICE);
+            final ShellCancellationSource source = ShellCancellationSource.create();
+            final Future<ShellCommandResult> background = executor
+                    .submit(() -> bash(fresh, ": > /workspace/ran", cancellable(source).background(true).build()));
+            assertThat(creating.await(15, TimeUnit.SECONDS)).as("provisioning started").isTrue();
+
+            // A background command takes no lock: the check right before the exec is the only one left.
+            source.cancel();
+            release.countDown();
+            final Throwable failure = failureOf(background);
+
+            assertThat(failure).isInstanceOf(ShellCancelledException.class)
+                    .hasMessage(SandboxShell.CANCELLED_BEFORE_START_MESSAGE);
+            // Provisioning runs execs of its own; none of them is the command's wrapper.
+            assertThat(recording[0].runs).as("no exec for the cancelled command")
+                    .noneMatch(spec -> spec.command().contains("/workspace/ran"));
+            assertThat(recording[0].kills).hasValue(0);
+        }
+    }
+
+    @Test
+    @DisplayName("§16: a signal tripped as the exec starts — before the shell holds the command — still kills it")
+    void aSignalTrippedAsTheExecStartsKillsTheCommand() throws Exception {
+        final RecordingProvider[] recording = new RecordingProvider[1];
+        try (SandboxHarness recorded = SandboxHarness.builder()
+                .decorate((provider, clock) -> recording[0] = new RecordingProvider(provider)).build()) {
+            final ExecutionEnvironment otherEnv = recorded.mainTurn(SessionId.generate(), ALICE);
+            bash(otherEnv, "true");
+            final ShellCancellationSource source = ShellCancellationSource.create();
+            // The signal trips inside run(): the listener finds no command to kill yet.
+            recording[0].commands(command -> {
+                source.cancel();
+                return command;
+            });
+            final Future<ShellCommandResult> command = executor
+                    .submit(() -> bash(otherEnv, "sleep 30", cancellable(source).build()));
+
+            final long started = System.nanoTime();
+            final Throwable failure = failureOf(command);
+
+            assertThat(failure).isInstanceOf(ShellCancelledException.class).hasMessage(SandboxShell.CANCELLED_MESSAGE);
+            assertThat(Duration.ofNanos(System.nanoTime() - started)).isLessThan(Duration.ofSeconds(10));
+            assertThat(recording[0].kills.get()).as("the kill made up for after run").isPositive();
+        }
+    }
+
+    @Test
+    @DisplayName("§16: a cancelled background command whose kill failed is cancelled, not timed out, at the backstop")
+    void aCancelledBackgroundCommandWhoseKillFailedIsCancelledAtTheBackstop() throws Exception {
+        final RecordingProvider[] recording = new RecordingProvider[1];
+        try (SandboxHarness recorded = SandboxHarness.builder()
+                .decorate((provider, clock) -> recording[0] = new RecordingProvider(provider)).build()) {
+            final SessionId other = SessionId.generate();
+            final ExecutionEnvironment otherEnv = recorded.mainTurn(other, ALICE);
+            bash(otherEnv, "true");
+            recording[0].commands(command -> new RunningCommand() {
+                @Override
+                public ExecOutcome await(Duration timeout) throws InterruptedException {
+                    return command.await(timeout);
+                }
+
+                @Override
+                public void kill() {
+                    // The request never reaches the sandbox.
+                }
+            });
+            final ShellCancellationSource source = ShellCancellationSource.create();
+            // No watchdog in a background wrapper: the exec's own timeout (1s + slack) ends it, as timedOut().
+            final Future<ShellCommandResult> command = executor.submit(
+                    () -> bash(otherEnv, "echo partial; : > /workspace/running; sleep 30", ExecutionOptions.builder()
+                            .timeout(Duration.ofSeconds(1)).background(true).cancellation(source.token()).build()));
+            awaitHostFile(recorded, other, "/workspace/running");
+
+            source.cancel();
+            final Throwable failure = failureOf(command);
+
+            assertThat(failure).isInstanceOf(ShellCancelledException.class).hasMessage(SandboxShell.CANCELLED_MESSAGE);
+            assertThat(((ShellCancelledException) failure).stdout()).isEqualTo("partial\n");
+        }
+    }
+
+    @Test
+    @DisplayName("§16: an interrupt after a cancel whose kill failed is the cancellation, with the interrupt kept")
+    void anInterruptAfterACancelWhoseKillFailedIsStillCancelled() throws Exception {
+        final RecordingProvider[] recording = new RecordingProvider[1];
+        try (SandboxHarness recorded = SandboxHarness.builder()
+                .decorate((provider, clock) -> recording[0] = new RecordingProvider(provider)).build()) {
+            final SessionId other = SessionId.generate();
+            final ExecutionEnvironment otherEnv = recorded.mainTurn(other, ALICE);
+            bash(otherEnv, "true");
+            recording[0].commands(command -> new RunningCommand() {
+                @Override
+                public ExecOutcome await(Duration timeout) throws InterruptedException {
+                    return command.await(timeout);
+                }
+
+                @Override
+                public void kill() {
+                    // Slow or failed: core's shutdown interrupts five seconds after it cancelled.
+                }
+            });
+            final ShellCancellationSource source = ShellCancellationSource.create();
+            final CompletableFuture<Throwable> outcome = new CompletableFuture<>();
+            final CompletableFuture<Boolean> interrupted = new CompletableFuture<>();
+            final Thread thread = new Thread(() -> {
+                try {
+                    bash(otherEnv, "echo partial; : > /workspace/running; sleep 30",
+                            cancellable(source).background(true).build());
+                    outcome.complete(null);
+                } catch (Throwable e) {
+                    outcome.complete(e);
+                } finally {
+                    interrupted.complete(Thread.currentThread().isInterrupted());
+                }
+            });
+            thread.start();
+            awaitHostFile(recorded, other, "/workspace/running");
+
+            source.cancel();
+            thread.interrupt();
+            final Throwable failure = outcome.get(10, TimeUnit.SECONDS);
+
+            assertThat(failure).isInstanceOf(ShellCancelledException.class).hasMessage(SandboxShell.CANCELLED_MESSAGE);
+            assertThat(((ShellCancelledException) failure).stdout()).isEqualTo("partial\n");
+            assertThat(((ShellCancelledException) failure).notices()).contains(SandboxShell.KILLED_NOTICE);
+            assertThat(interrupted.get(10, TimeUnit.SECONDS)).as("the interrupt flag is restored").isTrue();
+        }
+    }
+
+    @Test
+    @DisplayName("a provider whose kill throws does not make execute throw it before the command ended")
+    void aKillThatThrowsIsLoggedAndTheCommandStillAwaited() throws Exception {
+        final RecordingProvider[] recording = new RecordingProvider[1];
+        try (SandboxHarness recorded = SandboxHarness.builder()
+                .decorate((provider, clock) -> recording[0] = new RecordingProvider(provider)).build()) {
+            final SessionId other = SessionId.generate();
+            final ExecutionEnvironment otherEnv = recorded.mainTurn(other, ALICE);
+            bash(otherEnv, "true");
+            final ShellCancellationSource source = ShellCancellationSource.create();
+            recording[0].commands(command -> {
+                // Tripped inside run(), so the shell makes up for the kill itself — and the kill throws.
+                source.cancel();
+                return new RunningCommand() {
+                    @Override
+                    public ExecOutcome await(Duration timeout) throws InterruptedException {
+                        return command.await(timeout);
+                    }
+
+                    @Override
+                    public void kill() {
+                        throw new IllegalStateException("the exec server answered 500");
+                    }
+                };
+            });
+
+            // The kill never lands; the wrapper's watchdog ends the command at its timeout.
+            final Throwable failure = failureOf(executor.submit(() -> bash(otherEnv,
+                    "echo partial; echo $$ > /workspace/pid; sleep 30",
+                    ExecutionOptions.builder().timeout(Duration.ofSeconds(2)).cancellation(source.token()).build())));
+
+            assertThat(failure).isInstanceOf(ShellCancelledException.class).hasMessage(SandboxShell.CANCELLED_MESSAGE);
+            assertThat(((ShellCancelledException) failure).stdout()).as("read before the run files were removed")
+                    .isEqualTo("partial\n");
+            awaitDead(Long.parseLong(recorded.hostFile(other, "/workspace/pid").strip()));
+        }
+    }
+
+    @Test
+    @DisplayName("the partial output of a timed-out command says it was cut at the capture cap")
+    void aTimedOutCommandsPartialOutputIsFlaggedTruncatedAtTheCap() throws Exception {
+        final ShellTimeoutException failure = org.junit.jupiter.api.Assertions.assertThrows(ShellTimeoutException.class,
+                () -> bash(env, "head -c 100 /dev/zero | tr '\\0' x; sleep 30",
+                        ExecutionOptions.builder().timeout(Duration.ofSeconds(1)).maxCaptureBytes(10L).build()));
+        final ShellTimeoutException small = org.junit.jupiter.api.Assertions.assertThrows(ShellTimeoutException.class,
+                () -> bash(env, "printf 0123456789; sleep 30",
+                        ExecutionOptions.builder().timeout(Duration.ofSeconds(1)).maxCaptureBytes(10L).build()));
+
+        assertThat(failure.stdout()).isEqualTo("xxxxxxxxxx");
+        assertThat(failure.outputTruncated()).isTrue();
+        assertThat(small.stdout()).isEqualTo("0123456789");
+        assertThat(small.outputTruncated()).as("exactly at the cap is not cut").isFalse();
     }
 
     @Test

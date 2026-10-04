@@ -17,6 +17,12 @@ the design and where the implementation departed from it is
   output written so far. A signal that is already tripped starts nothing and provisions nothing. The kill reaches the
   exec's process group; a job the command moved out of it (`setsid`, `set -m`) survives until the sandbox goes. No
   provider SPI change.
+- **An interrupt after a cancel is reported as cancelled.** When the waiting thread is interrupted after the signal
+  tripped — core's stack shutdown cancels, then interrupts five seconds later — `execute` kills the command again and
+  throws `ShellCancelledException` with the output so far (the interrupt flag stays set), so core settles the
+  background task as `KILLED`, not `FAILED`. An interrupt without a cancel is still "interrupted and killed". A
+  provider whose `kill()` throws no longer makes `execute` throw that exception before the command ended; the partial
+  output of a timeout or a cancellation is flagged truncated when it was cut at the capture cap.
 - **Background commands now end after one hour by default**, where they could run for up to 24 hours. Profiles gain
   `background-command-timeout` (`SandboxProfile.backgroundCommandTimeout`), which the environment returns as core's
   `backgroundCommandTimeout()`. Unset, it equals `background-heartbeat-limit` (1h): the command ends when it stops

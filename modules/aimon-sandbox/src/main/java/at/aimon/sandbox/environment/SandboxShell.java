@@ -69,7 +69,10 @@ import at.aimon.sandbox.workspace.SandboxWorkspaceManager;
  * shared with every execution bound to the slot, the second is at most {@code shellLockWait}. Tripped while the command
  * runs, the signal kills it through {@link RunningCommand#kill()}, on the cancelling thread, and {@code execute} throws
  * {@link ShellCancelledException} with the output written so far. What decides between "cancelled" and a normal result
- * is the wrapper's trailer, not the signal: a command that printed it had ended by itself before the kill landed.
+ * is the wrapper's trailer, not the signal: a command that printed it had ended by itself before the kill landed. An
+ * interrupt of the waiting thread after the signal tripped — core's shutdown cancels, then interrupts — is the same
+ * cancellation: the command is killed and {@code execute} throws {@link ShellCancelledException}, the interrupt flag
+ * set; only an interrupt without a cancel is a failure of its own.
  *
  * <p>
  * The kill — for a timeout, an interrupt and a cancellation — reaches the exec's <b>process group</b>: the wrapper,
@@ -318,17 +321,26 @@ public final class SandboxShell implements VirtualShell {
                         lost.set(true);
                         final RunningCommand command = running.get();
                         if (command != null) {
-                            command.kill();
+                            killQuietly(command);
                         }
                     });
             try {
                 running.set(slot.connection().run(spec, OutputSink.DISCARD));
                 if (lost.get() || cancelled.get()) {
-                    running.get().kill();
+                    // A provider whose kill throws must not skip the await: the run files are removed only after it.
+                    killQuietly(running.get());
                 }
                 outcome = running.get().await(spec.timeout());
             } catch (InterruptedException e) {
-                running.get().kill();
+                killQuietly(running.get());
+                if (cancelled.get()) {
+                    // Interrupted after a cancel — a shutdown that gave a slow or failed kill its grace: the command
+                    // was still stopped on request. The run files are read before the flag is restored, so a files
+                    // API that refuses an interrupted thread still yields the output so far.
+                    final ShellCancelledException stopped = cancelled(slot.connection().files(), run, null);
+                    Thread.currentThread().interrupt();
+                    throw stopped;
+                }
                 Thread.currentThread().interrupt();
                 throw new ShellExecutionException("the command was interrupted and killed", e, "", "", false,
                         notices(List.of(KILLED_NOTICE)));
@@ -421,23 +433,27 @@ public final class SandboxShell implements VirtualShell {
     }
 
     private ShellTimeoutException timeout(SandboxFiles files, Run run) {
-        final String stdout = readPartial(files, run.prefix + ".out", run);
-        final String stderr = readPartial(files, run.prefix + ".err", run);
+        final Capture stdout = readRunFile(files, run.prefix + ".out", run).orElse(Capture.EMPTY);
+        final Capture stderr = readRunFile(files, run.prefix + ".err", run).orElse(Capture.EMPTY);
         return new ShellTimeoutException("the command timed out after " + run.timeout.toMillis() + "ms and was killed",
-                run.timeout, stdout, stderr, false, notices(List.of(KILLED_NOTICE)));
+                run.timeout, stdout.content, stderr.content, stdout.truncated || stderr.truncated,
+                notices(List.of(KILLED_NOTICE)));
     }
 
     /**
      * A command stopped through its cancellation signal, with what it had written. The run files hold that; when they
      * are already gone — the kill landed in the wrapper's last lines, after it printed the output and removed them —
-     * the output is what the exec stream carried.
+     * the output is what the exec stream carried, or nothing when there is no outcome (the wait was interrupted).
      */
     private ShellCancelledException cancelled(SandboxFiles files, Run run, ExecOutcome outcome) {
-        final String stdout = readRunFile(files, run.prefix + ".out", run)
-                .orElseGet(() -> new String(outcome.stdout(), run.charset));
-        final String stderr = readRunFile(files, run.prefix + ".err", run)
-                .orElseGet(() -> new String(outcome.stderr(), run.charset));
-        return new ShellCancelledException(CANCELLED_MESSAGE, stdout, stderr, false, notices(List.of(KILLED_NOTICE)));
+        final Capture stdout = readRunFile(files, run.prefix + ".out", run).orElseGet(() -> outcome == null
+                ? Capture.EMPTY
+                : new Capture(new String(outcome.stdout(), run.charset), outcome.stdoutTruncated()));
+        final Capture stderr = readRunFile(files, run.prefix + ".err", run).orElseGet(() -> outcome == null
+                ? Capture.EMPTY
+                : new Capture(new String(outcome.stderr(), run.charset), outcome.stderrTruncated()));
+        return new ShellCancelledException(CANCELLED_MESSAGE, stdout.content, stderr.content,
+                stdout.truncated || stderr.truncated, notices(List.of(KILLED_NOTICE)));
     }
 
     private ShellCancelledException cancelledBeforeStart() {
@@ -480,14 +496,33 @@ public final class SandboxShell implements VirtualShell {
         files.write(path, new ByteArrayInputStream(content), content.length, WriteMode.CREATE_OR_REPLACE);
     }
 
-    private static String readPartial(SandboxFiles files, String path, Run run) {
-        return readRunFile(files, path, run).orElse("");
+    /** What a run file held, up to the capture cap, and whether it held more. */
+    private static final class Capture {
+        private static final Capture EMPTY = new Capture("", false);
+
+        private final String content;
+        private final boolean truncated;
+
+        private Capture(String content, boolean truncated) {
+            this.content = content;
+            this.truncated = truncated;
+        }
     }
 
-    /** @return the run file's content up to the capture cap, or empty when it cannot be read (it is gone) */
-    private static Optional<String> readRunFile(SandboxFiles files, String path, Run run) {
-        try (InputStream in = files.read(path, 0, run.max)) {
-            return Optional.of(new String(in.readAllBytes(), run.charset));
+    /**
+     * @return the run file's content up to the capture cap — truncated, as the wrapper's {@code head -c} would, when
+     *         the
+     *         file holds more — or empty when it cannot be read (it is gone)
+     */
+    private static Optional<Capture> readRunFile(SandboxFiles files, String path, Run run) {
+        // One byte past the cap tells a file that reached it from one that went over.
+        final long limit = run.max == Long.MAX_VALUE ? run.max : run.max + 1;
+        try (InputStream in = files.read(path, 0, limit)) {
+            final byte[] bytes = in.readAllBytes();
+            if (bytes.length > run.max) {
+                return Optional.of(new Capture(new String(bytes, 0, (int) run.max, run.charset), true));
+            }
+            return Optional.of(new Capture(new String(bytes, run.charset), false));
         } catch (IOException | RuntimeException e) {
             return Optional.empty();
         }

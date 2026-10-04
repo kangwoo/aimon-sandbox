@@ -73,7 +73,8 @@ ExecutionEnvironmentSpec.shared(sandbox.environmentProvider());
 - **Runtimes can come and go.** The provider keeps nothing per `AgentRuntime`, so evicting one stops no command and
   touches no sandbox; sandboxes live as long as their workspaces (design §3.2, §7).
 - **Skill shell hooks run in the sandbox, and guards fail closed.** With aimon-core 0.3.1 a shell hook that a skill
-  declares runs in the execution's sandbox shell, never on the host. When the sandbox is unavailable — the binding
+  declares runs in the execution's sandbox shell, never on the host (with core's default
+  `DefaultShellActionExecutor`; a host that installs another executor gets what that one does). When the sandbox is unavailable — the binding
   was refused, provisioning failed, the provider cannot be reached — a tool call guarded by a skill's `preTool`
   shell hook is **blocked** with the reason, and a skill fork with an `onStart` shell guard **does not start**.
   Give hooks that only observe `failOpen: true`. Hooks from `hooks.json` run on the host shell and do not depend on

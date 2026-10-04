@@ -114,8 +114,11 @@ Mechanics, all inside `SandboxShell`:
 
 **What "everything the command started" means here** (F5): the exec's process group — the wrapper, the inner bash,
 the command and every descendant that stayed in the group. A job the command put in its own group or session
-survives until the sandbox goes. This is the same reach as the timeout kill and as core's own `LocalShell` gap
-(core EE-55), and it is stated in the javadoc and WS §9 rather than hidden. It is not a reason to withhold the
+survives until the sandbox goes. This is the same reach as the timeout kill, and it is stated in the javadoc and
+WS §9 rather than hidden. It is a gap of a different shape from core's own `LocalShell` gap (core EE-55): killing the
+whole group also catches grandchildren born after the kill was decided, which `LocalShell`'s descendant snapshot
+misses; the sandbox misses only jobs that left the group (`setsid`, `set -m`), which `LocalShell`'s tree walk would
+still find. It is not a reason to withhold the
 declaration: not declaring leaves *every* command unstoppable.
 
 | Rejected | Why |
@@ -215,7 +218,8 @@ justifies the refusal with a statement that stopped being true. Leaving that par
 sentence would make the document contradict itself. So, in this PR:
 
 - **WS §12.1** (the "스킬 선언 훅의 셸 액션은 샌드박스 모드에서 거부한다" paragraph) is rewritten to the current facts:
-  with core ≥ 0.3.1 a skill-declared shell hook runs in the execution's sandbox shell (never on the host);
+  with core ≥ 0.3.1 a skill-declared shell hook runs in the execution's sandbox shell (never on the host, with
+  core's default `DefaultShellActionExecutor`);
   `WorkspaceSandbox.skillHookSetParser()` / `markdownSkillParser()` remain as an **opt-in stricter policy** ("no
   skill-declared shell code at all"); the fail-closed behaviour and the `failOpen` recommendation follow.
 - **WS §20** "스킬 선언 훅을 샌드박스에서 돌리기" is struck through as closed on the core side (EE-12), pointing at
@@ -402,7 +406,8 @@ Decisions for a human, at the top of the PR description: Q1 and Q2 below.
   - Behaviour notes (EE-51/EE-70): documented — and they surfaced that this repository's "shell hooks are refused
     in sandbox mode" rationale predates EE-12 (F12, Q2).
   - One thing for core to know: cancellation reaches the exec's **process group**; "everything the command
-    started" excludes jobs moved out of the group, exactly as with `LocalShell` (core EE-55).
+    started" excludes jobs moved out of the group (`setsid`, `set -m`). Unlike `LocalShell` (core EE-55), whose
+    descendant snapshot misses grandchildren born after it, the group kill catches those.
 
 ## 9. Open questions (not assumed)
 
@@ -496,6 +501,23 @@ Q4 (a kill wider than the process group) and Q6 (the principal-less fork fallbac
 - F10 and §8 say `OrcaSandboxToolProvider` "was deleted with the old design". More precisely, it is not implemented
   yet: WS §8.5 and §18-5 still name it as the planned provider of the orchestrator tools. There is nothing to migrate
   today, and it will be written against the current SPI.
-- **Left as it was:** an interrupt that arrives after a cancel is still reported as "interrupted and killed", not as
-  cancelled. The design does not cover the combination. Core's `BackgroundBashManager.close()` cancels first and
-  interrupts five seconds later, so a command whose kill request failed can settle as failed there rather than killed.
+- **An interrupt that arrives after a cancel is reported as cancelled** (added in the PR #6 review). The design did
+  not cover the combination, and the first cut reported it as "interrupted and killed". Core's
+  `BackgroundBashManager.close()` cancels first and interrupts five seconds later, so a command whose kill request
+  was slow or failed settled as `FAILED` at shutdown rather than `KILLED`. Now the interrupt handler kills again,
+  reads the partial output from the run files *before* restoring the interrupt flag (a files API may refuse an
+  interrupted thread — `LocalShell`'s order), restores the flag and throws the same `ShellCancelledException` as the
+  normal cancel path. An interrupt without a prior cancel keeps the "interrupted and killed" failure.
+  `SandboxShellIT.anInterruptAfterACancelWhoseKillFailedIsStillCancelled` pins it.
+- **Kills go through `killQuietly` everywhere** (PR #6 review). The make-up kill after `run`, the heartbeat's
+  lost-sandbox kill and the interrupt kill called `RunningCommand.kill()` directly: a provider whose kill threw made
+  `execute` throw a raw `RuntimeException` without awaiting the command, and the `finally` then removed its run files
+  while it might still be running. `SandboxShellIT.aKillThatThrowsIsLoggedAndTheCommandStillAwaited` pins it.
+- **Partial output says when it was cut** (PR #6 review). A timeout's and a cancellation's output read from the run
+  files is flagged `outputTruncated` when the file held more than the capture cap, as `LocalShell` does; the
+  first cut always passed `false`.
+- **Mutation-checked tests** (PR #6 review): the check right before the exec
+  (`aSignalTrippedWhileProvisioningABackgroundCommandStartsNothing`), the make-up kill after `run`
+  (`aSignalTrippedAsTheExecStartsKillsTheCommand`) and the cancel's precedence over the exec's own timeout on the
+  background path (`aCancelledBackgroundCommandWhoseKillFailedIsCancelledAtTheBackstop`); each fails with its
+  mutation applied.

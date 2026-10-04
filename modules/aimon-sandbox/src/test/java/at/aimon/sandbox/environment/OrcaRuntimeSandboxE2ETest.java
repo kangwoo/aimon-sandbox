@@ -173,7 +173,7 @@ class OrcaRuntimeSandboxE2ETest {
         assertThat(result.isSuccess()).as(result.getErrorMessage()).isTrue();
         assertThat(llm.userMessages).anyMatch(text -> text.contains("Write the fork marker file."));
         // The fork shares the session's workspace and slot (§8.2): the marker is in the same sandbox. Core's skill-fork
-        // path forwards no principal; the fork acts for its parent rather than being refused "not permitted".
+        // path forwards the caller's principal (core PR #200), so the fork acts as that caller, not "not permitted".
         assertThat(llm.toolResults).noneMatch(text -> text.contains("not permitted"));
         assertThat(harness.hostFile(session, "/workspace/repo/fork-marker.txt")).isEqualTo("forked\n");
         assertThat(harness.store.scan(WorkspaceScan.builder().build())).hasSize(1);
