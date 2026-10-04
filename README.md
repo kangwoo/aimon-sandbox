@@ -14,7 +14,8 @@ picks, provisions and retires. The design is
 IMPORTANT: this repository **has not been released yet.** Implementation steps 3 and 4 (§18) are in — the
 workspace domain, the provider SPI and the local path (step 3), and the production OpenSandbox provider with the
 janitor's sandbox reconciliation (step 4) — and are released together. The release is still blocked on the
-aimon-core SNAPSHOT pin (below) and on the open items of design §20 marked for it.
+open items of design §20 marked for it. (The aimon-core SNAPSHOT pin that also blocked it is gone: the build now
+uses the released aimon-core 0.3.1.)
 
 The identifier-based sandbox it was split out of aimon-core with — four `*Sandbox` tools, the
 `SandboxBackend` SPI and its Docker and Kubernetes backends — has been deleted, not kept alongside the new
@@ -43,9 +44,7 @@ Maven Central and still works; its design document was deleted with it and survi
 The dependency runs one way: this repository compiles against a released `at.aimon.core:aimon-core` from
 Maven Central (one line in [`gradle/libs.versions.toml`](gradle/libs.versions.toml)), and aimon-core has no
 reference to anything here. The workspace sandbox implements aimon-core's execution-environment SPI
-(design §7), which only aimon-core's unreleased 0.3.1 has: the catalog pins `0.3.1-SNAPSHOT`, resolved from
-`~/.m2` after `./gradlew publishToMavenLocal` in aimon-core. The code follows aimon-core main at `61604b4`
-(core PRs up to #208). That pin is a release blocker (see [CHANGELOG.md](CHANGELOG.md)).
+(design §7), which aimon-core has since 0.3.1: the catalog pins the released `0.3.1` (core PRs up to #208).
 
 ## Wiring
 
@@ -85,9 +84,6 @@ ExecutionEnvironmentSpec.shared(sandbox.environmentProvider());
 ## Build
 
 ```bash
-# once, in a checkout of aimon-core (until 0.3.1 is on Maven Central):
-./gradlew publishToMavenLocal -x test -x javadoc
-
 ./gradlew build            # compile + unit tests (no Docker needed)
 ./gradlew checkAll         # the gate: Spotless + Checkstyle + unit tests
 ./gradlew format           # apply formatting

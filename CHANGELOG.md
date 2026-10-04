@@ -107,9 +107,9 @@ step 4 (above), and steps 3 and 4 are released together.
 - **Refused at startup, not ignored**: profiles with `pause-after` (step 7), `shared-access` other than `none`
   (step 5) or a `seed` (step 5). Step 3 also refused `credentials`; step 4 (above) lifted that refusal. Only the
   `primary` slot is served (step 5).
-- **aimon-core is pinned to `0.3.1-SNAPSHOT`**, resolved through a `mavenLocal()` filtered to the `at.aimon.core`
-  group and to snapshots. **This is a release blocker**: nothing is released from this repository until
-  aimon-core 0.3.1 is on Maven Central, the pin is raised to it, and `mavenLocal()` is removed.
+- **aimon-core is pinned to the released `0.3.1`** from Maven Central. While it was unreleased the pin was
+  `0.3.1-SNAPSHOT`, resolved through a `mavenLocal()` filtered to the `at.aimon.core` group and to snapshots;
+  that block is gone with it, so nothing in this build resolves from `~/.m2` any more.
 - `slf4j-api` and `jackson-databind` join the catalog at aimon-core's own runtime versions: aimon-core's published
   API exports no dependencies, so what this code compiles against is declared here.
 

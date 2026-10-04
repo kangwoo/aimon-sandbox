@@ -26,7 +26,6 @@
 저장소(6단계), pause/resume · worktree 격리(7단계). 그런 설정은 조용히 무시하지 않고 기동 시 거부한다. 구현 설계와 설계에서
 벗어난 점은 [`workspace-sandbox-step3.md`](../../docs/design/workspace-sandbox-step3.md) 에 있다.
 
-aimon-core 는 아직 릴리스되지 않은 `0.3.1-SNAPSHOT` 을 `mavenLocal()` 에서 받는다. aimon-core 0.3.1 이 나오기 전에는
-릴리스할 수 없다(CHANGELOG 참고).
+aimon-core 는 Maven Central 에 릴리스된 `0.3.1` 을 쓴다(그 전까지는 `mavenLocal()` 의 `0.3.1-SNAPSHOT` 이었다).
 
 옛 구현이 필요하면 `at.aimon.core:aimon-sandbox{,-docker,-kubernetes}:0.2.4` 가 Maven Central 에 그대로 있다.
