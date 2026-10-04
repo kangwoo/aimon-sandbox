@@ -331,19 +331,53 @@ class SandboxEnvironmentProviderTest {
     }
 
     @Test
-    void aForkWithoutAPrincipalActsForItsParentAndOneWithAPrincipalForThatPrincipal() throws Exception {
+    @DisplayName("§8.2: a fork without a principal never inherits its parent's caller — it is checked like a root")
+    void aForkWithoutAPrincipalIsCheckedLikeARootAndNeverActsForItsParent() throws Exception {
         final ExecutionEnvironment main = harness.mainTurn(SessionId.generate(), ALICE);
         bash(main, "true");
 
-        // aimon-core's skill-fork path forwards no principal: the fork keeps its parent's caller.
-        final ExecutionEnvironment anonymous = harness.resolve(
-                EnvironmentRequest.builder().agentRuntimeId(SandboxHarness.RUNTIME).executionId(ExecutionId.generate())
-                        .parent(main).fork(ForkDefinition.builder().name("skill").build()).build());
+        // require-principal is off here: a principal-less fork acts as anonymous, as a principal-less root would, and
+        // the owner check keeps it out of alice's workspace.
+        final ExecutionEnvironment principalLess = harness.fork(main, null);
         final ExecutionEnvironment bobs = harness.fork(main, at.aimon.core.base.Principal.user("bob"));
+        final ExecutionEnvironment alices = harness.fork(main, ALICE);
 
-        assertThat(binding(anonymous).caller()).isEqualTo(binding(main).caller());
-        assertThat(bash(anonymous, "echo fork").stdout()).isEqualTo("fork\n");
+        assertThat(binding(principalLess).caller()).isNotEqualTo(binding(main).caller()).isEqualTo(
+                at.aimon.sandbox.workspace.WorkspaceOwner.anonymous(at.aimon.sandbox.workspace.TenantId.DEFAULT));
+        assertThatThrownBy(() -> bash(principalLess, "true")).hasMessageContaining("not permitted");
         assertThat(binding(bobs).caller().principal()).isEqualTo("USER:bob");
+        assertThatThrownBy(() -> bash(bobs, "true")).hasMessageContaining("not permitted");
+        assertThat(bash(alices, "echo fork").stdout()).isEqualTo("fork\n");
+    }
+
+    @Test
+    @DisplayName("§8.2, §8.3: with require-principal a fork without a principal is refused, as a root would be")
+    void aForkWithoutAPrincipalIsRefusedUnderRequirePrincipal() throws Exception {
+        try (SandboxHarness strict = SandboxHarness.builder().settings(s -> s.requirePrincipal(true))
+                .tenantResolver(principal -> at.aimon.sandbox.workspace.TenantId.DEFAULT)
+                .sessionOwnerLookup(session -> java.util.Optional.of(ALICE)).build()) {
+            final ExecutionEnvironment main = strict.mainTurn(SessionId.generate(), ALICE);
+            bash(main, "true");
+
+            final ExecutionEnvironment principalLess = strict.fork(main, null);
+
+            assertThat(cause(principalLess)).contains("require-principal is on");
+            assertThat(bash(strict.fork(main, ALICE), "echo fork").stdout()).isEqualTo("fork\n");
+            assertThat(strict.faults.calls(Operation.CREATE)).isEqualTo(1);
+        }
+    }
+
+    @Test
+    @DisplayName("§8.2: without require-principal a principal-less parent's principal-less fork shares its sandbox")
+    void aPrincipalLessDeploymentKeepsItsForksInTheParentsWorkspace() throws Exception {
+        final ExecutionEnvironment main = harness.mainTurn(SessionId.generate(), null);
+        bash(main, "echo from-main > /workspace/repo/shared.txt");
+
+        final ExecutionEnvironment fork = harness.fork(main, null);
+
+        assertThat(binding(fork).caller()).isEqualTo(binding(main).caller());
+        assertThat(bash(fork, "cat /workspace/repo/shared.txt").stdout()).isEqualTo("from-main\n");
+        assertThat(harness.local.sandboxCount()).isEqualTo(1);
     }
 
     @Test
