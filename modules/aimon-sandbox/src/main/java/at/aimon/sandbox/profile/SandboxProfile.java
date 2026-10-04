@@ -211,6 +211,10 @@ public final class SandboxProfile {
      * The SHA-256 of the profile's canonical form. A slot records it, so a permanent failure is retried exactly when
      * the profile's content changes (§10.1).
      *
+     * <p>
+     * <b>Internal.</b> Public only for use across this library's packages: not supported API, and it may change in
+     * any release.
+     *
      * @return the hex hash
      */
     public String contentHash() {

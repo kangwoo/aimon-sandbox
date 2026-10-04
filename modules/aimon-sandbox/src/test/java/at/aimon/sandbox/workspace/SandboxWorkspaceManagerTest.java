@@ -398,7 +398,7 @@ class SandboxWorkspaceManagerTest {
             @Override
             public void destroy(ProviderSandboxRef ref) {
                 // A concurrent call looks the sandbox up just before it goes, and caches a connection to it.
-                self[0].sandbox.connections().get(ref);
+                self[0].sandbox.manager().connections().get(ref);
                 super.destroy(ref);
             }
         }).build();
@@ -411,8 +411,8 @@ class SandboxWorkspaceManagerTest {
                 .hasMessageContaining("could not be provisioned");
 
         assertThat(harness.local.sandboxCount()).isZero();
-        assertThatThrownBy(() -> harness.sandbox.connections().get(created[0])).as("no stale connection stays cached")
-                .isInstanceOf(SandboxNotFoundException.class);
+        assertThatThrownBy(() -> harness.sandbox.manager().connections().get(created[0]))
+                .as("no stale connection stays cached").isInstanceOf(SandboxNotFoundException.class);
     }
 
     private SandboxWorkspace stuck(SessionId session, ProvisioningClaim claim) {

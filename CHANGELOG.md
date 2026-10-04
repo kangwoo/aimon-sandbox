@@ -59,6 +59,14 @@ the design and where the implementation departed from it is
   - **The first command after a create could get HTTP 502** (about one create in five, with egress): execd starts only
     after the egress CA is ready. `OpenSandboxProvider.create` now waits until execd answers `/ping`, within
     `create-timeout`.
+- **The public surface was trimmed for the first release.** `SandboxShell`, `SandboxFileSystem` and
+  `SandboxContentSearch` are package-private (applications see them only as core's `VirtualShell`,
+  `VirtualFileSystem` and `ContentSearch`), and `WorkspaceSandbox.connections()` is gone from the API. Types and
+  members that must stay public for use across this library's packages carry an **Internal** javadoc note and are not
+  supported API: `SandboxConnectionCache`, `ConnectedSlot`, `SlotActivity`, `Heartbeat`,
+  `SandboxWorkspaceManager.builder()`/`connect()`/`RESET_NOTICE`/`LOST_MESSAGE`,
+  `SandboxExecutionEnvironmentProvider.builder()`, the `SandboxJanitor` constructor, `ShellKey.directoryName()` and
+  `SandboxProfile.contentHash()`.
 - CI: `.github/workflows/build.yml` runs `checkAll` and the docker tier (`integrationTest`) on Ubuntu.
 - README gains a "Wiring" section (`ExecutionEnvironmentSpec.shared`, close order, the notes above).
 - Tests compile against core's `UserLocale` (was `Environment`).

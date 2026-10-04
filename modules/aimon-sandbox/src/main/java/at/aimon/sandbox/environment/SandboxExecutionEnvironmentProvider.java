@@ -82,6 +82,10 @@ public final class SandboxExecutionEnvironmentProvider implements ExecutionEnvir
      * refuses the settings this version cannot honour (§13.2) — a hand-wired provider would silently ignore
      * {@code pause-after}, {@code seed}, shared access and credentials.
      *
+     * <p>
+     * <b>Internal.</b> Public only for use across this library's packages: not supported API, and it may change in
+     * any release.
+     *
      * @return a new builder
      */
     public static Builder builder() {
@@ -182,6 +186,9 @@ public final class SandboxExecutionEnvironmentProvider implements ExecutionEnvir
 
     /**
      * Builder for {@link SandboxExecutionEnvironmentProvider}; {@code WorkspaceSandbox} is the usual way to get one.
+     * <p>
+     * <b>Internal.</b> Public only for use across this library's packages: not supported API, and it may change in
+     * any release.
      */
     public static final class Builder {
         private SandboxBindingPolicy policy;

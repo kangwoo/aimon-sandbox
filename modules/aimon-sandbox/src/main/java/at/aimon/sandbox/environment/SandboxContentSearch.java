@@ -38,7 +38,7 @@ import at.aimon.sandbox.workspace.SandboxWorkspaceManager;
  * rg sees it, so results use the same spelling as a listing of that path; a {@linkplain ContentQuery#isCancelled()
  * cancelled} query kills rg and throws.
  */
-public final class SandboxContentSearch implements ContentSearch {
+final class SandboxContentSearch implements ContentSearch {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final Duration TIMEOUT = Duration.ofSeconds(120);

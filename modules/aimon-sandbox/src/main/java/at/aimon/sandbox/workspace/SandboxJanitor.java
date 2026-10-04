@@ -48,6 +48,10 @@ public final class SandboxJanitor implements AutoCloseable {
     private SandboxScheduler.Cancellable task;
 
     /**
+     * <p>
+     * <b>Internal.</b> Public only for use across this library's packages: not supported API, and it may change in
+     * any release.
+     *
      * @param manager
      *            the manager whose close path this uses
      * @param scheduler
