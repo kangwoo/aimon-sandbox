@@ -92,6 +92,39 @@ ExecutionEnvironmentSpec.shared(sandbox.environmentProvider());
 ./gradlew k8sTest          # @Tag("k8s"): manual, against a provisioned cluster (see the provider's README)
 ```
 
+CI (`.github/workflows/build.yml`) runs `checkAll` and `integrationTest` in parallel jobs, then a `coverage` job
+that joins both tiers' JaCoCo data and checks the floors in
+[`gradle/coverage-baselines.properties`](gradle/coverage-baselines.properties).
+
+## Releasing
+
+Releases are cut by [`scripts/release.sh`](scripts/release.sh), the same procedure as aimon-core's. It publishes
+to Maven Central from the maintainer's machine and only then commits, tags and pushes, because a publish cannot be
+taken back.
+
+1. **Finalize the changelog in a PR.** Rename `## [Unreleased]` to `## [X.Y.Z] - YYYY-MM-DD` and merge it to `main`.
+   The script does not edit `CHANGELOG.md`; it warns when the section is missing, and the GitHub Release then
+   carries only a link.
+2. **Run the k8s tier.** `./gradlew :aimon-sandbox-opensandbox:k8sTest` against a provisioned cluster, with
+   `OPENSANDBOX_K8S_ENDPOINT` set (otherwise every test skips), as in the
+   [provider's README](modules/aimon-sandbox-opensandbox/README.md). This tier is not in CI or in the gate.
+3. **Dry run.** `scripts/release.sh patch --dry-run` runs the pre-flight checks and the gate (`checkAll
+   integrationTest jacocoTestCoverageVerification`, the tasks CI runs) and changes nothing. You need a clean
+   `main` in sync with `origin`, a running Docker daemon, and the publish credentials below.
+4. **Release.** `scripts/release.sh patch --k8s-verified`. Without `--k8s-verified` the script refuses. It asks
+   you to type the version, publishes, commits `VERSION_NAME=X.Y.Z`, tags `vX.Y.Z`, moves `main` to the next
+   `-SNAPSHOT`, and pushes. From `0.1.0-SNAPSHOT`, `patch` releases `0.1.0`.
+5. The pushed tag triggers [`.github/workflows/release.yml`](.github/workflows/release.yml), which checks the tag
+   against `VERSION_NAME` and creates the GitHub Release from the matching `CHANGELOG.md` section. It publishes
+   nothing.
+
+The publish credentials go in `~/.gradle/gradle.properties` (or `ORG_GRADLE_PROJECT_*` env vars), never in GitHub
+secrets: `mavenCentralUsername`, `mavenCentralPassword`, and either `signing.keyId` / `signing.password` /
+`signing.secretKeyRingFile` or `signingInMemoryKey` (plus `signingInMemoryKeyId` and `signingInMemoryKeyPassword`
+as your key needs). The script refuses to start while `OPENSANDBOX_TEST_ENDPOINT` or
+`OPENSANDBOX_TEST_SANDBOX_IMAGE` is set, because either one points the docker tier away from what CI tests.
+`ReleaseGateMatchesCiGateTest` fails the build if the gate and CI stop matching.
+
 ## License
 
 Apache 2.0 — see [LICENSE](LICENSE).

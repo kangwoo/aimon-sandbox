@@ -189,9 +189,9 @@ tasks.register<Test>("packagingTest") {
 //
 // One consequence worth knowing: exec data left over from an earlier run is folded in as well, so a report can
 // describe a tier that did not run in this invocation; delete `build/jacoco/*.exec` when that matters.
-// (aimon-core has a second consequence this repository does not yet have -- its tiers run in separate CI jobs
-// with separate workspaces, so a third job restores both archives before generating the report. If a docker
-// tier lands here and gets its own job, that arrangement is the one to copy.)
+// The second consequence, as in aimon-core: CI runs the tiers in separate jobs with separate workspaces, so its
+// `coverage` job restores both jobs' `.exec` archives before generating the report and checking the floor
+// (.github/workflows/build.yml).
 // JacocoReportBase, not JacocoReport: the coverage *verification* task is a sibling of the report, not a
 // subtype of it, and it reads execution data the same way. Configuring only the report would have left
 // `jacocoTestCoverageVerification` on the plugin's default of `test.exec` alone — measuring a tagged module
