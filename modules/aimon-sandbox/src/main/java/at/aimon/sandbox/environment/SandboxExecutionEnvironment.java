@@ -92,8 +92,8 @@ public final class SandboxExecutionEnvironment implements ExecutionEnvironment {
     }
 
     /**
-     * @return the declared profile's {@code backgroundCommandTimeout}, always present: a background command ends there
-     *         rather than outliving the time it may keep the sandbox awake (§5.3)
+     * @return the declared profile's {@code backgroundCommandTimeout}, always present (24 hours unless the profile
+     *         configures one, §5.3)
      */
     @Override
     public Optional<Duration> backgroundCommandTimeout() {

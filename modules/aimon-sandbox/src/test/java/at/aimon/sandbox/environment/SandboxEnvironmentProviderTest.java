@@ -26,6 +26,7 @@ import at.aimon.core.environment.UnavailableExecutionEnvironment;
 import at.aimon.core.llm.LlmModel;
 import at.aimon.sandbox.SandboxHarness;
 import at.aimon.sandbox.binding.SandboxBinding;
+import at.aimon.sandbox.profile.SandboxProfile;
 import at.aimon.sandbox.testkit.FaultInjectingSandboxProvider.Operation;
 import at.aimon.sandbox.testkit.SandboxTestProfiles;
 import at.aimon.sandbox.workspace.WorkspaceScan;
@@ -188,8 +189,7 @@ class SandboxEnvironmentProviderTest {
         final ExecutionEnvironment fork = harness.fork(main, ExecutionId.generate(), ALICE,
                 Map.of("sandbox.profile", "other"));
 
-        assertThat(main.backgroundCommandTimeout())
-                .contains(SandboxTestProfiles.local("standard").build().backgroundHeartbeatLimit());
+        assertThat(main.backgroundCommandTimeout()).contains(SandboxProfile.DEFAULT_BACKGROUND_COMMAND_TIMEOUT);
         assertThat(configured.backgroundCommandTimeout()).contains(Duration.ofMinutes(20));
         assertThat(fork.backgroundCommandTimeout()).as("a fork states the profile it declares")
                 .contains(Duration.ofMinutes(20));

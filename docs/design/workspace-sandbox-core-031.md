@@ -417,6 +417,8 @@ Decisions for a human, at the top of the PR description: Q1 and Q2 below.
   default tightening, the alternative is: field unset ⇒ `backgroundHeartbeatLimit + terminateAfter` (never fires
   before the idle policy would have taken the sandbox anyway). Changing it is one line in `SandboxProfile` plus the
   doc sentences; the tests take the default from the profile, not from a literal.
+  *Resolved after merge:* the default is 24 hours (`SandboxProfile.DEFAULT_BACKGROUND_COMMAND_TIMEOUT`), independent
+  of `backgroundHeartbeatLimit` — the first release does not tighten what commands could already do (WS §5.3, §20).
 - **Q2 — Skill-declared shell hooks in sandbox mode.** Core now runs them in the sandbox shell (F12). This PR only
   corrects the documentation and keeps `WorkspaceSandbox.skillHookSetParser()`/`markdownSkillParser()` as an
   optional stricter policy. Undecided: (a) deprecate or remove those helpers and `SkillHookRejectionTest`;
@@ -426,6 +428,9 @@ Decisions for a human, at the top of the PR description: Q1 and Q2 below.
   the session's shell key, so it takes the shell lock — parallel tool calls with shell guards can meet
   "shell is busy" after `shellLockWait`, which a guard reads as a block. (c) may deserve its own shell key for
   hooks; that needs a core-side way to tell the shell a call is a hook.
+  *Resolved after merge:* (a) the helpers and `SkillHookRejectionTest` are removed; (b) `OrcaRuntimeSandboxE2ETest`
+  owns the end-to-end guard tests; (c) core gains `ExecutionOptions.isHook()`, and `SandboxShell` honours it once that
+  core is released (WS §12.1, §20).
 - **Q3 — `UserLocale` factory name.** TASK gives the type, the getter and the builder method; the design assumes a
   `createDefault()`-style factory mirrors the old one. To be confirmed against `at.aimon.core.base.UserLocale`
   while editing (a compile error would show it immediately).

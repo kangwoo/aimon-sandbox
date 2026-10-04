@@ -32,6 +32,9 @@ public final class SandboxProfile {
     public static final Set<Capability> WAIVABLE = Collections.unmodifiableSet(
             EnumSet.of(Capability.HARDENED_SECURITY_CONTEXT, Capability.RUNTIME_CLASS, Capability.NETWORK_ISOLATION));
 
+    /** The background-command ceiling of a profile that configures none (§5.3, §13.1). */
+    public static final Duration DEFAULT_BACKGROUND_COMMAND_TIMEOUT = Duration.ofHours(24);
+
     private final String name;
     private final String image;
     private final String platform;
@@ -145,17 +148,17 @@ public final class SandboxProfile {
 
     /**
      * The longest a background command may run (§5.3): what the environment answers core's
-     * {@code backgroundCommandTimeout()} with. Unless configured it is {@link #backgroundHeartbeatLimit()} — the
-     * command ends when it stops being allowed to keep the sandbox awake, instead of being frozen or lost with the
-     * sandbox some time later.
+     * {@code backgroundCommandTimeout()} with. Unless configured it is {@link #DEFAULT_BACKGROUND_COMMAND_TIMEOUT}
+     * (24 hours), independent of {@link #backgroundHeartbeatLimit()}: past that limit the command no longer keeps the
+     * sandbox awake, so without other activity the idle policy pauses or terminates the sandbox under it first.
      *
-     * @return the configured ceiling, else {@link #backgroundHeartbeatLimit()}
+     * @return the configured ceiling, else {@link #DEFAULT_BACKGROUND_COMMAND_TIMEOUT}
      */
     public Duration backgroundCommandTimeout() {
-        return backgroundCommandTimeout != null ? backgroundCommandTimeout : backgroundHeartbeatLimit;
+        return backgroundCommandTimeout != null ? backgroundCommandTimeout : DEFAULT_BACKGROUND_COMMAND_TIMEOUT;
     }
 
-    /** @return the ceiling as configured, or empty when it follows {@link #backgroundHeartbeatLimit()} */
+    /** @return the ceiling as configured, or empty when it is {@link #DEFAULT_BACKGROUND_COMMAND_TIMEOUT} */
     public Optional<Duration> configuredBackgroundCommandTimeout() {
         return Optional.ofNullable(backgroundCommandTimeout);
     }

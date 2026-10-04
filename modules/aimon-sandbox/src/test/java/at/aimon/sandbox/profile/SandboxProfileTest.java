@@ -54,11 +54,12 @@ class SandboxProfileTest {
     }
 
     @Test
-    void theBackgroundCommandTimeoutFollowsTheHeartbeatLimitUnlessConfigured() {
-        assertThat(base().build().backgroundCommandTimeout()).isEqualTo(Duration.ofHours(1));
+    void theBackgroundCommandTimeoutIsADayUnlessConfigured() {
+        assertThat(base().build().backgroundCommandTimeout()).isEqualTo(Duration.ofHours(24))
+                .isEqualTo(SandboxProfile.DEFAULT_BACKGROUND_COMMAND_TIMEOUT);
         assertThat(base().build().configuredBackgroundCommandTimeout()).isEmpty();
         assertThat(base().backgroundHeartbeatLimit(Duration.ofMinutes(10)).build().backgroundCommandTimeout())
-                .isEqualTo(Duration.ofMinutes(10));
+                .as("independent of the heartbeat limit").isEqualTo(Duration.ofHours(24));
 
         final SandboxProfile configured = base().backgroundHeartbeatLimit(Duration.ofMinutes(10))
                 .backgroundCommandTimeout(Duration.ofHours(3)).build();
@@ -74,7 +75,7 @@ class SandboxProfileTest {
 
         assertThat(base().backgroundCommandTimeout(Duration.ofMinutes(20)).build().contentHash()).isNotEqualTo(hash);
         // Spelling out the default is not a change.
-        assertThat(base().backgroundCommandTimeout(Duration.ofHours(1)).build().contentHash()).isEqualTo(hash);
+        assertThat(base().backgroundCommandTimeout(Duration.ofHours(24)).build().contentHash()).isEqualTo(hash);
     }
 
     @Test
