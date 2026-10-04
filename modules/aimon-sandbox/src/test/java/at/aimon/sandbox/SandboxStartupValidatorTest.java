@@ -223,6 +223,17 @@ class SandboxStartupValidatorTest {
     }
 
     @Test
+    void anExplicitBackgroundCommandTimeoutMustBePositive() {
+        assertThat(violations(local().backgroundCommandTimeout(Duration.ZERO).build()))
+                .anyMatch(v -> v.contains("background-command-timeout must be positive, got PT0S"));
+        assertThat(violations(local().backgroundCommandTimeout(Duration.ofSeconds(-1)).build()))
+                .anyMatch(v -> v.contains("background-command-timeout must be positive"));
+        assertThat(violations(local().build())).isEmpty();
+        // Above the heartbeat limit is legal: the command then lives on only while something else keeps the slot awake.
+        assertThat(violations(local().backgroundCommandTimeout(Duration.ofHours(6)).build())).isEmpty();
+    }
+
+    @Test
     void terminateAfterMustSpanSeveralActivityWrites() {
         final SandboxSettings tooShort = SandboxTestProfiles
                 .settings(local().terminateAfter(Duration.ofSeconds(60)).build())

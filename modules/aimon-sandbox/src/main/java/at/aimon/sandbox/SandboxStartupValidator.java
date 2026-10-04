@@ -182,6 +182,9 @@ final class SandboxStartupValidator {
         if (profile.backgroundHeartbeatLimit().isNegative() || profile.backgroundHeartbeatLimit().isZero()) {
             violations.add(p + "background-heartbeat-limit must be positive");
         }
+        profile.configuredBackgroundCommandTimeout().filter(ceiling -> ceiling.isNegative() || ceiling.isZero())
+                .ifPresent(
+                        ceiling -> violations.add(p + "background-command-timeout must be positive, got " + ceiling));
         final Set<Capability> missing = EnumSet.noneOf(Capability.class);
         missing.addAll(profile.requiredCapabilities());
         missing.removeAll(capabilities.advertised());

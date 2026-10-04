@@ -45,6 +45,7 @@ public final class SandboxProfile {
     private final Duration pauseAfter;
     private final Duration terminateAfter;
     private final Duration backgroundHeartbeatLimit;
+    private final Duration backgroundCommandTimeout;
     private final SharedAccess sharedAccess;
     private final SeedSpec seed;
     private final Set<Capability> insecureAllow;
@@ -64,6 +65,7 @@ public final class SandboxProfile {
         this.terminateAfter = builder.terminateAfter;
         this.backgroundHeartbeatLimit = Objects.requireNonNull(builder.backgroundHeartbeatLimit,
                 "backgroundHeartbeatLimit must not be null");
+        this.backgroundCommandTimeout = builder.backgroundCommandTimeout;
         this.sharedAccess = Objects.requireNonNull(builder.sharedAccess, "sharedAccess must not be null");
         this.seed = builder.seed;
         this.insecureAllow = builder.insecureAllow.isEmpty()
@@ -141,6 +143,23 @@ public final class SandboxProfile {
         return backgroundHeartbeatLimit;
     }
 
+    /**
+     * The longest a background command may run (§5.3): what the environment answers core's
+     * {@code backgroundCommandTimeout()} with. Unless configured it is {@link #backgroundHeartbeatLimit()} — the
+     * command ends when it stops being allowed to keep the sandbox awake, instead of being frozen or lost with the
+     * sandbox some time later.
+     *
+     * @return the configured ceiling, else {@link #backgroundHeartbeatLimit()}
+     */
+    public Duration backgroundCommandTimeout() {
+        return backgroundCommandTimeout != null ? backgroundCommandTimeout : backgroundHeartbeatLimit;
+    }
+
+    /** @return the ceiling as configured, or empty when it follows {@link #backgroundHeartbeatLimit()} */
+    public Optional<Duration> configuredBackgroundCommandTimeout() {
+        return Optional.ofNullable(backgroundCommandTimeout);
+    }
+
     /** @return how {@code /shared} is mounted */
     public SharedAccess sharedAccess() {
         return sharedAccess;
@@ -196,8 +215,9 @@ public final class SandboxProfile {
                 "osVersion=" + osVersion, "shellName=" + shellName, "resources=" + resources,
                 "runtimeClass=" + runtimeClass, "egress=" + egress, "credentials=" + credentials, "env=" + environment,
                 "pauseAfter=" + pauseAfter, "terminateAfter=" + terminateAfter,
-                "backgroundHeartbeatLimit=" + backgroundHeartbeatLimit, "sharedAccess=" + sharedAccess, "seed=" + seed,
-                "insecureAllow=" + insecureAllow);
+                "backgroundHeartbeatLimit=" + backgroundHeartbeatLimit,
+                "backgroundCommandTimeout=" + backgroundCommandTimeout(), "sharedAccess=" + sharedAccess,
+                "seed=" + seed, "insecureAllow=" + insecureAllow);
         try {
             return HexFormat.of()
                     .formatHex(MessageDigest.getInstance("SHA-256").digest(canonical.getBytes(StandardCharsets.UTF_8)));
@@ -227,6 +247,7 @@ public final class SandboxProfile {
         private Duration pauseAfter;
         private Duration terminateAfter;
         private Duration backgroundHeartbeatLimit = Duration.ofHours(1);
+        private Duration backgroundCommandTimeout;
         private SharedAccess sharedAccess = SharedAccess.NONE;
         private SeedSpec seed;
         private Set<Capability> insecureAllow = Set.of();
@@ -296,6 +317,12 @@ public final class SandboxProfile {
 
         public Builder backgroundHeartbeatLimit(Duration backgroundHeartbeatLimit) {
             this.backgroundHeartbeatLimit = backgroundHeartbeatLimit;
+            return this;
+        }
+
+        /** {@code null} (the default) follows {@code backgroundHeartbeatLimit}. */
+        public Builder backgroundCommandTimeout(Duration backgroundCommandTimeout) {
+            this.backgroundCommandTimeout = backgroundCommandTimeout;
             return this;
         }
 

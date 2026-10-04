@@ -48,9 +48,10 @@ import java.util.regex.Pattern;
  * shell state is best-effort (§9). Under {@code set -v} the one-line EXIT trap is echoed to the command's stderr.
  *
  * <p>
- * The timeout kill is best-effort: the watchdog kills the wrapper's process group, and a job the command put in a
- * group of its own ({@code set -m}, {@code setsid}) outlives it until the sandbox goes. Killing by session or cgroup
- * needs the exec server's help (implementation step 4).
+ * The timeout or cancellation kill is best-effort: the watchdog — or, for a cancellation, the provider's kill — ends
+ * the wrapper's process group, and a job the command put in a group of its own ({@code set -m}, {@code setsid})
+ * outlives it until the sandbox goes. Killing by session or cgroup needs the exec server's help, which it does not
+ * offer (docs/design/opensandbox-spike.md §3).
  *
  * <p>
  * A command that finishes just as its timeout expires can still be reported as timed out: when the watchdog's sleep

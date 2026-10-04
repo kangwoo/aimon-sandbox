@@ -24,10 +24,12 @@ import org.slf4j.LoggerFactory;
 
 import at.aimon.core.filesystem.exception.VirtualFileSystemException;
 import at.aimon.core.shell.ExecutionOptions;
+import at.aimon.core.shell.ShellCancellation;
 import at.aimon.core.shell.ShellCommand;
 import at.aimon.core.shell.ShellCommandResult;
 import at.aimon.core.shell.ShellFeature;
 import at.aimon.core.shell.VirtualShell;
+import at.aimon.core.shell.exception.ShellCancelledException;
 import at.aimon.core.shell.exception.ShellExecutionException;
 import at.aimon.core.shell.exception.ShellTimeoutException;
 import at.aimon.sandbox.SandboxSettings;
@@ -58,6 +60,24 @@ import at.aimon.sandbox.workspace.SandboxWorkspaceManager;
  * (only the exec's backstop of {@link #NO_TIMEOUT_BACKSTOP} applies). A background command
  * ({@link ExecutionOptions#isBackground()}) takes no lock and saves no state. A timeout or interrupt kills the
  * command's process group; the state from before the command remains, and the result says so.
+ *
+ * <p>
+ * <b>Cancellation</b> ({@link ShellFeature#CANCELLATION}, foreground and background alike). The signal of
+ * {@link ExecutionOptions#getCancellation()} is looked at three times before the command starts — on entry, before
+ * anything is provisioned or recorded; once the shell lock is held; and right before the exec — and a signal tripped
+ * by then means the command is not started. Provisioning and the lock wait themselves are not aborted: the first is
+ * shared with every execution bound to the slot, the second is at most {@code shellLockWait}. Tripped while the command
+ * runs, the signal kills it through {@link RunningCommand#kill()}, on the cancelling thread, and {@code execute} throws
+ * {@link ShellCancelledException} with the output written so far. What decides between "cancelled" and a normal result
+ * is the wrapper's trailer, not the signal: a command that printed it had ended by itself before the kill landed. An
+ * interrupt of the waiting thread after the signal tripped — core's shutdown cancels, then interrupts — is the same
+ * cancellation: the command is killed and {@code execute} throws {@link ShellCancelledException}, the interrupt flag
+ * set; only an interrupt without a cancel is a failure of its own.
+ *
+ * <p>
+ * The kill — for a timeout, an interrupt and a cancellation — reaches the exec's <b>process group</b>: the wrapper,
+ * the command and every descendant that stayed in the group. A job the command moved into a group or session of its
+ * own ({@code setsid}, {@code set -m}) outlives it until the sandbox goes; the exec server offers nothing wider (§9).
  */
 public final class SandboxShell implements VirtualShell {
 
@@ -71,6 +91,10 @@ public final class SandboxShell implements VirtualShell {
     static final long NORMALIZATION_GROWTH = 3;
 
     static final String KILLED_NOTICE = "the command was killed; its cd/export were not applied";
+
+    static final String CANCELLED_MESSAGE = "the command was cancelled and killed";
+
+    static final String CANCELLED_BEFORE_START_MESSAGE = "the command was cancelled before it started";
 
     private static final Logger log = LoggerFactory.getLogger(SandboxShell.class);
     /** The exec backstop of a command without a timeout: the provider still needs one. */
@@ -132,6 +156,11 @@ public final class SandboxShell implements VirtualShell {
                     + " to pass to the sandbox (" + inline + " bytes, at most " + ShellWrapper.INLINE_ENVIRONMENT_LIMIT
                     + "); pass large values through a file");
         }
+        final ShellCancellation cancellation = options.getCancellation();
+        if (cancellation.isCancelled()) {
+            // Before connect: a command that is not to run provisions nothing and records no activity.
+            throw cancelledBeforeStart();
+        }
         final ConnectedSlot slot = manager.connect(binding);
         pending.addAll(slot.notices());
         slot.activity().record(false);
@@ -152,6 +181,10 @@ public final class SandboxShell implements VirtualShell {
                     null, "", "", false, pending.drain());
         }
         try (lease) {
+            if (cancellation.isCancelled()) {
+                // Tripped while provisioning or waiting for the lock: neither wait is aborted, the command is.
+                throw cancelledBeforeStart();
+            }
             return run(slot, text, options, true);
         }
     }
@@ -206,7 +239,7 @@ public final class SandboxShell implements VirtualShell {
             final ExecSpec spec = ExecSpec.builder().command(script).workingDirectory(ShellWrapper.EXEC_DIRECTORY)
                     .environment(slot.profile().environment()).timeout(backstop).maxCaptureBytes(captureBackstop(max))
                     .build();
-            final ShellCommandResult result = await(slot, spec,
+            final ShellCommandResult result = await(slot, spec, options.getCancellation(),
                     new Run(runPrefix, nonce, timeout != null ? timeout : backstop, max, options.getCharset(),
                             foreground, options.getWorkingDirectory() != null));
             // A result means the trailer was read, and the wrapper removed its run files before printing it.
@@ -262,35 +295,71 @@ public final class SandboxShell implements VirtualShell {
         }
     }
 
-    private ShellCommandResult await(ConnectedSlot slot, ExecSpec spec, Run run) throws ShellExecutionException {
+    private ShellCommandResult await(ConnectedSlot slot, ExecSpec spec, ShellCancellation cancellation, Run run)
+            throws ShellExecutionException {
         final AtomicReference<RunningCommand> running = new AtomicReference<>();
         final AtomicBoolean lost = new AtomicBoolean();
+        final AtomicBoolean cancelled = new AtomicBoolean();
         final long startedNanos = System.nanoTime();
         final String heartbeatFile = ShellWrapper.directory(binding.shellKey().directoryName()) + "/heartbeat";
-        final Heartbeat heartbeat = slot.activity().startHeartbeat(!run.foreground,
-                run.foreground ? () -> writeHeartbeat(slot.connection().files(), heartbeatFile) : null, () -> {
-                    lost.set(true);
-                    final RunningCommand command = running.get();
-                    if (command != null) {
-                        command.kill();
-                    }
-                });
+        // Runs on the cancelling thread, or here and now when the signal is already tripped. The flag goes first: a
+        // kill that finds no command yet is made up for below, once there is one.
+        final ShellCancellation.Registration registration = cancellation.onCancel(() -> {
+            cancelled.set(true);
+            final RunningCommand command = running.get();
+            if (command != null) {
+                killQuietly(command);
+            }
+        });
         final ExecOutcome outcome;
         try {
-            running.set(slot.connection().run(spec, OutputSink.DISCARD));
-            if (lost.get()) {
-                running.get().kill();
+            if (cancelled.get()) {
+                throw cancelledBeforeStart();
             }
-            outcome = running.get().await(spec.timeout());
-        } catch (InterruptedException e) {
-            running.get().kill();
-            Thread.currentThread().interrupt();
-            throw new ShellExecutionException("the command was interrupted and killed", e, "", "", false,
-                    notices(List.of(KILLED_NOTICE)));
+            final Heartbeat heartbeat = slot.activity().startHeartbeat(!run.foreground,
+                    run.foreground ? () -> writeHeartbeat(slot.connection().files(), heartbeatFile) : null, () -> {
+                        lost.set(true);
+                        final RunningCommand command = running.get();
+                        if (command != null) {
+                            killQuietly(command);
+                        }
+                    });
+            try {
+                running.set(slot.connection().run(spec, OutputSink.DISCARD));
+                if (lost.get() || cancelled.get()) {
+                    // A provider whose kill throws must not skip the await: the run files are removed only after it.
+                    killQuietly(running.get());
+                }
+                outcome = running.get().await(spec.timeout());
+            } catch (InterruptedException e) {
+                killQuietly(running.get());
+                if (cancelled.get()) {
+                    // Interrupted after a cancel — a shutdown that gave a slow or failed kill its grace: the command
+                    // was still stopped on request. The run files are read before the flag is restored, so a files
+                    // API that refuses an interrupted thread still yields the output so far.
+                    final ShellCancelledException stopped = cancelled(slot.connection().files(), run, null);
+                    Thread.currentThread().interrupt();
+                    throw stopped;
+                }
+                Thread.currentThread().interrupt();
+                throw new ShellExecutionException("the command was interrupted and killed", e, "", "", false,
+                        notices(List.of(KILLED_NOTICE)));
+            } finally {
+                heartbeat.close();
+            }
         } finally {
-            heartbeat.close();
+            registration.remove();
         }
         final Duration duration = Duration.ofNanos(System.nanoTime() - startedNanos);
+        if (cancelled.get()) {
+            // Ahead of the lost and timed-out answers: a command its caller asked to stop was stopped, whatever else
+            // happened in that instant. Only a trailer says otherwise — the command had already ended by itself.
+            final Optional<ShellCommandResult> completed = completed(outcome, run, duration);
+            if (completed.isPresent()) {
+                return completed.get();
+            }
+            throw cancelled(slot.connection().files(), run, outcome);
+        }
         if (lost.get()) {
             throw new ShellExecutionException(SandboxWorkspaceManager.LOST_MESSAGE, null, "", "", false,
                     pending.drain());
@@ -304,18 +373,9 @@ public final class SandboxShell implements VirtualShell {
         if (outcome.timedOut()) {
             throw timeout(files, run);
         }
-        final byte[] stderr = outcome.stderr();
-        final int marker = lastIndexOf(stderr, ("\n" + run.nonce).getBytes(StandardCharsets.US_ASCII));
-        if (marker >= 0) {
-            final String trailer = new String(stderr, marker, stderr.length - marker, StandardCharsets.US_ASCII);
-            final Matcher m = TRAILER.matcher(trailer);
-            if (m.find()) {
-                final List<String> extra = new ArrayList<>();
-                cwdNotice(m.group(4), run).ifPresent(extra::add);
-                final boolean truncated = Long.parseLong(m.group(2)) > run.max || Long.parseLong(m.group(3)) > run.max;
-                return new ShellCommandResult(Integer.parseInt(m.group(1)), new String(outcome.stdout(), run.charset),
-                        new String(stderr, 0, marker, run.charset), duration, truncated, notices(extra));
-            }
+        final Optional<ShellCommandResult> completed = completed(outcome, run, duration);
+        if (completed.isPresent()) {
+            return completed.get();
         }
         if (run.foreground && files.stat(run.prefix + ".timedout").isPresent()) {
             throw timeout(files, run);
@@ -323,11 +383,35 @@ public final class SandboxShell implements VirtualShell {
         if (run.foreground && outcome.exitCode() == ShellWrapper.LOCK_BUSY_EXIT) {
             throw new ShellExecutionException(busyLockMessage(slot), null, "", "", false, pending.drain());
         }
+        final byte[] stderr = outcome.stderr();
         throw new ShellExecutionException(
                 "the sandbox shell wrapper failed (exit " + outcome.exitCode() + "): "
                         + new String(stderr, run.charset).strip(),
                 null, new String(outcome.stdout(), run.charset), new String(stderr, run.charset),
                 outcome.stdoutTruncated() || outcome.stderrTruncated(), pending.drain());
+    }
+
+    /**
+     * The result of a run whose wrapper printed its trailer — the command ended by itself, whatever it exited with —
+     * or empty when there is none: the wrapper was killed, or failed before it got there.
+     */
+    private Optional<ShellCommandResult> completed(ExecOutcome outcome, Run run, Duration duration) {
+        final byte[] stderr = outcome.stderr();
+        final int marker = lastIndexOf(stderr, ("\n" + run.nonce).getBytes(StandardCharsets.US_ASCII));
+        if (marker < 0) {
+            return Optional.empty();
+        }
+        final Matcher m = TRAILER
+                .matcher(new String(stderr, marker, stderr.length - marker, StandardCharsets.US_ASCII));
+        if (!m.find()) {
+            return Optional.empty();
+        }
+        final List<String> extra = new ArrayList<>();
+        cwdNotice(m.group(4), run).ifPresent(extra::add);
+        final boolean truncated = Long.parseLong(m.group(2)) > run.max || Long.parseLong(m.group(3)) > run.max;
+        return Optional
+                .of(new ShellCommandResult(Integer.parseInt(m.group(1)), new String(outcome.stdout(), run.charset),
+                        new String(stderr, 0, marker, run.charset), duration, truncated, notices(extra)));
     }
 
     /**
@@ -349,10 +433,40 @@ public final class SandboxShell implements VirtualShell {
     }
 
     private ShellTimeoutException timeout(SandboxFiles files, Run run) {
-        final String stdout = readPartial(files, run.prefix + ".out", run);
-        final String stderr = readPartial(files, run.prefix + ".err", run);
+        final Capture stdout = readRunFile(files, run.prefix + ".out", run).orElse(Capture.EMPTY);
+        final Capture stderr = readRunFile(files, run.prefix + ".err", run).orElse(Capture.EMPTY);
         return new ShellTimeoutException("the command timed out after " + run.timeout.toMillis() + "ms and was killed",
-                run.timeout, stdout, stderr, false, notices(List.of(KILLED_NOTICE)));
+                run.timeout, stdout.content, stderr.content, stdout.truncated || stderr.truncated,
+                notices(List.of(KILLED_NOTICE)));
+    }
+
+    /**
+     * A command stopped through its cancellation signal, with what it had written. The run files hold that; when they
+     * are already gone — the kill landed in the wrapper's last lines, after it printed the output and removed them —
+     * the output is what the exec stream carried, or nothing when there is no outcome (the wait was interrupted).
+     */
+    private ShellCancelledException cancelled(SandboxFiles files, Run run, ExecOutcome outcome) {
+        final Capture stdout = readRunFile(files, run.prefix + ".out", run).orElseGet(() -> outcome == null
+                ? Capture.EMPTY
+                : new Capture(new String(outcome.stdout(), run.charset), outcome.stdoutTruncated()));
+        final Capture stderr = readRunFile(files, run.prefix + ".err", run).orElseGet(() -> outcome == null
+                ? Capture.EMPTY
+                : new Capture(new String(outcome.stderr(), run.charset), outcome.stderrTruncated()));
+        return new ShellCancelledException(CANCELLED_MESSAGE, stdout.content, stderr.content,
+                stdout.truncated || stderr.truncated, notices(List.of(KILLED_NOTICE)));
+    }
+
+    private ShellCancelledException cancelledBeforeStart() {
+        return new ShellCancelledException(CANCELLED_BEFORE_START_MESSAGE, "", "", false, pending.drain());
+    }
+
+    /** The stop action of a cancellation listener: it runs on someone else's thread and must not throw. */
+    private static void killQuietly(RunningCommand command) {
+        try {
+            command.kill();
+        } catch (RuntimeException e) {
+            log.warn("Could not kill a cancelled command: {}", e.toString());
+        }
     }
 
     /**
@@ -382,17 +496,42 @@ public final class SandboxShell implements VirtualShell {
         files.write(path, new ByteArrayInputStream(content), content.length, WriteMode.CREATE_OR_REPLACE);
     }
 
-    private static String readPartial(SandboxFiles files, String path, Run run) {
-        try (InputStream in = files.read(path, 0, run.max)) {
-            return new String(in.readAllBytes(), run.charset);
-        } catch (IOException | RuntimeException e) {
-            return "";
+    /** What a run file held, up to the capture cap, and whether it held more. */
+    private static final class Capture {
+        private static final Capture EMPTY = new Capture("", false);
+
+        private final String content;
+        private final boolean truncated;
+
+        private Capture(String content, boolean truncated) {
+            this.content = content;
+            this.truncated = truncated;
         }
     }
 
     /**
-     * Removes the run files of a run that ended without a trailer (a timeout, which reads {@code .out}/{@code .err}
-     * first, a wrapper failure, a provider error): on the normal path the wrapper removes them itself.
+     * @return the run file's content up to the capture cap — truncated, as the wrapper's {@code head -c} would, when
+     *         the
+     *         file holds more — or empty when it cannot be read (it is gone)
+     */
+    private static Optional<Capture> readRunFile(SandboxFiles files, String path, Run run) {
+        // One byte past the cap tells a file that reached it from one that went over.
+        final long limit = run.max == Long.MAX_VALUE ? run.max : run.max + 1;
+        try (InputStream in = files.read(path, 0, limit)) {
+            final byte[] bytes = in.readAllBytes();
+            if (bytes.length > run.max) {
+                return Optional.of(new Capture(new String(bytes, 0, (int) run.max, run.charset), true));
+            }
+            return Optional.of(new Capture(new String(bytes, run.charset), false));
+        } catch (IOException | RuntimeException e) {
+            return Optional.empty();
+        }
+    }
+
+    /**
+     * Removes the run files of a run that ended without a trailer (a timeout or a cancellation, which read
+     * {@code .out}/{@code .err} first, a wrapper failure, a provider error): on the normal path the wrapper removes
+     * them itself.
      */
     private static void cleanUp(SandboxFiles files, String prefix) {
         for (String suffix : List.of(".out", ".err", ".in", ".cmd", ".timedout", ".cwd")) {
@@ -438,7 +577,8 @@ public final class SandboxShell implements VirtualShell {
 
     @Override
     public boolean supports(ShellFeature feature) {
-        return feature == ShellFeature.PIPE || feature == ShellFeature.REDIRECTION;
+        return feature == ShellFeature.PIPE || feature == ShellFeature.REDIRECTION
+                || feature == ShellFeature.CANCELLATION;
     }
 
     /** Nothing to release: the environment is a view (§3.2). */

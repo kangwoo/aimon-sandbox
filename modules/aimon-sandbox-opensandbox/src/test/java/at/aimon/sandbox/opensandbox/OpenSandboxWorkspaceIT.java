@@ -10,6 +10,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -24,7 +26,11 @@ import at.aimon.core.environment.EnvironmentRequest;
 import at.aimon.core.environment.ExecutionEnvironment;
 import at.aimon.core.environment.ExecutionEnvironments;
 import at.aimon.core.shell.ExecutionOptions;
+import at.aimon.core.shell.ShellCancellationSource;
 import at.aimon.core.shell.ShellCommandResult;
+import at.aimon.core.shell.ShellFeature;
+import at.aimon.core.shell.exception.ShellCancelledException;
+import at.aimon.core.shell.exception.ShellExecutionException;
 import at.aimon.core.shell.exception.ShellTimeoutException;
 import at.aimon.sandbox.SandboxSettings;
 import at.aimon.sandbox.WorkspaceSandbox;
@@ -46,8 +52,8 @@ import at.aimon.sandbox.workspace.SandboxWorkspaceStore;
 /**
  * {@code WorkspaceSandbox} end to end on a real OpenSandbox server (Docker runtime) — the implementation-step-4 rows of
  * docs/design/workspace-sandbox.md §16 that need the real server: labels accepted for a {@code ws:{uuid}} workspace,
- * shell state across calls, timeout kill, reconciliation of a restarted node's orphan, resource limits, and the
- * line normalization of output.
+ * shell state across calls, timeout kill, cancellation of a running background command, reconciliation of a restarted
+ * node's orphan, resource limits, and the line normalization of output.
  */
 @Tag("docker")
 class OpenSandboxWorkspaceIT {
@@ -135,6 +141,41 @@ class OpenSandboxWorkspaceIT {
         final ShellCommandResult next = bash(env, "pwd; echo \"KEEP=$KEEP LOST=$LOST\"");
 
         assertThat(next.stdout()).isEqualTo("/workspace/src\nKEEP=kept LOST=\n");
+    }
+
+    @Test
+    @DisplayName("§16: cancelling a running background command ends it in the real sandbox (DELETE /command)")
+    void cancellingABackgroundCommandEndsItInTheSandbox() throws Exception {
+        final WorkspaceSandbox assembly = assembly(profile().build(), new InMemorySandboxWorkspaceStore());
+        final ExecutionEnvironment env = mainTurn(assembly, SessionId.generate());
+        bash(env, "true");
+        final ShellCancellationSource source = ShellCancellationSource.create();
+        final CompletableFuture<Object> background = CompletableFuture.supplyAsync(() -> {
+            try {
+                return env.shell().execute(() -> "echo before; sleep 300 & echo \"$$ $!\" > /workspace/pids; wait",
+                        ExecutionOptions.builder().timeout(Duration.ofMinutes(5)).background(true)
+                                .cancellation(source.token()).build());
+            } catch (ShellExecutionException e) {
+                return e;
+            }
+        });
+        final long deadline = System.nanoTime() + Duration.ofSeconds(30).toNanos();
+        while (bash(env, "cat /workspace/pids 2>/dev/null").stdout().isBlank() && System.nanoTime() < deadline) {
+            Thread.sleep(200);
+        }
+        final String pids = bash(env, "cat /workspace/pids").stdout().strip();
+
+        source.cancel();
+        final Object outcome = background.get(30, TimeUnit.SECONDS);
+        // execd sends SIGKILL three seconds after its SIGTERM; both processes take the SIGTERM.
+        Thread.sleep(500);
+        final ShellCommandResult alive = bash(env, "for p in " + pids + "; do kill -0 $p 2>/dev/null && echo $p; done");
+
+        assertThat(env.shell().supports(ShellFeature.CANCELLATION)).isTrue();
+        assertThat(pids.split(" ")).hasSize(2);
+        assertThat(outcome).isInstanceOfSatisfying(ShellCancelledException.class,
+                e -> assertThat(e.stdout()).isEqualTo("before\n"));
+        assertThat(alive.stdout()).as("the command and its child are gone").isEmpty();
     }
 
     @Test

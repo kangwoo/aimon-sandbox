@@ -5,6 +5,42 @@ All notable aimon-sandbox changes are recorded here. The format is loosely based
 
 ## [Unreleased]
 
+### Changed — follows aimon-core 0.3.1 (shell cancellation, background ceiling, runtime bindings)
+
+The sandbox now meets the three rows aimon-core 0.3.1 added to its provider contract (core `61604b4`, PRs #204–#208);
+the design and where the implementation departed from it is
+[`docs/design/workspace-sandbox-core-031.md`](docs/design/workspace-sandbox-core-031.md).
+
+- **`KillShell` stops sandbox background commands.** `SandboxShell` declares `ShellFeature.CANCELLATION` and honours
+  `ExecutionOptions.getCancellation()` for foreground and background commands: a tripped signal kills the command
+  through the provider's existing `RunningCommand.kill()`, and `execute` throws `ShellCancelledException` with the
+  output written so far. A signal that is already tripped starts nothing and provisions nothing. The kill reaches the
+  exec's process group; a job the command moved out of it (`setsid`, `set -m`) survives until the sandbox goes. No
+  provider SPI change.
+- **An interrupt after a cancel is reported as cancelled.** When the waiting thread is interrupted after the signal
+  tripped — core's stack shutdown cancels, then interrupts five seconds later — `execute` kills the command again and
+  throws `ShellCancelledException` with the output so far (the interrupt flag stays set), so core settles the
+  background task as `KILLED`, not `FAILED`. An interrupt without a cancel is still "interrupted and killed". A
+  provider whose `kill()` throws no longer makes `execute` throw that exception before the command ended; the partial
+  output of a timeout or a cancellation is flagged truncated when it was cut at the capture cap.
+- **Background commands now end after one hour by default**, where they could run for up to 24 hours. Profiles gain
+  `background-command-timeout` (`SandboxProfile.backgroundCommandTimeout`), which the environment returns as core's
+  `backgroundCommandTimeout()`. Unset, it equals `background-heartbeat-limit` (1h): the command ends when it stops
+  being allowed to keep its sandbox awake. Set it higher for commands that must outlive that window. An explicit value
+  must be positive.
+- The new field is part of `SandboxProfile.contentHash()`, so every profile's hash changes with this version and a
+  slot that failed permanently is retried once after the upgrade.
+- **`bindRuntime` is not overridden.** The provider keeps nothing per `AgentRuntime`; the inherited
+  `RuntimeBinding.NONE` meets the contract, and tests pin it (closing a binding stops no command; `resolve` answers
+  for an id nobody bound). Close the core stack before `WorkspaceSandbox`.
+- **Skill-declared shell hooks are no longer refused by necessity.** aimon-core 0.3.1 runs them in the execution's
+  sandbox shell, not on the host, so `WorkspaceSandbox.markdownSkillParser()` / `skillHookSetParser()` are now an
+  optional stricter policy; their behaviour is unchanged. With such hooks enabled, a `preTool` shell guard blocks its
+  tool call and an `onStart` shell guard keeps its skill fork from starting when the sandbox is unavailable; hooks that
+  only observe should set `failOpen: true`.
+- README gains a "Wiring" section (`ExecutionEnvironmentSpec.shared`, close order, the notes above).
+- Tests compile against core's `UserLocale` (was `Environment`).
+
 ### Added — workspace sandbox, implementation step 4
 
 The production provider and sandbox reconciliation of

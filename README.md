@@ -22,7 +22,9 @@ design (why: [`workspace-sandbox.md`](docs/design/workspace-sandbox.md) §19; ol
 and 4 were built, and where they departed from the plan, is
 [`workspace-sandbox-step3.md`](docs/design/workspace-sandbox-step3.md) and
 [`workspace-sandbox-step4.md`](docs/design/workspace-sandbox-step4.md); what the OpenSandbox server actually does is
-[`opensandbox-spike.md`](docs/design/opensandbox-spike.md).
+[`opensandbox-spike.md`](docs/design/opensandbox-spike.md); how the sandbox follows aimon-core 0.3.1 (shell
+cancellation, the background ceiling, runtime bindings) is
+[`workspace-sandbox-core-031.md`](docs/design/workspace-sandbox-core-031.md).
 
 | Module | Coordinate | What it is |
 |---|---|---|
@@ -42,8 +44,43 @@ The dependency runs one way: this repository compiles against a released `at.aim
 Maven Central (one line in [`gradle/libs.versions.toml`](gradle/libs.versions.toml)), and aimon-core has no
 reference to anything here. The workspace sandbox implements aimon-core's execution-environment SPI
 (design §7), which only aimon-core's unreleased 0.3.1 has: the catalog pins `0.3.1-SNAPSHOT`, resolved from
-`~/.m2` after `./gradlew publishToMavenLocal` in aimon-core. That pin is a release blocker (see
-[CHANGELOG.md](CHANGELOG.md)).
+`~/.m2` after `./gradlew publishToMavenLocal` in aimon-core. The code follows aimon-core main at `61604b4`
+(core PRs up to #208). That pin is a release blocker (see [CHANGELOG.md](CHANGELOG.md)).
+
+## Wiring
+
+```java
+WorkspaceSandbox sandbox = WorkspaceSandbox.builder().settings(settings).provider(provider).build();
+sandbox.janitor().start();
+
+// a hand-built runtime
+runtimeBuilder.executionEnvironmentProvider(sandbox.environmentProvider());
+
+// through aimon-bootstrap
+ExecutionEnvironmentSpec.shared(sandbox.environmentProvider());
+```
+
+- **Use `shared(...)`, not `provider(Supplier)`.** The host owns the `WorkspaceSandbox` and closes it; the stack
+  must not. `ExecutionEnvironmentSpec.factory` no longer exists in aimon-core 0.3.1.
+- **Close the core stack first, then `WorkspaceSandbox`.** The stack's shutdown stops the background commands that
+  are still running by signalling them through their shells, and a sandbox shell reaches its command over a
+  connection the `WorkspaceSandbox` holds. Closed the other way round, those commands run on until their sandboxes
+  go.
+- **Background commands can be stopped, and they end.** `KillShell` stops a sandbox background command and what it
+  started in its process group (a job the command moved out of the group with `setsid` or `set -m` survives until
+  the sandbox goes). A command nobody stops ends at the profile's `background-command-timeout`, by default the
+  `background-heartbeat-limit` of one hour (design §5.3).
+- **Runtimes can come and go.** The provider keeps nothing per `AgentRuntime`, so evicting one stops no command and
+  touches no sandbox; sandboxes live as long as their workspaces (design §3.2, §7).
+- **Skill shell hooks run in the sandbox, and guards fail closed.** With aimon-core 0.3.1 a shell hook that a skill
+  declares runs in the execution's sandbox shell, never on the host (with core's default
+  `DefaultShellActionExecutor`; a host that installs another executor gets what that one does). When the sandbox is unavailable — the binding
+  was refused, provisioning failed, the provider cannot be reached — a tool call guarded by a skill's `preTool`
+  shell hook is **blocked** with the reason, and a skill fork with an `onStart` shell guard **does not start**.
+  Give hooks that only observe `failOpen: true`. Hooks from `hooks.json` run on the host shell and do not depend on
+  the sandbox. This behaviour is aimon-core's contract; this repository has no test of its own for it yet (design
+  §20). To refuse skill-declared shell hooks altogether, parse skills with `WorkspaceSandbox.markdownSkillParser()`
+  (design §12.1).
 
 ## Build
 

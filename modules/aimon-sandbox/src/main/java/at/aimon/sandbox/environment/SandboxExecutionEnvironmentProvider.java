@@ -43,6 +43,15 @@ import at.aimon.sandbox.workspace.WorkspaceOwner;
  * {@code forkSlot}. Its caller is its own principal, or its parent's caller when the request carries none. A fork
  * without a parent environment, of an unavailable one or of another provider's is
  * unavailable too, carrying the parent's cause where there is one (§8.2).
+ *
+ * <p>
+ * <b>{@code bindRuntime} is not overridden</b>: this provider keeps nothing per {@code AgentRuntime}. Workspaces are
+ * keyed by session or execution, connections by sandbox, shell locks by sandbox and shell key; the runtime id is only
+ * passed to the binding policy. The inherited {@code RuntimeBinding.NONE} therefore meets core's contract by
+ * construction — closing it stops no command and releases nothing another binding uses, and {@link #resolve} never
+ * asks whether an id was bound. Sandboxes end with their workspace (close, idle policy, janitor, provider expiry),
+ * not with a runtime (§3.2). Anything later keyed by runtime id must come with a real {@code bindRuntime} whose
+ * {@code close()} leaves running commands alone.
  */
 public final class SandboxExecutionEnvironmentProvider implements ExecutionEnvironmentProvider {
 
@@ -90,8 +99,8 @@ public final class SandboxExecutionEnvironmentProvider implements ExecutionEnvir
                     + "primary slot is supported until more slots arrive (implementation step 5)");
         }
         final SandboxProfile profile = declaredProfile(binding);
-        return new SandboxExecutionEnvironment(binding, descriptor(binding, profile), manager, connections, settings,
-                clock);
+        return new SandboxExecutionEnvironment(binding, descriptor(binding, profile),
+                profile.backgroundCommandTimeout(), manager, connections, settings, clock);
     }
 
     /**
@@ -126,10 +135,10 @@ public final class SandboxExecutionEnvironmentProvider implements ExecutionEnvir
                 ? parentBinding.root()
                 : SandboxBinding.DEFAULT_ROOT;
         // The fork's own principal when it carries one. Without one the fork acts for its parent, whose caller already
-        // passed the gate: the parent environment it was handed is what entitles it to this workspace. aimon-core
-        // versions before the fix on core branch fix/skill-fork-forward-principal (not yet on core main) send skill
-        // forks without a principal (SubagentBackedSkillForkExecutor); once every supported core forwards it, revisit
-        // this fallback (WS §20).
+        // passed the gate: the parent environment it was handed is what entitles it to this workspace. Core main
+        // forwards the caller's principal into skill forks (core PR #200, SubagentBackedSkillForkExecutor); a fork
+        // request may still carry none (an older core, a caller without one), so whether to keep this fallback stays
+        // open (WS §20).
         final WorkspaceOwner caller = request.principal().isPresent()
                 ? callers.callerOf(request.principal())
                 : parentBinding.caller();
@@ -138,7 +147,12 @@ public final class SandboxExecutionEnvironmentProvider implements ExecutionEnvir
                 .root(root).build();
     }
 
-    /** The profile the descriptor declares: the required one, else the slot's (one store read), else the default. */
+    /**
+     * The profile the descriptor declares: the required one, else the slot's (one store read), else the default. The
+     * background ceiling is read from it too, while the heartbeat limit it defaults to is applied from the connected
+     * slot's profile; the two are the same profile on every path that runs a command, because {@code connect}
+     * refuses a slot whose profile differs from the required one or was removed.
+     */
     private SandboxProfile declaredProfile(SandboxBinding binding) {
         final Optional<String> required = binding.requiredProfile();
         if (required.isPresent()) {
