@@ -144,6 +144,7 @@ public final class OpenSandboxProvider implements SandboxProvider {
         if (spec.egress().isPresent()) {
             awaitEgressSidecar(ref, deadline);
         }
+        awaitExecd(ref, deadline);
         if (!spec.credentials().isEmpty()) {
             final VaultClient vault = vault(ref);
             // verify() demands exactly these bindings, so a vault holding more or fewer (an earlier create of the
@@ -303,6 +304,35 @@ public final class OpenSandboxProvider implements SandboxProvider {
                 if (e.kind() != SandboxProviderException.Kind.TRANSIENT || System.nanoTime() - deadline >= 0) {
                     throw e;
                 }
+            }
+            sleep(RUNNING_POLL);
+        }
+    }
+
+    /**
+     * {@code Running} is not execd listening: with egress, execd's bootstrap waits for the sidecar's CA before it
+     * starts
+     * execd, so the first command could meet a 502 from the server's proxy (seen on Kubernetes, about one create in
+     * five). {@code create} waits until execd answers {@code /ping}, within the same budget.
+     */
+    private void awaitExecd(ProviderSandboxRef ref, long deadline) {
+        final ExecdClient execd = new ExecdClient(transport, lifecycle, ref, ExecdClient.EXECD_PORT);
+        while (true) {
+            try {
+                HttpErrors.check(execd.send(ep -> ep.request("/ping").GET(), "ping execd"), "ping execd");
+                return;
+            } catch (HttpErrors.NotFound e) {
+                if (lifecycle.get(ref.sandboxId()).isEmpty()) {
+                    throw new SandboxProviderException("the created sandbox disappeared before execd was up");
+                }
+            } catch (SandboxProviderException e) {
+                if (e.kind() != SandboxProviderException.Kind.TRANSIENT) {
+                    throw e;
+                }
+            }
+            if (System.nanoTime() - deadline >= 0) {
+                throw new SandboxProviderException(
+                        "execd did not answer within " + config.createTimeout().toSeconds() + "s of the create");
             }
             sleep(RUNNING_POLL);
         }

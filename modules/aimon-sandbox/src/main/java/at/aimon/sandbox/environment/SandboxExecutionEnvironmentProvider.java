@@ -40,9 +40,9 @@ import at.aimon.sandbox.workspace.WorkspaceOwner;
  * <p>
  * A fork — {@code request.fork().isPresent()}, never judged by {@code parent} (§8.1) — inherits its parent's
  * workspace, owner and root, gets {@code exec:{executionId}} as its shell key, and asks only the policy's
- * {@code forkSlot}. Its caller is its own principal, or its parent's caller when the request carries none. A fork
- * without a parent environment, of an unavailable one or of another provider's is
- * unavailable too, carrying the parent's cause where there is one (§8.2).
+ * {@code forkSlot}. Its caller is its own principal through the same gate as a root request — a fork without one
+ * never inherits its parent's caller. A fork without a parent environment, of an unavailable one or of another
+ * provider's is unavailable too, carrying the parent's cause where there is one (§8.2).
  *
  * <p>
  * <b>{@code bindRuntime} is not overridden</b>: this provider keeps nothing per {@code AgentRuntime}. Workspaces are
@@ -138,14 +138,11 @@ public final class SandboxExecutionEnvironmentProvider implements ExecutionEnvir
         final String root = choice.slot().equals(parentBinding.slot())
                 ? parentBinding.root()
                 : SandboxBinding.DEFAULT_ROOT;
-        // The fork's own principal when it carries one. Without one the fork acts for its parent, whose caller already
-        // passed the gate: the parent environment it was handed is what entitles it to this workspace. Core main
-        // forwards the caller's principal into skill forks (core PR #200, SubagentBackedSkillForkExecutor); a fork
-        // request may still carry none (an older core, a caller without one), so whether to keep this fallback stays
-        // open (WS §20).
-        final WorkspaceOwner caller = request.principal().isPresent()
-                ? callers.callerOf(request.principal())
-                : parentBinding.caller();
+        // The fork's own principal, through the same gate as a root request: every fork path of the supported cores
+        // (0.3.1+) forwards the principal its parent was resolved with, so a fork without one acts as a root without
+        // one would — refused under require-principal, anonymous otherwise — and the owner check still decides
+        // whether that caller may use the parent's workspace (§8.2, §8.3). It never inherits the parent's caller.
+        final WorkspaceOwner caller = callers.callerOf(request.principal());
         return parentBinding.toBuilder().caller(caller).slot(choice.slot())
                 .requiredProfile(choice.requiredProfile().orElse(null)).shellKey(ShellKey.execution(executionId))
                 .root(root).build();

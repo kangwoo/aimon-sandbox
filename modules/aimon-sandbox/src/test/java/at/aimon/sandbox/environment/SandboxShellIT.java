@@ -9,6 +9,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -158,6 +159,22 @@ class SandboxShellIT {
         final ShellCommandResult next = bash(env, "pwd; echo \"X=$X PLAIN=$PLAIN\"");
 
         assertThat(next.stdout()).isEqualTo("/workspace/repo/src\nX=1 PLAIN=\n");
+    }
+
+    @Test
+    @DisplayName("§12.1: git is pointed at the exec environment's CA bundle unless the command names its own")
+    void gitFollowsTheExecEnvironmentsCaBundle() throws Exception {
+        try (SandboxHarness withBundle = SandboxHarness.builder().profile(at.aimon.sandbox.testkit.SandboxTestProfiles
+                .local("standard").environment(Map.of("SSL_CERT_FILE", "/opt/ca/merged.pem")).build()).build()) {
+            final ExecutionEnvironment bundled = withBundle.mainTurn(SessionId.generate(), ALICE);
+
+            assertThat(bash(bundled, "echo \"$GIT_SSL_CAINFO\"").stdout()).isEqualTo("/opt/ca/merged.pem\n");
+            assertThat(bash(bundled, "export GIT_SSL_CAINFO=/mine.pem").exitCode()).isZero();
+            assertThat(bash(bundled, "echo \"$GIT_SSL_CAINFO\"").stdout()).as("a saved export wins")
+                    .isEqualTo("/mine.pem\n");
+        }
+        assertThat(bash(env, "echo \"[${GIT_SSL_CAINFO-unset}]\"").stdout()).as("no bundle, nothing set")
+                .isEqualTo("[unset]\n");
     }
 
     @Test

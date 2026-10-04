@@ -235,4 +235,38 @@ class OpenSandboxK8sIT {
             }
         }
     }
+
+    @Test
+    @DisplayName("§12.1: a model's git over HTTPS works where a credential is injected, under the hardened template")
+    void gitOverHttpsWorksUnderInjection() throws Exception {
+        assumeTrue("1".equals(env("OPENSANDBOX_K8S_INTERNET")), "OPENSANDBOX_K8S_INTERNET=1 is not set");
+        final SandboxProfile profile = SandboxProfile.builder().name("k8s").image(image()).platform("linux")
+                .resources(ResourceSpec.of("250m", "256Mi", null, null)).egress(List.of("github.com"))
+                .credentials(List.of("github-read")).runtimeClass(env("OPENSANDBOX_K8S_RUNTIME_CLASS"))
+                .terminateAfter(Duration.ofMinutes(30)).build();
+        try (OpenSandboxProvider vaulted = new OpenSandboxProvider(config().credentials(Map.of("github-read",
+                CredentialDefinition.of(
+                        at.aimon.sandbox.provider.CredentialScope.builder().hosts(Set.of("github.com"))
+                                .methods(Set.of("GET", "POST")).paths(List.of("/octocat/*")).build(),
+                        CredentialDefinition.Auth.apiKey("X-Probe"), () -> "probe")))
+                .build());
+                WorkspaceSandbox sandbox = WorkspaceSandbox.builder().settings(SandboxSettings.builder()
+                        .deployment(deployment).profiles(List.of(profile)).defaultProfile("k8s").build())
+                        .provider(vaulted).build()) {
+            final var env = ExecutionEnvironments.resolveOrUnavailable(sandbox.environmentProvider(),
+                    EnvironmentRequest.builder().agentRuntimeId(AgentRuntimeId.fromName("k8s-it"))
+                            .sessionId(SessionId.generate()).principal(Principal.user("alice")).build());
+            try {
+                // The egress proxy intercepts TLS, and execd names its CA bundle in SSL_CERT_FILE only. git on
+                // GnuTLS (Debian's) ignores that variable; the shell wrapper hands it to git as GIT_SSL_CAINFO.
+                assertThat(env.shell()
+                        .execute(() -> "git ls-remote https://github.com/octocat/Hello-World.git HEAD 2>&1",
+                                ExecutionOptions.builder().timeout(COMMAND).build())
+                        .stdout()).matches("[0-9a-f]{40}\\s+HEAD\\s*");
+            } finally {
+                sandbox.store().scan(at.aimon.sandbox.workspace.WorkspaceScan.builder().build())
+                        .forEach(record -> sandbox.manager().close(record.id(), Principal.user("alice")));
+            }
+        }
+    }
 }

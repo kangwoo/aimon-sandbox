@@ -101,9 +101,17 @@ final class ShellWrapper {
      * {@code $3} {@code fg|bg}, {@code $4} root (where a new shell starts, and the fallback when the saved cwd is
      * gone), {@code $5} per-command working directory (may be empty), then {@code NAME=value} per-command variables.
      * A cwd fallback writes {@code 1} (ran in the root) or {@code 2} (the root is gone too: ran in {@code /workspace})
-     * to {@code $2.cwd}.
+     * to {@code $2.cwd}. When the exec environment names a CA bundle in {@code SSL_CERT_FILE} — OpenSandbox's execd
+     * does,
+     * for the egress proxy that injects credentials (§12.1) — git is pointed at it too: a git built on GnuTLS
+     * (Debian's)
+     * does not read that variable and would fail verification. An explicit {@code GIT_SSL_CAINFO} wins, and the export
+     * is part of the base environment, so it is not saved as shell state.
      */
     static final String INNER = """
+            if [ -n "${SSL_CERT_FILE-}" ] && [ -z "${GIT_SSL_CAINFO+x}" ]; then
+              export GIT_SSL_CAINFO="$SSL_CERT_FILE"
+            fi
             __aimon_base=$(export -p)
             __aimon_dir=$1; __aimon_run=$2; __aimon_mode=$3; __aimon_root=$4; __aimon_wd=$5
             shift 5

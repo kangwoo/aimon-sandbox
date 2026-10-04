@@ -100,7 +100,7 @@
 | **slot** | 워크스페이스 안에서 샌드박스를 가리키는 이름. `^[a-z][a-z0-9-]{0,30}$`. 기본 슬롯은 `primary` |
 | **SandboxProfile** | 샌드박스를 어떻게 만들지 정한 운영자 설정 — 이미지·자원·런타임 클래스·egress·자격 증명·idle 정책 |
 | **generation** | 슬롯의 샌드박스가 새로 만들어질 때마다 1씩 늘어나는 정수. 이전 셸 상태와 파일이 사라졌음을 알리는 신호다 |
-| **SandboxBinding** | 한 실행이 쓸 `(workspaceId, owner, slot, requiredProfile?, shellKey, root)` 와, 그 실행의 주체인 `caller`(`(tenantId, principal)`, §8.3). owner 검사(§8.3)가 `caller` 를 레코드의 owner 와 비교한다. 바인딩 정책이 만들되, `caller` 는 정책이 무엇을 넣었든 환경 provider 가 요청의 principal 로 덮어쓴다(루트·fork 모두, §8.3). principal 이 없는 fork 요청은 부모 바인딩의 `caller` 를 물려받는다(§8.2) |
+| **SandboxBinding** | 한 실행이 쓸 `(workspaceId, owner, slot, requiredProfile?, shellKey, root)` 와, 그 실행의 주체인 `caller`(`(tenantId, principal)`, §8.3). owner 검사(§8.3)가 `caller` 를 레코드의 owner 와 비교한다. 바인딩 정책이 만들되, `caller` 는 정책이 무엇을 넣었든 환경 provider 가 요청의 principal 로 덮어쓴다(루트·fork 모두, §8.3). principal 이 없는 fork 요청도 부모의 `caller` 를 물려받지 않고 루트 요청과 같은 주체 검사를 받는다(§8.2) |
 | **shellKey** | 지속 셸 상태를 가리키는 키. 같은 키로 들어온 명령들은 cwd·환경 변수를 공유한다 |
 | **provider** | 실제 샌드박스를 만드는 인프라. 이 설계에서는 OpenSandbox |
 
@@ -646,11 +646,12 @@ public interface SandboxBindingPolicy {
 ### 8.2 기본 정책
 
 **포크는 부모의 워크스페이스를 물려받는다.** 부모 환경의 바인딩에서 workspaceId · owner · root 를 그대로 물려받고
-shellKey 만 `exec:{executionId}` 로 바꾼다. `caller` 는 포크 요청의 principal 이고, 요청에 principal 이 없으면 부모의
-`caller` 다 — 포크는 부모 실행을 대신해 도는 것이고 부모의 `caller` 는 이미 주체 검사를 통과했다. 이 대체 경로는
-코어의 성질이 아니라 **옛 코어를 위한 것**이다. 코어 브랜치 `fix/skill-fork-forward-principal` 의 수정(아직 코어 main 에
-없다) 이전 버전의 스킬 포크 경로(`SubagentBackedSkillForkExecutor`)가 principal 을 넘기지 않는다(§20). 포크가 받은 부모 환경 자체가 그 워크스페이스를 쓸
-자격이다. 슬롯은 정책의 `forkSlot` 이 정한다 — 기본 구현은 `ForkDefinition` 의
+shellKey 만 `exec:{executionId}` 로 바꾼다. `caller` 는 포크 요청의 principal 을 루트 요청과 **같은 주체 검사**(§8.3)에
+통과시킨 값이다. 요청에 principal 이 없어도 부모의 `caller` 를 물려받지 않는다 — `require-principal` 이면 거부되고, 아니면
+principal 없는 루트처럼 익명으로 돈다. 어느 쪽이든 owner 검사가 그 `caller` 로 부모의 워크스페이스를 쓸 수 있는지 다시 본다.
+그래서 포크는 부모 워크스페이스가 허락하는 것과 다른 owner 로 돌 수 없다. 지원하는 모든 코어(0.3.1 이상)의 포크 경로 —
+Task 도구(전경·백그라운드), `Skill` 도구와 슬래시 명령의 FORK 스킬, 도구 호출로 도는 Workflow · WorkflowJs, 스케줄 루틴 안의
+포크 — 는 부모 환경을 해석한 것과 같은 principal 을 포크 요청에 싣는다(§20). 슬롯은 정책의 `forkSlot` 이 정한다 — 기본 구현은 `ForkDefinition` 의
 `sandbox.slot` 속성이 있으면 그것, 없으면 부모의 슬롯이다. 슬롯이 부모와 다르면 root 는 그 슬롯의 `/workspace/repo`
 다. 포크가 몇 단계로 중첩되어도, 부모가 세션 없는 실행(스케줄 루틴)이어도 같은 워크스페이스에 머문다.
 `invokingSessionId` 로 워크스페이스를 다시 계산하면 세션 없는 부모의 포크가 자기 `executionId` 로 새 워크스페이스를
@@ -845,6 +846,10 @@ INNER:
 - **같은 shellKey 의 명령은 직렬화한다.** 노드 로컬 락이 한 노드 안의 순서를 정하고, 샌드박스 안의 `flock` 이 노드
   사이를 막는다. 세션은 `SessionLease` 로 한 노드에만 있지만, lease 가 옮겨 간 뒤에도 옛 노드의 명령이 아직 돌 수
   있으므로 노드 로컬 락만으로는 부족하다
+- **git 은 exec 환경의 CA 번들을 따른다.** exec 환경에 `SSL_CERT_FILE` 이 있고 `GIT_SSL_CAINFO` 가 없으면 안쪽 bash 가
+  처음에 `GIT_SSL_CAINFO` 를 그 값으로 둔다. OpenSandbox 의 execd 는 egress 프록시의 CA 를 합친 번들을 `SSL_CERT_FILE` 로만
+  알리고, GnuTLS 로 빌드한 git 은 그 변수를 읽지 않는다(§20). 기준 환경의 일부이므로 셸 상태로 저장되지 않고, 명령이 둔
+  `GIT_SSL_CAINFO` 가 이긴다
 - **락은 래퍼 bash 만 쥔다.** 모델 명령은 `9>&-` 로 락 fd 를 닫은 채 돈다. 그렇지 않으면 `./gradlew` 의 데몬이나
   `npm run dev &` 처럼 명령이 남긴 자손이 fd 를 물려받아, 명령이 끝나도 락이 풀리지 않는다. 래퍼가 끝나면(정상 종료든
   kill 이든) 락은 커널이 푼다
@@ -2040,12 +2045,15 @@ docker 계층, K8s 에서만 드러나는 것은 k8s 계층 — 는 [`workspace-
   명령은 계속 돌지만 결과를 받을 쪽이 없다. 프로바이더 쪽 명령 id 를 레코드에 남겨 다른 노드가 다시 붙게
   할지는 6단계(영속 저장소) 이후에 판단한다. 그때까지는 heartbeat 가 노드와 함께 멈추므로, 결과를 받을 쪽이
   없는 명령은 idle 정책에 따라 샌드박스와 함께 정리된다
-- **principal 없는 포크의 대체 경로** *(코어 수정이 지원 범위의 모든 코어에 들어가면 닫는다)* — principal 이 없는 포크
-  요청은 부모의 `caller` 를 물려받는다(§8.2). 그 경로가 필요한 이유는 코어 브랜치 `fix/skill-fork-forward-principal` 이전
-  코어의 스킬 포크가 principal 을 넘기지 않기 때문이다. 그 수정이 코어 main 에 들어가고 지원하는 최소 코어가 그 버전이
-  되면, 대체 경로를 없애고 principal 없는 포크를 루트 요청처럼 주체 검사에 맡길지(부모 상속이 조용히 남지 않게) 다시 정한다.
-  코어 main `61604b4` 의 `SubagentBackedSkillForkExecutor` 는 principal 을 넘긴다 — 조건의 앞 절반은 채워졌고, 이 릴리스에서
-  함께 정리할지는 정하지 않았다([코어 0.3.1 이행 설계](workspace-sandbox-core-031.md) §9 Q6)
+- ~~**principal 없는 포크의 대체 경로**~~ *(첫 릴리스 전에 닫았다)* — 대체 경로를 없앴다. principal 없는 포크 요청은
+  부모의 `caller` 를 물려받지 않고 루트 요청과 같은 주체 검사를 받는다(§8.2). 근거는 코어 0.3.1 의 포크 경로 전수 조사다.
+  포크 환경을 해석하는 곳은 `DefaultSubagentExecutor.resolveExecutionEnvironment` 한 곳이고, 그 principal 은
+  `SubagentExecutionEnvironment` 의 principal 이다. 그 환경을 만드는 곳 — `TaskTool` · `WorkflowTool` ·
+  `GraalJsWorkflowTool`(도구 호출) · `SubagentBackedSkillForkExecutor`(`Skill` 도구, 슬래시 명령) — 은 모두 도구 문맥의
+  `PRINCIPAL` 을 싣고, 그 값은 루트 환경을 해석한 실행 요청(루틴은 작업의 owner)의 principal 과 같은 출처다. principal 이
+  빠지는 곳은 에이전트 단위 `WorkflowRunner`(백그라운드 Workflow · WorkflowJs 실행)뿐인데, 그 포크는 부모 환경도 없어
+  어차피 사용 불가다(격리 단계의 부모도 principal 없이 해석된다). 조사 결과는
+  [코어 0.3.1 이행 설계](workspace-sandbox-core-031.md) §9 Q6 에 있다
 - **스트리밍 도구 출력** — SPI 는 `OutputSink` 로 준비되어 있지만 코어 `BashTool` 이 부분 출력을 이벤트로
   내보내는 경로가 없다
 - **`sharedAccess: none` 슬롯의 git 직접 clone** *(5단계에서 닫는다)* — §18 은 git seed 를 5단계에 두었고 직접 clone 은
@@ -2058,11 +2066,15 @@ docker 계층, K8s 에서만 드러나는 것은 k8s 계층 — 는 [`workspace-
 - ~~**seed 의 네트워크 격리 점검**~~ *(4단계에서 닫았다)* — 프로바이더가 `controlPlaneEndpoints()` 를 알려 주고 seed 스크립트가
   bash `/dev/tcp` 로 탐침한다. egress 모드와 vault 바인딩은 seed 단계의 `SandboxProvider.verify` 가 대조한다(§11.3, 단계 4 구현
   설계 §6.4)
-- **샌드박스가 egress 프록시의 CA 를 신뢰하는가** *(K8s 계층을 처음 돌릴 때 닫는다)* — credential vault 는 HTTPS 를 MITM 으로
-  주입한다. 스파이크는 TLS 검증을 끄고 확인했으므로, 샌드박스 이미지가 사이드카의 CA 를 신뢰하지 않으면 `git` 같은 도구의
-  HTTPS 요청에는 주입이 되지 않는다(요청이 실패한다). 신뢰가 필요하면 이미지 계약이나 환경(CA 번들)에 더해야 한다. k8s 계층의
-  `credentialsAreInjectedOnlyWithinTheirScope` 가 검증을 켠 채 확인한다. 그 전까지 `CREDENTIAL_INJECTION` 은 설정대로 광고하되
-  모듈 README 가 경고한다(단계 4 구현 설계 §12 Q4)
+- ~~**샌드박스가 egress 프록시의 CA 를 신뢰하는가**~~ *(K8s 계층을 처음 돌리며 닫았다)* — execd 의 bootstrap 이 사이드카의 CA
+  를 기다렸다가 시스템 신뢰 저장소에 넣고(권한이 있을 때 — 강화 템플릿의 uid 1000 에서는 못 한다), CA 를 합친 번들을
+  `SSL_CERT_FILE` · `REQUESTS_CA_BUNDLE` 로, CA 자체를 `NODE_EXTRA_CA_CERTS` 로 내보낸다. curl · Python · Node 는 그것으로
+  검증을 켠 채 주입을 받는다. **git 은 받지 못했다** — Debian 의 git 은 GnuTLS 판 libcurl 이라 `SSL_CERT_FILE` 을 읽지 않고
+  `server certificate verification failed` 로 끝났다. 그래서 셸 래퍼가 `SSL_CERT_FILE` 이 있고 `GIT_SSL_CAINFO` 가 없으면
+  `GIT_SSL_CAINFO` 를 그 번들로 둔다(§9). k8s 계층의 `credentialsAreInjectedOnlyWithinTheirScope` 와
+  `gitOverHttpsWorksUnderInjection` 이 검증을 켠 채 확인한다. 같은 실행이 드러낸 것이 하나 더 있다 — egress 가 있으면 bootstrap
+  이 CA 를 기다린 뒤에 execd 를 띄우므로 `Running` 직후의 첫 명령이 502 를 받았다(다섯 번에 한 번). `create` 가 execd 의
+  `/ping` 까지 기다린다(단계 4 구현 설계 §12 Q4)
 - ~~**러너에서의 docker 계층**~~ *(3·4단계 릴리스 전에 닫았다)* — `.github/workflows/build.yml` 의 `integration` 잡이 PR 마다
   Linux(ubuntu, amd64) 러너에서 `integrationTest` 를 돌린다. 서버 컨테이너 도달(`host.docker.internal` + host-gateway), amd64
   execd 이미지, 러너 커널의 `dns+nft` 가 모두 통과했다. 첫 실행이 드러낸 것 하나는 고쳤다 — Linux 의 `Instant.now()` 는
