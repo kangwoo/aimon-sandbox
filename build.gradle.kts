@@ -8,19 +8,6 @@ allprojects {
 
     repositories {
         mavenCentral()
-        // Only for the aimon-core SNAPSHOT pinned in gradle/libs.versions.toml, which exists nowhere but in
-        // `~/.m2` after `./gradlew publishToMavenLocal` in aimon-core. Filtered to that group and to snapshots
-        // because `~/.m2` also holds stale `at.aimon.core` *release* artifacts from local builds, and an
-        // unfiltered `mavenLocal()` would let any coordinate be served from there instead of from Central.
-        // Delete this block together with the SNAPSHOT pin -- keeping it is a release blocker.
-        mavenLocal {
-            content {
-                includeGroup("at.aimon.core")
-            }
-            mavenContent {
-                snapshotsOnly()
-            }
-        }
     }
 }
 

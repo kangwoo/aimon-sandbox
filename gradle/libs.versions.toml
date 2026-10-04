@@ -11,12 +11,11 @@
 # execution-environment SPI (docs/design/workspace-sandbox.md §7); that bump landed with implementation
 # step 3, together with the first code that compiles against it.
 #
-# It is pinned to a SNAPSHOT until aimon-core 0.3.1 is released: the SPI step 3 compiles against exists only
-# on aimon-core's main branch, and resolves from `~/.m2` after `./gradlew publishToMavenLocal` there (see the
-# `mavenLocal()` block in build.gradle.kts). That is a release blocker, not a detail: nothing from this
-# repository is released until the pin is raised to a released 0.3.1 and `mavenLocal()` is removed with it.
+# 0.3.1 is the first release that carries that SPI together with the cancellation, background-ceiling and
+# runtime-binding contracts this code implements (aimon-core PRs #204-#208). Until it was released the pin was
+# `0.3.1-SNAPSHOT`, resolved from `~/.m2` through a filtered `mavenLocal()`; both left together.
 [versions]
-aimon-core = "0.3.1-SNAPSHOT"
+aimon-core = "0.3.1"
 
 lombok = "1.18.48"
 
