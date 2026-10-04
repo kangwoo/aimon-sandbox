@@ -50,6 +50,15 @@ the design and where the implementation departed from it is
 - **`OpenSandboxProvider.extendExpiry` rounds the target up to a whole microsecond.** The server keeps microseconds,
   so on a nanosecond clock (Linux) the stored expiry fell just short of the one asked for; the first CI run of the
   docker tier caught it in the provider contract suite.
+- **The k8s tier ran for the first time**, on kind with the hardened container-level template, the isolation
+  NetworkPolicy and a runc-backed RuntimeClass: all eight checks pass. `scripts/k8s-tier.sh up|test|down` provisions
+  that cluster and runs the tier. It found two defects, both fixed:
+  - **git over HTTPS failed where a credential is injected.** execd hands the egress proxy's CA bundle to commands
+    as `SSL_CERT_FILE`, which Debian's git (GnuTLS) ignores. The shell wrapper now sets `GIT_SSL_CAINFO` to that bundle
+    when `SSL_CERT_FILE` is set and `GIT_SSL_CAINFO` is not.
+  - **The first command after a create could get HTTP 502** (about one create in five, with egress): execd starts only
+    after the egress CA is ready. `OpenSandboxProvider.create` now waits until execd answers `/ping`, within
+    `create-timeout`.
 - CI: `.github/workflows/build.yml` runs `checkAll` and the docker tier (`integrationTest`) on Ubuntu.
 - README gains a "Wiring" section (`ExecutionEnvironmentSpec.shared`, close order, the notes above).
 - Tests compile against core's `UserLocale` (was `Environment`).

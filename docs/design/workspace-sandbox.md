@@ -846,6 +846,10 @@ INNER:
 - **같은 shellKey 의 명령은 직렬화한다.** 노드 로컬 락이 한 노드 안의 순서를 정하고, 샌드박스 안의 `flock` 이 노드
   사이를 막는다. 세션은 `SessionLease` 로 한 노드에만 있지만, lease 가 옮겨 간 뒤에도 옛 노드의 명령이 아직 돌 수
   있으므로 노드 로컬 락만으로는 부족하다
+- **git 은 exec 환경의 CA 번들을 따른다.** exec 환경에 `SSL_CERT_FILE` 이 있고 `GIT_SSL_CAINFO` 가 없으면 안쪽 bash 가
+  처음에 `GIT_SSL_CAINFO` 를 그 값으로 둔다. OpenSandbox 의 execd 는 egress 프록시의 CA 를 합친 번들을 `SSL_CERT_FILE` 로만
+  알리고, GnuTLS 로 빌드한 git 은 그 변수를 읽지 않는다(§20). 기준 환경의 일부이므로 셸 상태로 저장되지 않고, 명령이 둔
+  `GIT_SSL_CAINFO` 가 이긴다
 - **락은 래퍼 bash 만 쥔다.** 모델 명령은 `9>&-` 로 락 fd 를 닫은 채 돈다. 그렇지 않으면 `./gradlew` 의 데몬이나
   `npm run dev &` 처럼 명령이 남긴 자손이 fd 를 물려받아, 명령이 끝나도 락이 풀리지 않는다. 래퍼가 끝나면(정상 종료든
   kill 이든) 락은 커널이 푼다
@@ -2062,11 +2066,15 @@ docker 계층, K8s 에서만 드러나는 것은 k8s 계층 — 는 [`workspace-
 - ~~**seed 의 네트워크 격리 점검**~~ *(4단계에서 닫았다)* — 프로바이더가 `controlPlaneEndpoints()` 를 알려 주고 seed 스크립트가
   bash `/dev/tcp` 로 탐침한다. egress 모드와 vault 바인딩은 seed 단계의 `SandboxProvider.verify` 가 대조한다(§11.3, 단계 4 구현
   설계 §6.4)
-- **샌드박스가 egress 프록시의 CA 를 신뢰하는가** *(K8s 계층을 처음 돌릴 때 닫는다)* — credential vault 는 HTTPS 를 MITM 으로
-  주입한다. 스파이크는 TLS 검증을 끄고 확인했으므로, 샌드박스 이미지가 사이드카의 CA 를 신뢰하지 않으면 `git` 같은 도구의
-  HTTPS 요청에는 주입이 되지 않는다(요청이 실패한다). 신뢰가 필요하면 이미지 계약이나 환경(CA 번들)에 더해야 한다. k8s 계층의
-  `credentialsAreInjectedOnlyWithinTheirScope` 가 검증을 켠 채 확인한다. 그 전까지 `CREDENTIAL_INJECTION` 은 설정대로 광고하되
-  모듈 README 가 경고한다(단계 4 구현 설계 §12 Q4)
+- ~~**샌드박스가 egress 프록시의 CA 를 신뢰하는가**~~ *(K8s 계층을 처음 돌리며 닫았다)* — execd 의 bootstrap 이 사이드카의 CA
+  를 기다렸다가 시스템 신뢰 저장소에 넣고(권한이 있을 때 — 강화 템플릿의 uid 1000 에서는 못 한다), CA 를 합친 번들을
+  `SSL_CERT_FILE` · `REQUESTS_CA_BUNDLE` 로, CA 자체를 `NODE_EXTRA_CA_CERTS` 로 내보낸다. curl · Python · Node 는 그것으로
+  검증을 켠 채 주입을 받는다. **git 은 받지 못했다** — Debian 의 git 은 GnuTLS 판 libcurl 이라 `SSL_CERT_FILE` 을 읽지 않고
+  `server certificate verification failed` 로 끝났다. 그래서 셸 래퍼가 `SSL_CERT_FILE` 이 있고 `GIT_SSL_CAINFO` 가 없으면
+  `GIT_SSL_CAINFO` 를 그 번들로 둔다(§9). k8s 계층의 `credentialsAreInjectedOnlyWithinTheirScope` 와
+  `gitOverHttpsWorksUnderInjection` 이 검증을 켠 채 확인한다. 같은 실행이 드러낸 것이 하나 더 있다 — egress 가 있으면 bootstrap
+  이 CA 를 기다린 뒤에 execd 를 띄우므로 `Running` 직후의 첫 명령이 502 를 받았다(다섯 번에 한 번). `create` 가 execd 의
+  `/ping` 까지 기다린다(단계 4 구현 설계 §12 Q4)
 - ~~**러너에서의 docker 계층**~~ *(3·4단계 릴리스 전에 닫았다)* — `.github/workflows/build.yml` 의 `integration` 잡이 PR 마다
   Linux(ubuntu, amd64) 러너에서 `integrationTest` 를 돌린다. 서버 컨테이너 도달(`host.docker.internal` + host-gateway), amd64
   execd 이미지, 러너 커널의 `dns+nft` 가 모두 통과했다. 첫 실행이 드러낸 것 하나는 고쳤다 — Linux 의 `Instant.now()` 는

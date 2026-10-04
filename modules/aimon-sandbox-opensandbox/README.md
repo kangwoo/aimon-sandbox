@@ -72,8 +72,9 @@ WorkspaceSandbox sandbox = WorkspaceSandbox.builder().settings(settings).provide
   보는 주소라, 샌드박스가 풀 수 없는 이름이면 탐침이 늘 통과한다(빌더가 WARN 을 남긴다).
 - **`InMemory` 저장소는 한 노드 전용이다.** 여러 노드가 각자 `InMemory` 로 같은 `deployment` 를 쓰면 janitor 의 조정이 서로의
   샌드박스를 고아로 지운다.
-- **자격 증명의 HTTPS 주입은 샌드박스가 egress 사이드카의 CA 를 신뢰해야 동작한다** — 아직 확인하지 않았다(WS §20). k8s 계층의
-  `credentialsAreInjectedOnlyWithinTheirScope` 가 검증을 켠 채 확인한다.
+- **자격 증명의 HTTPS 주입은 샌드박스가 egress 사이드카의 CA 를 신뢰해야 동작한다.** execd 가 CA 번들을 `SSL_CERT_FILE` 등으로
+  내보내고, 셸 래퍼가 git 에 `GIT_SSL_CAINFO` 로 넘긴다. 이 변수들을 읽지 않는 도구는 검증에 실패한다(WS §20). 이미지는
+  `ca-certificates` 를 갖추는 것이 좋다.
 - 출력은 줄로 정규화된다(`\r` 은 줄바꿈, 마지막 줄바꿈은 늘 있음, 잘못된 UTF-8 은 U+FFFD — WS §6.1). 프로파일의 `disk` · `pids` 는
   요청 필드가 없어 서버 설정(Docker `pids_limit`)으로만 걸린다.
 
@@ -91,10 +92,11 @@ WorkspaceSandbox sandbox = WorkspaceSandbox.builder().settings(settings).provide
 업스트림 compose 의 설정을 따른다 — `host_ip = "host.docker.internal"` + `host-gateway`, `resolve_internal = false`, `bridge`.
 샌드박스의 execd 포트는 실행 동안 호스트 인터페이스에 열린다(개발 · CI 머신에서만 돌린다). 모든 샌드박스는 deployment
 `ci-{uuid}` 를 달고 실행이 끝나면 지운다. 이미 떠 있는 서버를 쓰려면 `OPENSANDBOX_TEST_ENDPOINT` · `OPENSANDBOX_TEST_API_KEY`,
-이미지를 바꾸려면 `OPENSANDBOX_TEST_{SERVER,EXECD,EGRESS,SANDBOX}_IMAGE` 를 준다. macOS(Docker Desktop)에서 확인했고 Linux
-러너는 아직이다(WS §20).
+이미지를 바꾸려면 `OPENSANDBOX_TEST_{SERVER,EXECD,EGRESS,SANDBOX}_IMAGE` 를 준다. macOS(Docker Desktop)와 CI 의 Linux 러너
+(`.github/workflows/build.yml` 의 `integration` 잡)에서 돈다.
 
-**k8s 계층**은 클러스터를 만들지 않는다. 스파이크의 절차([`C-k8s.md`](../../spike/opensandbox/reports/C-k8s.md) §1)와
+**k8s 계층**은 클러스터를 만들지 않는다. `scripts/k8s-tier.sh up` 이 아래의 구성을 kind 위에 만들고, `scripts/k8s-tier.sh test`
+가 서버를 포트포워드해 모든 검사를 켠 채 돌리며, `scripts/k8s-tier.sh down` 이 지운다. 손으로 할 때는 스파이크의 절차([`C-k8s.md`](../../spike/opensandbox/reports/C-k8s.md) §1)와
 [`spike/opensandbox/k8s/deploy/`](../../spike/opensandbox/k8s/deploy/) 의 값 — kind, OpenSandbox 차트, 샌드박스 컨테이너 단위로
 강화한 템플릿, `netpol-sandbox-isolation.yaml` — 으로 준비한 뒤 `kubectl port-forward` 로 서버를 열고 다음을 준다:
 `OPENSANDBOX_K8S_ENDPOINT` · `OPENSANDBOX_K8S_API_KEY` · `OPENSANDBOX_K8S_IMAGE`(클러스터가 받을 수 있는 계약 이미지) ·

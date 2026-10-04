@@ -175,6 +175,9 @@ final class FakeOpenSandboxServer implements AutoCloseable {
     /** Overrides by {@code "METHOD /path-prefix"}; a function returning null falls through. */
     final Map<String, Function<Request, Reply>> overrides = new ConcurrentHashMap<>();
     volatile Function<JsonNode, Reply> commands = body -> Reply.events(List.of(init("c1"), complete()), null);
+    /** How many {@code /ping}s execd answers 502 before it is up. */
+    final java.util.concurrent.atomic.AtomicInteger execdDown = new java.util.concurrent.atomic.AtomicInteger();
+
     volatile JsonNode networkPolicy = JSON.createObjectNode().put("status", "ok").put("enforcementMode", "dns+nft")
             .set("policy", JSON.createObjectNode().put("defaultAction", "deny"));
     volatile JsonNode vault;
@@ -442,6 +445,8 @@ final class FakeOpenSandboxServer implements AutoCloseable {
     private Reply execd(Request request, String rest) {
         final String path = request.param("path");
         switch (request.method + " " + rest) {
+            case "GET /ping" :
+                return execdDown.get() > 0 && execdDown.getAndDecrement() > 0 ? Reply.status(502) : Reply.status(200);
             case "POST /command" :
                 return commands.apply(request.json());
             case "DELETE /command" : {
