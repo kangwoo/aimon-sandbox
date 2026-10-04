@@ -147,8 +147,8 @@ public final class WorkspaceSandbox implements AutoCloseable {
         return settings;
     }
 
-    /** @return the node-local connection cache */
-    public SandboxConnectionCache connections() {
+    /** @return the node-local connection cache; package-private: it is plumbing, not API */
+    SandboxConnectionCache connections() {
         return connections;
     }
 

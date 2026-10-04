@@ -47,7 +47,14 @@ public final class ShellKey {
         return value.startsWith("exec:");
     }
 
-    /** @return {@code h(value)}, the state directory's name under {@code /workspace/.aimon-shell/} */
+    /**
+     * @return {@code h(value)}, the state directory's name under {@code /workspace/.aimon-shell/}
+     *
+     *         <p>
+     *         <b>Internal.</b> Public only for use across this library's packages: not supported API, and it may change
+     *         in
+     *         any release.
+     */
     public String directoryName() {
         return SandboxLabels.h(value);
     }

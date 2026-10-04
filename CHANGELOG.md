@@ -44,6 +44,14 @@ the design and where the implementation departed from it is
 - **`OpenSandboxProvider.extendExpiry` rounds the target up to a whole microsecond.** The server keeps microseconds,
   so on a nanosecond clock (Linux) the stored expiry fell just short of the one asked for; the first CI run of the
   docker tier caught it in the provider contract suite.
+- **The public surface was trimmed for the first release.** `SandboxShell`, `SandboxFileSystem` and
+  `SandboxContentSearch` are package-private (applications see them only as core's `VirtualShell`,
+  `VirtualFileSystem` and `ContentSearch`), and `WorkspaceSandbox.connections()` is gone from the API. Types and
+  members that must stay public for use across this library's packages carry an **Internal** javadoc note and are not
+  supported API: `SandboxConnectionCache`, `ConnectedSlot`, `SlotActivity`, `Heartbeat`,
+  `SandboxWorkspaceManager.builder()`/`connect()`/`RESET_NOTICE`/`LOST_MESSAGE`,
+  `SandboxExecutionEnvironmentProvider.builder()`, the `SandboxJanitor` constructor, `ShellKey.directoryName()` and
+  `SandboxProfile.contentHash()`.
 - CI: `.github/workflows/build.yml` runs `checkAll` and the docker tier (`integrationTest`) on Ubuntu.
 - README gains a "Wiring" section (`ExecutionEnvironmentSpec.shared`, close order, the notes above).
 - Tests compile against core's `UserLocale` (was `Environment`).

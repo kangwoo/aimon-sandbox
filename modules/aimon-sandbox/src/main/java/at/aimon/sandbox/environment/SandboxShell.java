@@ -79,7 +79,7 @@ import at.aimon.sandbox.workspace.SandboxWorkspaceManager;
  * the command and every descendant that stayed in the group. A job the command moved into a group or session of its
  * own ({@code setsid}, {@code set -m}) outlives it until the sandbox goes; the exec server offers nothing wider (§9).
  */
-public final class SandboxShell implements VirtualShell {
+final class SandboxShell implements VirtualShell {
 
     /** Room left for the wrapper's trailer above the in-sandbox cap; the trailer itself is under 128 bytes. */
     static final long TRAILER_ALLOWANCE = 1024;
