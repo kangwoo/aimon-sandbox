@@ -59,6 +59,7 @@ import at.aimon.core.subagent.SubagentContent;
 import at.aimon.core.subagent.SubagentMetadata;
 import at.aimon.core.subagent.SubagentRegistry;
 import at.aimon.core.tools.bash.BashTool;
+import at.aimon.core.tools.task.TaskTool;
 import at.aimon.sandbox.SandboxHarness;
 import at.aimon.sandbox.provider.SandboxProviderException;
 import at.aimon.sandbox.testkit.FaultInjectingSandboxProvider.Fault;
@@ -103,6 +104,10 @@ class OrcaRuntimeSandboxE2ETest {
     }
 
     private OrcaAgentRuntime runtime() {
+        return runtime(false);
+    }
+
+    private OrcaAgentRuntime runtime(boolean withTaskTool) {
         final LocalFileSystem control = new LocalFileSystem(new LocalFileSystemConfig(tempDir.toString()));
         control.initialize();
         final DefaultCommandRegistry commands = new DefaultCommandRegistry(List.of(), skills, control,
@@ -110,9 +115,14 @@ class OrcaRuntimeSandboxE2ETest {
         commands.initialize();
         final DefaultToolRegistry toolRegistry = new DefaultToolRegistry();
         toolRegistry.register(new BashTool());
+        final LlmModel model = LlmModel.builder().name("m").build();
+        if (withTaskTool) {
+            toolRegistry.register(new TaskTool(model, subagentRegistry, toolRegistry, hookRegistry,
+                    UserLocale.createDefault(), subagents));
+        }
         return OrcaAgentRuntime.builder()
                 .agent(DefaultAgent.builder().name("sandboxed").maxIterations(3).systemPrompt("You are a test agent")
-                        .model(LlmModel.builder().name("m").build()).build())
+                        .model(model).build())
                 .toolRegistry(toolRegistry).hookRegistry(hookRegistry).commandRegistry(commands)
                 .subagentRegistry(subagentRegistry).skillRegistry(skills).controlFileSystem(control)
                 .userLocale(UserLocale.createDefault())
@@ -182,13 +192,40 @@ class OrcaRuntimeSandboxE2ETest {
 
         assertThat(result.isSuccess()).as(result.getErrorMessage()).isTrue();
         assertThat(llm.userMessages).anyMatch(text -> text.contains("Write the fork marker file."));
-        // The fork shares the session's workspace and slot (§8.2): the marker is in the same sandbox. Core's skill-fork
-        // path forwards the caller's principal (core PR #200), so the fork acts as that caller, not "not permitted".
+        // The fork shares the session's workspace and slot (§8.2): the marker is in the same sandbox. A fork no longer
+        // inherits its parent's caller, so this passes only because core's slash-command fork path forwards the
+        // caller's principal (core 0.3.1, OrcaAgentExecutor's command context); a dropped principal reads "not
+        // permitted".
         assertThat(llm.toolResults).noneMatch(text -> text.contains("not permitted"));
         assertThat(harness.hostFile(session, "/workspace/repo/fork-marker.txt")).isEqualTo("forked\n");
         assertThat(harness.store.scan(WorkspaceScan.builder().build())).hasSize(1);
         assertThat(Files.exists(Path.of("fork-marker.txt"))).as("nothing on the host's cwd").isFalse();
         assertThat(Files.exists(tempDir.resolve("fork-marker.txt"))).isFalse();
+    }
+
+    @Test
+    @DisplayName("§8.2: a Task subagent's Bash runs in the session's sandbox as the caller, with no fallback")
+    void taskSubagentBashRunsInTheSameSandboxAsTheCaller() throws Exception {
+        subagentRegistry.add(
+                Subagent.of("worker", SubagentMetadata.builder().description("does the work").maxIterations(3).build(),
+                        SubagentContent.of("You are the worker.")));
+        llm.respond(LlmResponse.tools(List.of(ToolUse.of("t1", "Task",
+                Map.of("subagent_name", "worker", "prompt", "Write the task marker file.", "description", "mark")))));
+        llm.respond(LlmResponse
+                .tools(List.of(ToolUse.of("w1", "Bash", Map.of("command", "echo tasked > task-marker.txt; pwd")))));
+        llm.respond(LlmResponse.text("Task marker written."));
+        llm.respond(LlmResponse.text("Done."));
+        final SessionId session = SessionId.generate();
+
+        final OrcaAgentExecutionResult result = executor.execute(runtime(true), OrcaAgentExecutionRequest.builder()
+                .userInput("go").sessionId(session).principal(SandboxHarness.ALICE).build());
+
+        assertThat(result.isSuccess()).as(result.getErrorMessage()).isTrue();
+        // Core's Task tool forwards the caller's principal into the subagent's environment request (core 0.3.1,
+        // TaskTool → DefaultSubagentExecutionManager → DefaultSubagentExecutor); a dropped one reads "not permitted".
+        assertThat(llm.toolResults).noneMatch(text -> text.contains("not permitted"));
+        assertThat(harness.hostFile(session, "/workspace/repo/task-marker.txt")).isEqualTo("tasked\n");
+        assertThat(harness.store.scan(WorkspaceScan.builder().build())).hasSize(1);
     }
 
     /**

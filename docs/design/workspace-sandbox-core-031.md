@@ -443,6 +443,17 @@ Decisions for a human, at the top of the PR description: Q1 and Q2 below.
   `SubagentBackedSkillForkExecutor` (seen in the checkout), which is the trigger WS §20 names for revisiting the
   fallback in `SandboxExecutionEnvironmentProvider.bindFork`. Not part of EE-1/EE-59 and not touched here; noted so
   the maintainer can decide whether to fold it into this release.
+  *Resolved after merge:* the fallback is removed; a principal-less fork passes the root's principal gate, and the
+  owner check still decides on the parent's workspace (WS §8.2, §20). Every fork of core 0.3.1 resolves its
+  environment in one place, `DefaultSubagentExecutor.resolveExecutionEnvironment`, with the principal of the
+  `SubagentExecutionEnvironment` that `DefaultSubagentExecutionManager` forwards. The builders of that environment —
+  `TaskTool`, `WorkflowTool` and `GraalJsWorkflowTool` (foreground), `SubagentBackedSkillForkExecutor` (the `Skill`
+  tool and slash-command FORK skills) — read the tool context's `PRINCIPAL`, which `OrcaAgentExecutor` fills from the
+  same request principal it resolves the root environment with (a routine: the task's owner, both times); a fork's
+  own tools get it back from its request, so nested forks carry it too. The one environment without a principal is
+  the agent-scoped `WorkflowRunner` (background Workflow/WorkflowJs runs), whose steps have no parent environment
+  either and are refused before the principal matters. `OrcaRuntimeSandboxE2ETest` pins the Task and slash-command
+  paths without the fallback.
 
 ## 10. Implementation departures
 
