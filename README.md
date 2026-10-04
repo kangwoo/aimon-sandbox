@@ -105,8 +105,9 @@ taken back.
 1. **Finalize the changelog in a PR.** Rename `## [Unreleased]` to `## [X.Y.Z] - YYYY-MM-DD` and merge it to `main`.
    The script does not edit `CHANGELOG.md`; it warns when the section is missing, and the GitHub Release then
    carries only a link.
-2. **Run the k8s tier.** `./gradlew :aimon-sandbox-opensandbox:k8sTest` against a provisioned cluster, with
-   `OPENSANDBOX_K8S_ENDPOINT` set (otherwise every test skips), as in the
+2. **Run the k8s tier.** `scripts/k8s-tier.sh up && scripts/k8s-tier.sh test` builds a kind cluster and runs
+   `./gradlew :aimon-sandbox-opensandbox:k8sTest` against it with every check enabled; every test must pass, none
+   skipped. `scripts/k8s-tier.sh down` removes the cluster. See the
    [provider's README](modules/aimon-sandbox-opensandbox/README.md). This tier is not in CI or in the gate.
 3. **Dry run.** `scripts/release.sh patch --dry-run` runs the pre-flight checks and the gate (`checkAll
    integrationTest jacocoTestCoverageVerification`, the tasks CI runs) and changes nothing. You need a clean
