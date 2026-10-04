@@ -54,6 +54,30 @@ class SandboxProfileTest {
     }
 
     @Test
+    void theBackgroundCommandTimeoutFollowsTheHeartbeatLimitUnlessConfigured() {
+        assertThat(base().build().backgroundCommandTimeout()).isEqualTo(Duration.ofHours(1));
+        assertThat(base().build().configuredBackgroundCommandTimeout()).isEmpty();
+        assertThat(base().backgroundHeartbeatLimit(Duration.ofMinutes(10)).build().backgroundCommandTimeout())
+                .isEqualTo(Duration.ofMinutes(10));
+
+        final SandboxProfile configured = base().backgroundHeartbeatLimit(Duration.ofMinutes(10))
+                .backgroundCommandTimeout(Duration.ofHours(3)).build();
+
+        assertThat(configured.backgroundCommandTimeout()).isEqualTo(Duration.ofHours(3));
+        assertThat(configured.configuredBackgroundCommandTimeout()).contains(Duration.ofHours(3));
+        assertThat(configured.backgroundHeartbeatLimit()).isEqualTo(Duration.ofMinutes(10));
+    }
+
+    @Test
+    void theContentHashFollowsTheEffectiveBackgroundCommandTimeout() {
+        final String hash = base().build().contentHash();
+
+        assertThat(base().backgroundCommandTimeout(Duration.ofMinutes(20)).build().contentHash()).isNotEqualTo(hash);
+        // Spelling out the default is not a change.
+        assertThat(base().backgroundCommandTimeout(Duration.ofHours(1)).build().contentHash()).isEqualTo(hash);
+    }
+
+    @Test
     void registryFindsProfilesAndTheLongestTerminateAfter() {
         final SandboxProfileRegistry registry = new SandboxProfileRegistry(
                 List.of(base().name("a").build(), base().name("b").terminateAfter(Duration.ofHours(5)).build()), "a");

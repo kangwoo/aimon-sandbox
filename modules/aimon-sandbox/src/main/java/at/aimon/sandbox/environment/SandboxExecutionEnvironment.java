@@ -1,6 +1,7 @@
 package at.aimon.sandbox.environment;
 
 import java.time.Clock;
+import java.time.Duration;
 import java.util.Objects;
 import java.util.Optional;
 
@@ -28,12 +29,15 @@ public final class SandboxExecutionEnvironment implements ExecutionEnvironment {
     private final SandboxShell shell;
     private final SandboxStaging staging;
     private final SandboxContentSearch contentSearch;
+    private final Duration backgroundCommandTimeout;
 
     SandboxExecutionEnvironment(SandboxBinding binding, EnvironmentDescriptor descriptor,
-            SandboxWorkspaceManager manager, SandboxConnectionCache connections, SandboxSettings settings,
-            Clock clock) {
+            Duration backgroundCommandTimeout, SandboxWorkspaceManager manager, SandboxConnectionCache connections,
+            SandboxSettings settings, Clock clock) {
         this.binding = Objects.requireNonNull(binding, "binding must not be null");
         this.descriptor = Objects.requireNonNull(descriptor, "descriptor must not be null");
+        this.backgroundCommandTimeout = Objects.requireNonNull(backgroundCommandTimeout,
+                "backgroundCommandTimeout must not be null");
         final PendingNotices pending = new PendingNotices();
         this.fileSystem = new SandboxFileSystem(binding, manager, pending);
         this.shell = new SandboxShell(binding, manager, connections, settings, pending, clock);
@@ -85,6 +89,15 @@ public final class SandboxExecutionEnvironment implements ExecutionEnvironment {
     @Override
     public Optional<ContentSearch> contentSearch() {
         return Optional.of(contentSearch);
+    }
+
+    /**
+     * @return the declared profile's {@code backgroundCommandTimeout}, always present: a background command ends there
+     *         rather than outliving the time it may keep the sandbox awake (§5.3)
+     */
+    @Override
+    public Optional<Duration> backgroundCommandTimeout() {
+        return Optional.of(backgroundCommandTimeout);
     }
 
     @Override

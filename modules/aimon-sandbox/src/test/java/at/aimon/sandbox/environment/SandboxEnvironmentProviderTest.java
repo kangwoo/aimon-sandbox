@@ -5,6 +5,7 @@ import static at.aimon.sandbox.SandboxHarness.bash;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 
@@ -12,6 +13,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import at.aimon.core.agent.AgentRuntimeId;
 import at.aimon.core.agent.DefaultAgent;
 import at.aimon.core.agent.ExecutionId;
 import at.aimon.core.agent.session.SessionId;
@@ -19,6 +21,7 @@ import at.aimon.core.environment.EnvironmentDescriptor;
 import at.aimon.core.environment.EnvironmentRequest;
 import at.aimon.core.environment.ExecutionEnvironment;
 import at.aimon.core.environment.ForkDefinition;
+import at.aimon.core.environment.RuntimeBinding;
 import at.aimon.core.environment.UnavailableExecutionEnvironment;
 import at.aimon.core.llm.LlmModel;
 import at.aimon.sandbox.SandboxHarness;
@@ -33,7 +36,8 @@ class SandboxEnvironmentProviderTest {
     private final SandboxHarness harness = SandboxHarness.builder()
             .profile(SandboxTestProfiles.local("standard")
                     .osVersion(SandboxTestProfiles.hostPlatform().equals("darwin") ? "Darwin *" : "Linux *").build())
-            .profile(SandboxTestProfiles.local("other").build()).build();
+            .profile(SandboxTestProfiles.local("other").backgroundCommandTimeout(Duration.ofMinutes(20)).build())
+            .build();
 
     @AfterEach
     void close() {
@@ -172,6 +176,45 @@ class SandboxEnvironmentProviderTest {
         final ExecutionEnvironment next = harness.mainTurn(session, ALICE);
 
         assertThat(next.descriptor().notes().orElseThrow()).contains("profile 'other'");
+    }
+
+    @Test
+    @DisplayName("§16: the environment states its profile's background ceiling — the heartbeat limit by default")
+    void theBackgroundCeilingIsTheDeclaredProfiles() {
+        final ExecutionEnvironment main = harness.mainTurn(SessionId.generate(), ALICE);
+        final ExecutionEnvironment configured = harness.resolve(
+                EnvironmentRequest.builder().agentRuntimeId(SandboxHarness.RUNTIME).sessionId(SessionId.generate())
+                        .principal(ALICE).agent(agent(Map.of("sandbox.profile", "other"))).build());
+        final ExecutionEnvironment fork = harness.fork(main, ExecutionId.generate(), ALICE,
+                Map.of("sandbox.profile", "other"));
+
+        assertThat(main.backgroundCommandTimeout())
+                .contains(SandboxTestProfiles.local("standard").build().backgroundHeartbeatLimit());
+        assertThat(configured.backgroundCommandTimeout()).contains(Duration.ofMinutes(20));
+        assertThat(fork.backgroundCommandTimeout()).as("a fork states the profile it declares")
+                .contains(Duration.ofMinutes(20));
+        assertThat(harness.fork(main, ALICE).backgroundCommandTimeout()).isEqualTo(main.backgroundCommandTimeout());
+    }
+
+    @Test
+    @DisplayName("§7: the provider keeps nothing per runtime — a binding closes to nothing and resolve needs none")
+    void runtimeBindingsHoldNothingAndResolveNeedsNone() throws Exception {
+        final SandboxExecutionEnvironmentProvider provider = harness.sandbox.environmentProvider();
+        final AgentRuntimeId bound = AgentRuntimeId.fromName("bound");
+        final SessionId session = SessionId.generate();
+        final EnvironmentRequest request = EnvironmentRequest.builder().agentRuntimeId(bound).sessionId(session)
+                .principal(ALICE).build();
+
+        final RuntimeBinding binding = provider.bindRuntime(bound);
+        bash(harness.resolve(request), "echo kept > /workspace/repo/kept.txt");
+        binding.close();
+        binding.close();
+
+        assertThat(bash(harness.resolve(request), "cat /workspace/repo/kept.txt").stdout()).isEqualTo("kept\n");
+        assertThat(bash(harness.resolve(EnvironmentRequest.builder().agentRuntimeId(AgentRuntimeId.fromName("unbound"))
+                .sessionId(SessionId.generate()).principal(ALICE).build()), "echo unbound").stdout())
+                .isEqualTo("unbound\n");
+        assertThat(harness.faults.calls(Operation.DESTROY)).as("closing a binding destroys no sandbox").isZero();
     }
 
     @Test

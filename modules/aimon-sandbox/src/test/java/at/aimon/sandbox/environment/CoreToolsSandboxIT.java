@@ -3,10 +3,15 @@ package at.aimon.sandbox.environment;
 import static at.aimon.sandbox.SandboxHarness.ALICE;
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.nio.file.Files;
+import java.time.Duration;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import at.aimon.core.agent.session.SessionId;
@@ -17,7 +22,10 @@ import at.aimon.core.base.Principal;
 import at.aimon.core.environment.ExecutionEnvironment;
 import at.aimon.core.environment.FileStamp;
 import at.aimon.core.tools.ToolContextKeys;
+import at.aimon.core.tools.bash.BackgroundBashManager;
+import at.aimon.core.tools.bash.BashOutputTool;
 import at.aimon.core.tools.bash.BashTool;
+import at.aimon.core.tools.bash.KillShellTool;
 import at.aimon.core.tools.file.ReadTool;
 import at.aimon.core.tools.file.WriteTool;
 import at.aimon.sandbox.SandboxHarness;
@@ -75,6 +83,43 @@ class CoreToolsSandboxIT {
 
         assertThat(cat.isSuccess()).as(cat.getContent()).isTrue();
         assertThat(cat.getContent()).contains("same bytes");
+    }
+
+    @Test
+    @DisplayName("§16: a background Bash in a sandbox says how to stop it and when it ends; KillShell stops it")
+    void killShellStopsASandboxBackgroundCommand() throws Exception {
+        final SessionId session = SessionId.generate();
+        final ExecutionEnvironment env = harness.mainTurn(session, ALICE);
+        final ToolContext context = context(env);
+        bash(env, "true");
+        try (BackgroundBashManager manager = new BackgroundBashManager()) {
+            final ToolResult started = new BashTool(manager).execute(ToolInput.of(
+                    Map.of("command", "echo $$ > /workspace/pid.tmp; mv /workspace/pid.tmp /workspace/pid; sleep 60",
+                            "run_in_background", true)),
+                    context);
+
+            assertThat(started.isSuccess()).as(started.getContent()).isTrue();
+            assertThat(started.getContent()).contains("Use KillShell(taskId=\"")
+                    .contains("The environment stops it after 1 hour if it is still running.");
+            final Matcher id = Pattern.compile("ID: (\\S+)").matcher(started.getContent());
+            assertThat(id.find()).isTrue();
+            final String taskId = id.group(1);
+            final long deadline = System.nanoTime() + Duration.ofSeconds(15).toNanos();
+            while (!Files.exists(harness.host(session, "/workspace/pid")) && System.nanoTime() < deadline) {
+                Thread.sleep(20);
+            }
+            final long pid = Long.parseLong(harness.hostFile(session, "/workspace/pid").strip());
+
+            final ToolResult killed = new KillShellTool(manager).execute(ToolInput.of(Map.of("taskId", taskId)),
+                    context);
+            final ToolResult output = new BashOutputTool(manager).execute(ToolInput.of(Map.of("taskId", taskId)),
+                    context);
+
+            assertThat(killed.isSuccess()).as(killed.getContent()).isTrue();
+            assertThat(killed.getContent()).contains("stopped: the command and the processes it was running");
+            assertThat(output.getContent()).contains("Status: Killed");
+            assertThat(ProcessHandle.of(pid).map(ProcessHandle::isAlive).orElse(false)).isFalse();
+        }
     }
 
     @Test

@@ -8,8 +8,11 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -21,16 +24,25 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
+import at.aimon.core.agent.AgentRuntimeId;
 import at.aimon.core.agent.session.SessionId;
+import at.aimon.core.environment.EnvironmentRequest;
 import at.aimon.core.environment.ExecutionEnvironment;
+import at.aimon.core.environment.RuntimeBinding;
 import at.aimon.core.shell.ExecutionOptions;
+import at.aimon.core.shell.ShellCancellationSource;
 import at.aimon.core.shell.ShellCommandResult;
+import at.aimon.core.shell.ShellFeature;
+import at.aimon.core.shell.exception.ShellCancelledException;
 import at.aimon.core.shell.exception.ShellExecutionException;
 import at.aimon.core.shell.exception.ShellTimeoutException;
 import at.aimon.sandbox.RecordingProvider;
 import at.aimon.sandbox.SandboxHarness;
 import at.aimon.sandbox.binding.ShellKey;
+import at.aimon.sandbox.provider.ExecOutcome;
+import at.aimon.sandbox.provider.RunningCommand;
 import at.aimon.sandbox.testkit.FaultInjectingSandboxProvider.Operation;
+import at.aimon.sandbox.workspace.WorkspaceScan;
 
 /**
  * The shell rows of docs/design/workspace-sandbox.md §16 and the wrapper's robustness cases, through the local
@@ -62,11 +74,38 @@ class SandboxShellIT {
 
     /** Waits until a command has created a file: the command is running and holds what it holds. */
     private void awaitHostFile(String sandboxPath) throws InterruptedException {
+        awaitHostFile(harness, session, sandboxPath);
+    }
+
+    private static void awaitHostFile(SandboxHarness in, SessionId of, String sandboxPath) throws InterruptedException {
         final long deadline = System.nanoTime() + Duration.ofSeconds(15).toNanos();
-        while (!Files.exists(harness.host(session, sandboxPath)) && System.nanoTime() < deadline) {
+        while (!Files.exists(in.host(of, sandboxPath)) && System.nanoTime() < deadline) {
             Thread.sleep(20);
         }
-        assertThat(Files.exists(harness.host(session, sandboxPath))).as(sandboxPath).isTrue();
+        assertThat(Files.exists(in.host(of, sandboxPath))).as(sandboxPath).isTrue();
+    }
+
+    private static ExecutionOptions.Builder cancellable(ShellCancellationSource source) {
+        return ExecutionOptions.builder().timeout(Duration.ofSeconds(60)).cancellation(source.token());
+    }
+
+    /** The failure of a command run on the executor, unwrapped. */
+    private static Throwable failureOf(Future<ShellCommandResult> command) throws Exception {
+        try {
+            command.get(20, TimeUnit.SECONDS);
+        } catch (ExecutionException e) {
+            return e.getCause();
+        }
+        throw new AssertionError("the command returned a result");
+    }
+
+    private static void awaitDead(long pid) throws InterruptedException {
+        final long deadline = System.nanoTime() + Duration.ofSeconds(10).toNanos();
+        while (ProcessHandle.of(pid).map(ProcessHandle::isAlive).orElse(false) && System.nanoTime() < deadline) {
+            Thread.sleep(20);
+        }
+        assertThat(ProcessHandle.of(pid).map(ProcessHandle::isAlive).orElse(false)).as("process " + pid + " is alive")
+                .isFalse();
     }
 
     private String stateFile() {
@@ -579,6 +618,320 @@ class SandboxShellIT {
                     ExecutionOptions.builder().timeout(Duration.ofSeconds(20)).stdin("input").build()))
                     .isInstanceOf(ShellExecutionException.class).hasMessageContaining("could not pass stdin")
                     .hasMessageContaining("No space left on device");
+        }
+    }
+
+    @Test
+    void supportsCancellation() {
+        assertThat(env.shell().supports(ShellFeature.CANCELLATION)).isTrue();
+    }
+
+    @Test
+    @DisplayName("§16: cancelling a running background command kills it and its children, with the output so far")
+    void cancellingARunningBackgroundCommandKillsItAndThrowsCancelled() throws Exception {
+        final ShellCancellationSource source = ShellCancellationSource.create();
+        final Future<ShellCommandResult> background = executor.submit(() -> bash(env,
+                "echo before; sleep 61 & echo \"$$ $!\" > /workspace/pids.tmp; mv /workspace/pids.tmp /workspace/pids;"
+                        + " wait",
+                cancellable(source).background(true).build()));
+        awaitHostFile("/workspace/pids");
+        final String[] pids = harness.hostFile(session, "/workspace/pids").strip().split(" ");
+
+        final long started = System.nanoTime();
+        source.cancel();
+        final Throwable failure = failureOf(background);
+
+        assertThat(failure).isInstanceOf(ShellCancelledException.class).hasMessage(SandboxShell.CANCELLED_MESSAGE);
+        assertThat(Duration.ofNanos(System.nanoTime() - started)).isLessThan(Duration.ofSeconds(10));
+        assertThat(((ShellCancelledException) failure).stdout()).isEqualTo("before\n");
+        assertThat(((ShellCancelledException) failure).notices()).contains(SandboxShell.KILLED_NOTICE);
+        awaitDead(Long.parseLong(pids[0]));
+        awaitDead(Long.parseLong(pids[1]));
+        assertNoRunFiles();
+    }
+
+    @Test
+    @DisplayName("§16: cancelling a foreground command leaves the state from before and frees the shell")
+    void cancellingARunningForegroundCommandKeepsThePreviousState() throws Exception {
+        bash(env, "cd /workspace && export KEEP=kept");
+        final ShellCancellationSource source = ShellCancellationSource.create();
+        final Future<ShellCommandResult> foreground = executor.submit(() -> bash(env,
+                "mkdir -p /workspace/x && cd /workspace/x; export LOST=1; : > /workspace/running; sleep 60",
+                cancellable(source).build()));
+        awaitHostFile("/workspace/running");
+
+        source.cancel();
+        final Throwable failure = failureOf(foreground);
+        final long started = System.nanoTime();
+        final ShellCommandResult next = bash(env, "pwd; echo \"KEEP=$KEEP LOST=$LOST\"");
+
+        assertThat(failure).isInstanceOf(ShellCancelledException.class).hasMessage(SandboxShell.CANCELLED_MESSAGE);
+        assertThat(((ShellCancelledException) failure).notices()).contains(SandboxShell.KILLED_NOTICE);
+        assertThat(next.stdout()).isEqualTo("/workspace\nKEEP=kept LOST=\n");
+        assertThat(Duration.ofNanos(System.nanoTime() - started)).as("the shell lock was released")
+                .isLessThan(Duration.ofSeconds(5));
+        assertNoRunFiles();
+    }
+
+    @Test
+    void cancellingACommandThatIgnoresSigtermStillEndsIt() throws Exception {
+        final ShellCancellationSource source = ShellCancellationSource.create();
+        final Future<ShellCommandResult> background = executor.submit(() -> bash(env,
+                "trap '' TERM; echo $$ > /workspace/pid.tmp; mv /workspace/pid.tmp /workspace/pid; sleep 60",
+                cancellable(source).background(true).build()));
+        awaitHostFile("/workspace/pid");
+        final long pid = Long.parseLong(harness.hostFile(session, "/workspace/pid").strip());
+
+        source.cancel();
+
+        assertThat(failureOf(background)).isInstanceOf(ShellCancelledException.class);
+        // SIGKILL follows the SIGTERM it ignored.
+        awaitDead(pid);
+    }
+
+    @Test
+    @DisplayName("§16: a signal tripped before execute starts nothing — no sandbox, no record, no exec")
+    void aSignalTrippedBeforeExecuteStartsNothing() {
+        final RecordingProvider[] recording = new RecordingProvider[1];
+        try (SandboxHarness recorded = SandboxHarness.builder()
+                .decorate((provider, clock) -> recording[0] = new RecordingProvider(provider)).build()) {
+            final ExecutionEnvironment fresh = recorded.mainTurn(SessionId.generate(), ALICE);
+            final ShellCancellationSource source = ShellCancellationSource.create();
+            source.cancel();
+
+            assertThatThrownBy(() -> bash(fresh, ": > /workspace/ran", cancellable(source).build()))
+                    .isInstanceOf(ShellCancelledException.class)
+                    .hasMessage(SandboxShell.CANCELLED_BEFORE_START_MESSAGE);
+
+            assertThat(recorded.faults.calls(Operation.CREATE)).isZero();
+            assertThat(recorded.store.scan(WorkspaceScan.builder().build())).isEmpty();
+            assertThat(recording[0].runs).isEmpty();
+        }
+    }
+
+    @Test
+    @DisplayName("§16: a signal tripped while waiting for the shell lock starts nothing and uploads nothing")
+    void aSignalTrippedWhileWaitingForTheLockStartsNothing() throws Exception {
+        final RecordingProvider[] recording = new RecordingProvider[1];
+        final List<String> written = new CopyOnWriteArrayList<>();
+        try (SandboxHarness recorded = SandboxHarness.builder().decorate((provider, clock) -> {
+            recording[0] = new RecordingProvider(provider);
+            recording[0].files(files -> new at.aimon.sandbox.FailingFiles(files, path -> {
+                written.add(path);
+                return false;
+            }));
+            return recording[0];
+        }).build()) {
+            final SessionId other = SessionId.generate();
+            final ExecutionEnvironment otherEnv = recorded.mainTurn(other, ALICE);
+            bash(otherEnv, "true");
+            final Future<ShellCommandResult> holder = executor
+                    .submit(() -> bash(otherEnv, ": > /workspace/holding; sleep 2"));
+            awaitHostFile(recorded, other, "/workspace/holding");
+            recording[0].runs.clear();
+            written.clear();
+            final ShellCancellationSource source = ShellCancellationSource.create();
+            final Future<ShellCommandResult> waiting = executor.submit(
+                    () -> bash(otherEnv, "cat > /workspace/second-ran", cancellable(source).stdin("x").build()));
+            Thread.sleep(300);
+
+            source.cancel();
+            final Throwable failure = failureOf(waiting);
+
+            assertThat(failure).isInstanceOf(ShellCancelledException.class)
+                    .hasMessage(SandboxShell.CANCELLED_BEFORE_START_MESSAGE);
+            assertThat(holder.get(20, TimeUnit.SECONDS).exitCode()).isZero();
+            assertThat(Files.exists(recorded.host(other, "/workspace/second-ran"))).isFalse();
+            assertThat(recording[0].runs).as("no exec for the cancelled command").isEmpty();
+            assertThat(written).as("no run file uploaded for it").noneMatch(path -> path.endsWith(".in"));
+        }
+    }
+
+    @Test
+    void aSignalTrippedAfterTheCommandEndedChangesNothing() throws Exception {
+        final RecordingProvider[] recording = new RecordingProvider[1];
+        try (SandboxHarness recorded = SandboxHarness.builder()
+                .decorate((provider, clock) -> recording[0] = new RecordingProvider(provider)).build()) {
+            final ExecutionEnvironment otherEnv = recorded.mainTurn(SessionId.generate(), ALICE);
+            final ShellCancellationSource source = ShellCancellationSource.create();
+
+            final ShellCommandResult result = bash(otherEnv, "echo done", cancellable(source).build());
+            final int runs = recording[0].runs.size();
+            source.cancel();
+
+            assertThat(result.stdout()).isEqualTo("done\n");
+            assertThat(recording[0].kills).as("the listener was removed with the command").hasValue(0);
+            assertThat(recording[0].runs).hasSize(runs);
+        }
+    }
+
+    @Test
+    @DisplayName("§16: a cancel racing the command's own end returns the result when the trailer arrived")
+    void cancelRacingCompletionReturnsTheResultWhenTheTrailerArrived() throws Exception {
+        final RecordingProvider[] recording = new RecordingProvider[1];
+        try (SandboxHarness recorded = SandboxHarness.builder()
+                .decorate((provider, clock) -> recording[0] = new RecordingProvider(provider)).build()) {
+            final ExecutionEnvironment otherEnv = recorded.mainTurn(SessionId.generate(), ALICE);
+            bash(otherEnv, "true");
+            final ShellCancellationSource source = ShellCancellationSource.create();
+            // The signal trips after the command ended and before the shell has looked at the outcome.
+            recording[0].commands(command -> new RunningCommand() {
+                @Override
+                public ExecOutcome await(Duration timeout) throws InterruptedException {
+                    final ExecOutcome outcome = command.await(timeout);
+                    source.cancel();
+                    return outcome;
+                }
+
+                @Override
+                public void kill() {
+                    command.kill();
+                }
+            });
+
+            final ShellCommandResult result = bash(otherEnv, "echo raced; exit 3", cancellable(source).build());
+
+            assertThat(result.stdout()).isEqualTo("raced\n");
+            assertThat(result.exitCode()).isEqualTo(3);
+        }
+    }
+
+    @Test
+    @DisplayName("§16: a cancelled command that ends at its timeout — the kill request failed — is cancelled, not "
+            + "timed out")
+    void aCancelWhoseKillFailedIsStillCancelledWhenTheTimeoutEndsTheCommand() throws Exception {
+        final RecordingProvider[] recording = new RecordingProvider[1];
+        try (SandboxHarness recorded = SandboxHarness.builder()
+                .decorate((provider, clock) -> recording[0] = new RecordingProvider(provider)).build()) {
+            final SessionId other = SessionId.generate();
+            final ExecutionEnvironment otherEnv = recorded.mainTurn(other, ALICE);
+            bash(otherEnv, "true");
+            recording[0].commands(command -> new RunningCommand() {
+                @Override
+                public ExecOutcome await(Duration timeout) throws InterruptedException {
+                    return command.await(timeout);
+                }
+
+                @Override
+                public void kill() {
+                    // The request never reaches the sandbox.
+                }
+            });
+            final ShellCancellationSource source = ShellCancellationSource.create();
+            final Future<ShellCommandResult> command = executor.submit(() -> bash(otherEnv,
+                    "echo partial; : > /workspace/running; sleep 30",
+                    ExecutionOptions.builder().timeout(Duration.ofSeconds(2)).cancellation(source.token()).build()));
+            awaitHostFile(recorded, other, "/workspace/running");
+
+            source.cancel();
+            final Throwable failure = failureOf(command);
+
+            assertThat(failure).isInstanceOf(ShellCancelledException.class).hasMessage(SandboxShell.CANCELLED_MESSAGE);
+            assertThat(((ShellCancelledException) failure).stdout()).isEqualTo("partial\n");
+        }
+    }
+
+    @Test
+    @DisplayName("a kill that lands after the wrapper printed the output and removed its run files keeps the output")
+    void aCancelLandingInTheWrappersLastLinesReportsTheOutputFromTheStream() throws Exception {
+        final RecordingProvider[] recording = new RecordingProvider[1];
+        try (SandboxHarness recorded = SandboxHarness.builder()
+                .decorate((provider, clock) -> recording[0] = new RecordingProvider(provider)).build()) {
+            final ExecutionEnvironment otherEnv = recorded.mainTurn(SessionId.generate(), ALICE);
+            bash(otherEnv, "true");
+            final ShellCancellationSource source = ShellCancellationSource.create();
+            // The wrapper ran to its end — output on the stream, run files removed — but its trailer never arrived.
+            recording[0].commands(command -> new RunningCommand() {
+                @Override
+                public ExecOutcome await(Duration timeout) throws InterruptedException {
+                    final ExecOutcome outcome = command.await(timeout);
+                    source.cancel();
+                    final String stderr = new String(outcome.stderr(), java.nio.charset.StandardCharsets.UTF_8);
+                    return ExecOutcome.builder().exitCode(143).stdout(outcome.stdout())
+                            .stderr(stderr.substring(0, stderr.lastIndexOf("\nAIMON-"))
+                                    .getBytes(java.nio.charset.StandardCharsets.UTF_8))
+                            .build();
+                }
+
+                @Override
+                public void kill() {
+                    command.kill();
+                }
+            });
+
+            assertThatThrownBy(() -> bash(otherEnv, "echo streamed; echo warned >&2", cancellable(source).build()))
+                    .isInstanceOfSatisfying(ShellCancelledException.class, e -> {
+                        assertThat(e.stdout()).isEqualTo("streamed\n");
+                        assertThat(e.stderr()).isEqualTo("warned\n");
+                    });
+        }
+    }
+
+    @Test
+    @DisplayName("§16: a background command given the environment's ceiling as its timeout ends there")
+    void aBackgroundCommandEndsAtTheCeilingItIsGiven() throws Exception {
+        try (SandboxHarness capped = SandboxHarness.builder().profile(at.aimon.sandbox.testkit.SandboxTestProfiles
+                .local("standard").backgroundCommandTimeout(Duration.ofSeconds(1)).build()).build()) {
+            final SessionId other = SessionId.generate();
+            final ExecutionEnvironment cappedEnv = capped.mainTurn(other, ALICE);
+            final Duration ceiling = cappedEnv.backgroundCommandTimeout().orElseThrow();
+
+            // What core's Bash does with the ceiling: it is the background command's timeout.
+            assertThatThrownBy(() -> bash(cappedEnv, "echo $$ > /workspace/pid; echo started; sleep 60",
+                    ExecutionOptions.builder().timeout(ceiling).background(true).build())).isInstanceOfSatisfying(
+                            ShellTimeoutException.class, e -> assertThat(e.stdout()).isEqualTo("started\n"));
+
+            assertThat(ceiling).isEqualTo(Duration.ofSeconds(1));
+            awaitDead(Long.parseLong(capped.hostFile(other, "/workspace/pid").strip()));
+        }
+    }
+
+    @Test
+    @DisplayName("§16: closing a runtime binding stops no command and releases nothing another runtime uses")
+    void closingARuntimeBindingLeavesRunningCommandsAlone() throws Exception {
+        final RecordingProvider[] recording = new RecordingProvider[1];
+        try (SandboxHarness recorded = SandboxHarness.builder()
+                .decorate((provider, clock) -> recording[0] = new RecordingProvider(provider)).build()) {
+            final var provider = recorded.sandbox.environmentProvider();
+            final AgentRuntimeId a = AgentRuntimeId.fromName("runtime-a");
+            final AgentRuntimeId b = AgentRuntimeId.fromName("runtime-b");
+            final RuntimeBinding first = provider.bindRuntime(a);
+            final RuntimeBinding second = provider.bindRuntime(a);
+            final RuntimeBinding ofB = provider.bindRuntime(b);
+            final SessionId sessionA = SessionId.generate();
+            final SessionId sessionB = SessionId.generate();
+            final EnvironmentRequest requestA = EnvironmentRequest.builder().agentRuntimeId(a).sessionId(sessionA)
+                    .principal(ALICE).build();
+            final ExecutionEnvironment envA = recorded.resolve(requestA);
+            final ExecutionEnvironment envB = recorded.resolve(
+                    EnvironmentRequest.builder().agentRuntimeId(b).sessionId(sessionB).principal(ALICE).build());
+            final ExecutionOptions background = ExecutionOptions.builder().timeout(Duration.ofSeconds(20))
+                    .background(true).build();
+            bash(envA, "true");
+            bash(envB, "true");
+            final Future<ShellCommandResult> commandA = executor
+                    .submit(() -> bash(envA, ": > /workspace/running; sleep 2; echo a-done", background));
+            final Future<ShellCommandResult> commandB = executor
+                    .submit(() -> bash(envB, ": > /workspace/running; sleep 2; echo b-done", background));
+            awaitHostFile(recorded, sessionA, "/workspace/running");
+            awaitHostFile(recorded, sessionB, "/workspace/running");
+
+            // An evicted runtime's handle, closed twice; a second binding of the same id is still in use.
+            first.close();
+            first.close();
+
+            assertThat(bash(envA, "echo a-still").stdout()).isEqualTo("a-still\n");
+            assertThat(bash(envB, "echo b-still").stdout()).isEqualTo("b-still\n");
+            assertThat(commandA.get(20, TimeUnit.SECONDS).stdout()).isEqualTo("a-done\n");
+            assertThat(commandB.get(20, TimeUnit.SECONDS).stdout()).isEqualTo("b-done\n");
+            second.close();
+            ofB.close();
+            // resolve answers for an id whose bindings are all closed, as for one nobody bound.
+            assertThat(bash(recorded.resolve(requestA), "cat /workspace/running; echo again").stdout())
+                    .isEqualTo("again\n");
+            assertThat(recorded.local.sandboxCount()).isEqualTo(2);
+            assertThat(recording[0].kills).as("no command was killed").hasValue(0);
+            assertThat(recording[0].connectionsClosed).as("no connection was closed").hasValue(0);
         }
     }
 }

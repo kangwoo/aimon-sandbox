@@ -39,12 +39,22 @@ import at.aimon.sandbox.workspace.SandboxWorkspaceStore;
  *         .build();                                     // SandboxConfigurationException on any §13.2 violation
  * runtimeBuilder.executionEnvironmentProvider(sandbox.environmentProvider());
  * sandbox.janitor().start();
+ * ...
+ * coreStack.close();                                    // first: it stops background commands through their shells
+ * sandbox.close();
  * }</pre>
  *
  * <p>
- * Skills must be parsed with {@link #markdownSkillParser()} (or {@link #skillHookSetParser()}) in sandbox mode: a
- * skill that declares a shell-action hook is then refused at load time, instead of running its hook on the host while
- * its {@code Bash} runs in the sandbox (§12.1). The assembly also recommends against registering core's
+ * <b>Close order.</b> Close aimon-core's stack (or its runtimes) before this assembly. Core's shutdown stops the
+ * background commands still running by signalling them through their shells, and a sandbox shell reaches its command
+ * over a connection this assembly closes: closed first, the stop requests fail and the commands end only with their
+ * sandboxes.
+ *
+ * <p>
+ * Skills may be parsed with {@link #markdownSkillParser()} (or {@link #skillHookSetParser()}) to refuse
+ * skill-declared shell hooks altogether: a skill that declares one is then not loaded. Without it, aimon-core 0.3.1
+ * and later run such a hook in the execution's sandbox shell — never on the host — and a guard whose sandbox is
+ * unavailable blocks what it guards (§12.1). The assembly also recommends against registering core's
  * {@code GitStatusContextProvider} and {@code DirectorySummaryContextProvider}: they read the filesystem every turn
  * and so would provision a sandbox for turns that run no command (§11.1).
  */
@@ -113,8 +123,8 @@ public final class WorkspaceSandbox implements AutoCloseable {
     }
 
     /**
-     * The hook parser for sandbox mode: shell actions are refused at parse time, so a skill declaring one does not
-     * load and nothing it declares runs on the host (§12.1).
+     * The stricter hook parser, for a deployment that wants no skill-declared shell code at all: shell actions are
+     * refused at parse time, so a skill declaring one does not load (§12.1).
      *
      * @return a parser wired to {@link NoOpShellActionExecutor}
      */
