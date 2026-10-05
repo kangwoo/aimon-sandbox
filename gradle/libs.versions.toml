@@ -27,7 +27,7 @@ jackson = "2.22.3"
 
 junit = "5.12.2"
 assertj = "3.27.7"
-mockito = "5.23.0"
+mockito = "5.24.0"
 
 # The docker test tier of aimon-sandbox-opensandbox starts an OpenSandbox server per run (docs/design/workspace-sandbox.md
 # §16). 2.x is the line that speaks to Docker Engine 29's minimum API version.
