@@ -7,14 +7,14 @@ import com.vanniktech.maven.publish.JavaLibrary
 import com.vanniktech.maven.publish.JavaPlatform
 import com.vanniktech.maven.publish.JavadocJar
 import com.vanniktech.maven.publish.MavenPublishBaseExtension
-import com.vanniktech.maven.publish.SonatypeHost
+import com.vanniktech.maven.publish.SourcesJar
 
 plugins {
     id("com.vanniktech.maven.publish")
 }
 
 configure<MavenPublishBaseExtension> {
-    publishToMavenCentral(SonatypeHost.CENTRAL_PORTAL)
+    publishToMavenCentral()
     signAllPublications()
 }
 
@@ -27,7 +27,7 @@ plugins.withId("java-library") {
         configure(
             JavaLibrary(
                 javadocJar = JavadocJar.Javadoc(),
-                sourcesJar = true,
+                sourcesJar = SourcesJar.Sources(),
             ),
         )
     }
