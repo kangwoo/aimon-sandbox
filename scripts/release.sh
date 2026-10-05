@@ -130,7 +130,7 @@ if [ "$K8S_VERIFIED" = 1 ]; then
 elif [ "$DRY_RUN" = 1 ]; then
     warn "Reminder: the real release needs --k8s-verified — run scripts/k8s-tier.sh up && scripts/k8s-tier.sh test first (modules/aimon-sandbox-opensandbox/README.md)."
 else
-    fail "k8sTest is manual and not in the gate. Run ./gradlew :aimon-sandbox-opensandbox:k8sTest against a provisioned cluster (modules/aimon-sandbox-opensandbox/README.md) — with OPENSANDBOX_K8S_ENDPOINT set, or every test skips — then re-run with --k8s-verified."
+    fail "k8sTest is manual and not in the gate. Run scripts/k8s-tier.sh up && scripts/k8s-tier.sh test (every test must pass, none skipped; modules/aimon-sandbox-opensandbox/README.md), then re-run with --k8s-verified."
 fi
 
 # ── 2. credentials (names only; never print values) ─────────────────────────
