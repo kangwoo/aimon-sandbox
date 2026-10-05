@@ -22,10 +22,10 @@
   파일로 cwd·export 를 잇는 셸, 샌드박스 안에서 검증하는 스테이징, `rg --json` 검색
 - `WorkspaceSandbox` — 위를 조립하고 기동 시 설정을 검사하는 어셈블리
 
-아직 없는 것: 운영 프로바이더와 조정(4단계), `primary` 밖의 슬롯 · 공유 볼륨 · seed · 오케스트레이터 도구(5단계), 영속
+아직 없는 것: `primary` 밖의 슬롯 · 공유 볼륨 · seed · 오케스트레이터 도구(5단계), 영속
 저장소(6단계), pause/resume · worktree 격리(7단계). 그런 설정은 조용히 무시하지 않고 기동 시 거부한다. 구현 설계와 설계에서
 벗어난 점은 [`workspace-sandbox-step3.md`](../../docs/design/workspace-sandbox-step3.md) 에 있다.
 
-aimon-core 는 Maven Central 에 릴리스된 `0.3.1` 을 쓴다(그 전까지는 `mavenLocal()` 의 `0.3.1-SNAPSHOT` 이었다).
+aimon-core `0.3.1` 이 필요하다.
 
 옛 구현이 필요하면 `at.aimon.core:aimon-sandbox{,-docker,-kubernetes}:0.2.4` 가 Maven Central 에 그대로 있다.

@@ -11,11 +11,11 @@ picks, provisions and retires. The design is
 
 ## Status
 
-IMPORTANT: this repository **has not been released yet.** Implementation steps 3 and 4 (§18) are in — the
-workspace domain, the provider SPI and the local path (step 3), and the production OpenSandbox provider with the
-janitor's sandbox reconciliation (step 4) — and are released together. The release is still blocked on the
-open items of design §20 marked for it. (The aimon-core SNAPSHOT pin that also blocked it is gone: the build now
-uses the released aimon-core 0.3.1.)
+**0.1.0 is the first release** (requires aimon-core 0.3.1; see [`CHANGELOG.md`](CHANGELOG.md)). It contains
+implementation steps 3 and 4 (§18): the workspace domain, the provider SPI and the local path (step 3), and the
+production OpenSandbox provider with the janitor's sandbox reconciliation (step 4). Multiple slots and shared volumes
+(step 5), a persistent store for several nodes (step 6) and pause/resume (step 7) are not in it, and profiles that
+ask for them are refused at startup.
 
 The identifier-based sandbox it was split out of aimon-core with — four `*Sandbox` tools, the
 `SandboxBackend` SPI and its Docker and Kubernetes backends — has been deleted, not kept alongside the new
