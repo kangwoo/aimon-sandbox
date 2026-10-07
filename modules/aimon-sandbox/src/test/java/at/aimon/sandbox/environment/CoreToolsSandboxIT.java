@@ -116,7 +116,8 @@ class CoreToolsSandboxIT {
                     context);
 
             assertThat(killed.isSuccess()).as(killed.getContent()).isTrue();
-            assertThat(killed.getContent()).contains("stopped: the command and the processes it was running");
+            assertThat(killed.getContent())
+                    .contains("stopped: the command and the processes still attached to it were terminated");
             assertThat(output.getContent()).contains("Status: Killed");
             assertThat(ProcessHandle.of(pid).map(ProcessHandle::isAlive).orElse(false)).isFalse();
         }

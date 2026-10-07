@@ -110,6 +110,13 @@ REMOTE_REV="$(git rev-parse '@{u}')"
 [ "$LOCAL_REV" = "$REMOTE_REV" ] || fail "Local 'main' is not in sync with origin/main — pull/push first"
 ok "Clean working tree on main, in sync with origin"
 
+# A release must not depend on a SNAPSHOT: Central would accept the POM, and the artifact would resolve against
+# whatever that snapshot is next week, or against nothing once it is gone. The catalog is where every version lives
+# (aimon-core is pinned to a snapshot only between its PR and its release), so that is what is read.
+SNAPSHOT_PINS="$(grep -E '^[A-Za-z0-9_-]+ *= *"[^"]*-SNAPSHOT"' gradle/libs.versions.toml || true)"
+[ -z "$SNAPSHOT_PINS" ] || fail "gradle/libs.versions.toml pins a SNAPSHOT — release it first and raise the pin: ${SNAPSHOT_PINS//$'\n'/, }"
+ok "No SNAPSHOT pins in the version catalog"
+
 # Same reasoning as core: the gate runs `integrationTest`, which needs a daemon, so find out now rather than minutes
 # into the gate — and fail rather than skip, or the strictest-looking setup becomes the weakest.
 docker info >/dev/null 2>&1 || fail "Docker daemon is not running — the release gate runs integrationTest (@Tag(\"docker\")). Start Docker and re-run."

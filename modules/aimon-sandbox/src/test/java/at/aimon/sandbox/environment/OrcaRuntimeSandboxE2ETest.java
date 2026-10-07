@@ -28,7 +28,6 @@ import at.aimon.core.agent.session.store.InMemorySessionRecordStore;
 import at.aimon.core.agent.session.transcript.DefaultTranscriptManager;
 import at.aimon.core.agent.tool.DefaultToolExecutionManager;
 import at.aimon.core.agent.tool.DefaultToolRegistry;
-import at.aimon.core.base.UserLocale;
 import at.aimon.core.command.DefaultCommandExecutionManager;
 import at.aimon.core.command.DefaultCommandRegistry;
 import at.aimon.core.filesystem.impl.local.LocalFileSystem;
@@ -117,15 +116,13 @@ class OrcaRuntimeSandboxE2ETest {
         toolRegistry.register(new BashTool());
         final LlmModel model = LlmModel.builder().name("m").build();
         if (withTaskTool) {
-            toolRegistry.register(new TaskTool(model, subagentRegistry, toolRegistry, hookRegistry,
-                    UserLocale.createDefault(), subagents));
+            toolRegistry.register(new TaskTool(model, subagentRegistry, toolRegistry, hookRegistry, subagents));
         }
         return OrcaAgentRuntime.builder()
                 .agent(DefaultAgent.builder().name("sandboxed").maxIterations(3).systemPrompt("You are a test agent")
                         .model(model).build())
                 .toolRegistry(toolRegistry).hookRegistry(hookRegistry).commandRegistry(commands)
                 .subagentRegistry(subagentRegistry).skillRegistry(skills).controlFileSystem(control)
-                .userLocale(UserLocale.createDefault())
                 .executionEnvironmentProvider(harness.sandbox.environmentProvider()).build();
     }
 
