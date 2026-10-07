@@ -300,17 +300,11 @@ final class ShellWrapper {
         s.append("s=-; [ -r \"/proc/$$/stat\" ] && s=$(awk '{print $22}' \"/proc/$$/stat\" 2>/dev/null)\n");
         s.append("printf '%s %s %s\\n' ").append(quote(in.nodeId)).append(" \"$$\" \"${s:--}\" > \"$d/owner\"\n");
         if (in.timeout != null) {
-            s.append("( trap 'kill \"$w\" 2>/dev/null; exit 0' TERM\n");
-            s.append("  sleep ").append(seconds(in.timeout)).append(" & w=$!\n");
-            s.append("  wait \"$w\"\n");
-            s.append("  : > \"$r.timedout\"\n");
-            s.append("  kill -KILL 0 ) 9>&- </dev/null >/dev/null 2>&1 &\n");
-            s.append("wd=$!\n");
+            appendWatchdog(s, in, " 9>&-");
         }
         appendInner(s, in, "fg", " 9>&-");
         if (in.timeout != null) {
-            s.append("kill \"$wd\" 2>/dev/null\n");
-            s.append("wait \"$wd\" 2>/dev/null\n");
+            appendWatchdogStop(s);
         }
         return epilogue(s, in);
     }
@@ -326,6 +320,45 @@ final class ShellWrapper {
         final StringBuilder s = prologue(in);
         appendInner(s, in, "bg", "");
         return epilogue(s, in);
+    }
+
+    /**
+     * The script of a hook's command: the background script — no lock, no state save — with the foreground's
+     * watchdog, so the command ends at its own timeout. The exec's backstop alone would end it five seconds late: for
+     * a hook at core's default 30-second timeout or longer, the very moment core's outer deadline for the hook fires.
+     *
+     * @param in
+     *            the invocation
+     * @return the script
+     */
+    static String hook(Invocation in) {
+        final StringBuilder s = prologue(in);
+        if (in.timeout != null) {
+            appendWatchdog(s, in, "");
+        }
+        appendInner(s, in, "bg", "");
+        if (in.timeout != null) {
+            appendWatchdogStop(s);
+        }
+        return epilogue(s, in);
+    }
+
+    /**
+     * Starts the watchdog: after the timeout it writes {@code .timedout} and kills the wrapper's process group.
+     * {@code closeLockFd} keeps it from holding the shell's lock.
+     */
+    private static void appendWatchdog(StringBuilder s, Invocation in, String closeLockFd) {
+        s.append("( trap 'kill \"$w\" 2>/dev/null; exit 0' TERM\n");
+        s.append("  sleep ").append(seconds(in.timeout)).append(" & w=$!\n");
+        s.append("  wait \"$w\"\n");
+        s.append("  : > \"$r.timedout\"\n");
+        s.append("  kill -KILL 0 )").append(closeLockFd).append(" </dev/null >/dev/null 2>&1 &\n");
+        s.append("wd=$!\n");
+    }
+
+    private static void appendWatchdogStop(StringBuilder s) {
+        s.append("kill \"$wd\" 2>/dev/null\n");
+        s.append("wait \"$wd\" 2>/dev/null\n");
     }
 
     private static StringBuilder prologue(Invocation in) {

@@ -258,8 +258,9 @@ class SandboxShellIT {
     @Test
     @DisplayName("§12.1: a hook's command runs while the session's shell is busy, without waiting for its lock")
     void hookCommandTakesNoLock() throws Exception {
-        final Future<ShellCommandResult> model = executor.submit(() -> bash(env, "sleep 3; echo done"));
-        Thread.sleep(300);
+        final Future<ShellCommandResult> model = executor
+                .submit(() -> bash(env, ": > /workspace/model-running; sleep 3; echo done"));
+        awaitHostFile("/workspace/model-running");
 
         final long started = System.nanoTime();
         final ShellCommandResult hook = bash(env, "echo guarded",
@@ -285,11 +286,15 @@ class SandboxShellIT {
     }
 
     @Test
-    @DisplayName("§12.1: a hook's command still ends at its timeout")
+    @DisplayName("§12.1: a hook's command ends at its own timeout, not at the exec's backstop seconds later")
     void hookCommandEndsAtItsTimeout() {
+        final long started = System.nanoTime();
+
         assertThatThrownBy(() -> bash(env, "echo started; sleep 30",
                 ExecutionOptions.builder().timeout(Duration.ofSeconds(1)).hook(true).build())).isInstanceOfSatisfying(
                         ShellTimeoutException.class, e -> assertThat(e.stdout()).isEqualTo("started\n"));
+        // The backstop is the timeout plus 5s: core's outer deadline for a hook sits there too.
+        assertThat(Duration.ofNanos(System.nanoTime() - started)).isLessThan(Duration.ofMillis(4000));
     }
 
     @Test

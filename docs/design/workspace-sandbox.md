@@ -556,7 +556,7 @@ SDK 의 `SandboxPool`(warm pool)은 SPI 에 올리지 않는다. 풀은 `create`
 [실행 환경 설계](https://github.com/kangwoo/aimon-core/blob/main/docs/design/tool/execution-environment.md)
 가 정본이고, **이미 구현되었다**(aimon-core PR #195, #196). 이 모듈의 기준은 그 뒤의 PR #204–#208 까지다 — 훅의 실행
 환경, 셸 취소와 `KillShell`, 백그라운드 상한, 런타임 바인딩, 격리 경계, 훅의 fail-closed(aimon-core `0.3.1-SNAPSHOT`
-@ `61604b4`). 구현이 설계에서 벗어난 점은 그 저장소의
+@ `61604b4`). 그 위에 PR #211 의 훅 표시(`ExecutionOptions.isHook()`, 코어 0.3.2 — §9, §12.1)를 쓴다. 구현이 설계에서 벗어난 점은 그 저장소의
 `execution-environment-implementation.md` §10, 남은 항목은 `docs/backlog/execution-environment-open-items.md`
 (EE-*)에 있다. 이 모듈이 쓰는 코어 기능은 모두 들어가 있다 — 경로 규칙 래퍼의 공개 팩토리
 `VirtualFileSystems.withPathRules`(§11.1), notice 를 싣는 백그라운드 `Bash`, 포크 요청의 `EnvironmentRequest.fork()`
@@ -898,10 +898,14 @@ INNER:
   `Bash(run_in_background=true)`)은 상태 파일을 **읽기만** 하고(시작 시점의 cwd·환경 변수) 락 없이 돈다. 그래서 같은
   shellKey 의 다음 명령이 기다리지 않는다. 도는 동안은 heartbeat 가 활동을 기록한다(§5.3, 상한 `backgroundHeartbeatLimit`).
   명령은 `backgroundCommandTimeout`(§5.3)에서 끝나고, 그 전에는 모델이 코어의 `KillShell` 로 끝낼 수 있다
-- **훅의 명령도 락을 잡지 않는다.** 코어가 `ExecutionOptions.isHook()` 을 켜서 넘긴 명령(스킬과 설정의 셸 훅 — 코어
-  `ShellActionRunner`)은 백그라운드 명령과 같은 길로 돈다 — 세션의 cwd·환경 변수에서 시작하고, 락을 기다리지 않고, 상태를
-  저장하지 않는다. 훅은 모델의 명령 사이에 런타임이 끼워 넣는 것이라 모델의 셸을 잡을 이유가 없다(§12.1). 타임아웃은 훅
-  액션의 것이고, heartbeat 는 백그라운드 쪽이다(락이 없으니 락의 heartbeat 파일은 쓰지 않는다)
+- **훅의 명령도 락을 잡지 않는다.** 코어가 `ExecutionOptions.isHook()` 을 켜서 넘긴 명령(셸 훅 — 코어
+  `ShellActionRunner`. 샌드박스 셸에 닿는 것은 스킬이 선언한 훅이고, `hooks.json` 훅은 호스트 셸에서 돈다 — §12.1)은
+  백그라운드 명령과 같은 길로 돈다 — 세션의 cwd·환경 변수에서 시작하고, 락을 기다리지 않고, 상태를 저장하지 않는다. 훅은
+  모델의 명령 사이에 런타임이 끼워 넣는 것이라 모델의 셸을 잡을 이유가 없다(§12.1). 다른 점은 워치독 하나다 — 래퍼가
+  포그라운드와 같은 워치독을 띄워 명령을 훅 액션의 타임아웃에서 끝낸다. exec 최후 방어선(타임아웃 + 5초)에만 맡기면 훅이
+  5초 늦게 끝난다. 타임아웃이 코어의 훅 정책 시한(기본 30초) 이상이면 — 셸 훅의 기본 타임아웃이 바로 30초다 — 코어가 훅에
+  건 바깥 시한(선언한 예산 + 5초)과 같은 순간이라 둘이 경주한다. heartbeat 는 백그라운드 쪽이다(락이 없으니 락의
+  heartbeat 파일은 쓰지 않는다)
 - `maxCaptureBytes` 는 샌드박스 쪽에서 자른다. 래퍼가 실행 파일에서 stdout·stderr 를 각각 상한까지만 내보내고 크기는
   트레일러로 알린다. 수십 MB 로그를 JVM 까지 끌고 와서 자르지 않는다. `ExecSpec.maxCaptureBytes` 는 그 상한에 1 KiB 를
   더한 값이라 프로바이더 쪽 잘림이 트레일러를 자르는 일이 없다
@@ -2096,6 +2100,10 @@ docker 계층, K8s 에서만 드러나는 것은 k8s 계층 — 는 [`workspace-
   따라오므로, 그것을 읽을 소비처가 생길 때 그 소비처의 요구로 설계한다(단계 3 구현 설계 §10 Q6)
 - ~~**aimon-core SNAPSHOT 고정**~~ *(닫았다)* — aimon-core 0.3.1 이 Central 에 나왔고, 고정을 그 릴리스로 올리고
   `mavenLocal()` 을 지웠다(PR #7, 단계 3 구현 설계 §10 Q8)
+- **aimon-core 0.3.2-SNAPSHOT 고정** *(코어 0.3.2 릴리스에서 닫는다)* — 훅 표시(`ExecutionOptions.isHook()`, 이슈 #9)
+  때문에 `main` 은 Central 의 스냅샷 저장소에서 `0.3.2-SNAPSHOT` 을 받는다(`build.gradle.kts` 의 저장소 블록 —
+  `at.aimon.core` 그룹과 스냅샷으로만 거른다). 릴리스 차단 항목이고 `scripts/release.sh` 가 막는다. 코어 0.3.2 가 나오면
+  고정을 올리고 저장소 블록을 함께 지운다
 - **`aimon-sandbox-testkit` 의 발행** *(3·4단계 릴리스에서 닫는다)* — 계약 스위트를 이 저장소 밖의 구현도 통과해야 하므로
   발행하기로 했다(`aimon.publishable`). 첫 릴리스 전까지는 되돌릴 수 있다(단계 3 구현 설계 §10 Q5)
 
