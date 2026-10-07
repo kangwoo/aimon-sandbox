@@ -81,6 +81,16 @@ class ShellWrapperTest {
     }
 
     @Test
+    void aHookTakesNoLockSavesNoStateAndKeepsTheWatchdog() {
+        final String script = ShellWrapper.hook(invocation("true"));
+
+        assertThat(script).doesNotContain("flock").contains("\" bg '/workspace/repo'").contains("sleep 2.500 & w=$!")
+                .contains("  kill -KILL 0 ) </dev/null").contains("\"$r.timedout\"\n");
+        assertThat(ShellWrapper.hook(invocation("true").timeout(null))).doesNotContain("kill -KILL 0")
+                .doesNotContain("$r.timedout");
+    }
+
+    @Test
     void optionsBecomeQuotedArgumentsAndStreamsCanMerge() {
         final String script = ShellWrapper.foreground(invocation("true").workingDirectory("/tmp/it's")
                 .environment(Map.of("K", "v'1")).redirectErrorStream(true).stdinPath("/workspace/in"));

@@ -44,7 +44,9 @@ Maven Central and still works; its design document was deleted with it and survi
 The dependency runs one way: this repository compiles against a released `at.aimon.core:aimon-core` from
 Maven Central (one line in [`gradle/libs.versions.toml`](gradle/libs.versions.toml)), and aimon-core has no
 reference to anything here. The workspace sandbox implements aimon-core's execution-environment SPI
-(design §7), which aimon-core has since 0.3.1: the catalog pins the released `0.3.1` (core PRs up to #208).
+(design §7), which aimon-core has since 0.3.1. `main` needs 0.3.2 for `ExecutionOptions.isHook()` (core PR #211)
+and, until that is released, pins `0.3.2-SNAPSHOT` from Central's snapshot repository — a release blocker that
+`scripts/release.sh` enforces.
 
 ## Wiring
 
@@ -79,8 +81,8 @@ ExecutionEnvironmentSpec.shared(sandbox.environmentProvider());
   Give hooks that only observe `failOpen: true`. Hooks from `hooks.json` run on the host shell and do not depend on
   the sandbox. `OrcaRuntimeSandboxE2ETest` checks this against a real `OrcaAgentExecutor`. To refuse
   skill-declared shell hooks altogether, build core's `SkillHookSetParser` with `NoOpShellActionExecutor` (design
-  §12.1). A hook currently runs as a foreground command of the session's shell: it takes the shell lock, and its
-  `cd`/`export` persist.
+  §12.1). A hook's command runs outside the model's shell session: it takes no shell lock, starts from the
+  session's cwd and exports, and changes neither (aimon-core 0.3.2's `ExecutionOptions.isHook()`).
 
 ## Build
 
@@ -123,7 +125,9 @@ The publish credentials go in `~/.gradle/gradle.properties` (or `ORG_GRADLE_PROJ
 secrets: `mavenCentralUsername`, `mavenCentralPassword`, and either `signing.keyId` / `signing.password` /
 `signing.secretKeyRingFile` or `signingInMemoryKey` (plus `signingInMemoryKeyId` and `signingInMemoryKeyPassword`
 as your key needs). The script refuses to start while `OPENSANDBOX_TEST_ENDPOINT` or
-`OPENSANDBOX_TEST_SANDBOX_IMAGE` is set, because either one points the docker tier away from what CI tests.
+`OPENSANDBOX_TEST_SANDBOX_IMAGE` is set, because either one points the docker tier away from what CI tests. It
+also refuses, dry run included, while [`gradle/libs.versions.toml`](gradle/libs.versions.toml) pins a `-SNAPSHOT`:
+release the dependency first, raise the pin, and remove the snapshot repository from `build.gradle.kts`.
 `ReleaseGateMatchesCiGateTest` fails the build if the gate and CI stop matching.
 
 ## License

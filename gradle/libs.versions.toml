@@ -14,8 +14,13 @@
 # 0.3.1 is the first release that carries that SPI together with the cancellation, background-ceiling and
 # runtime-binding contracts this code implements (aimon-core PRs #204-#208). Until it was released the pin was
 # `0.3.1-SNAPSHOT`, resolved from `~/.m2` through a filtered `mavenLocal()`; both left together.
+#
+# It is pinned to `0.3.2-SNAPSHOT` for `ExecutionOptions.isHook()` (aimon-core PR #211, issue #9), resolved from
+# Central's snapshot repository (the filtered block in build.gradle.kts). That is a release blocker:
+# scripts/release.sh refuses while any catalog version is a SNAPSHOT. Raise it to the released 0.3.2 and delete the
+# repository block together.
 [versions]
-aimon-core = "0.3.1"
+aimon-core = "0.3.2-SNAPSHOT"
 
 lombok = "1.18.48"
 

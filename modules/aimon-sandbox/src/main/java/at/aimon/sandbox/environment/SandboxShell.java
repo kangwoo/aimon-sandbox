@@ -58,8 +58,11 @@ import at.aimon.sandbox.workspace.SandboxWorkspaceManager;
  * {@code flock} covers other nodes) and runs the wrapper with a heartbeat. The command timeout starts when the lock is
  * held; lock waits and provisioning do not count against it, and a {@code null} timeout is none, as core defines it
  * (only the exec's backstop of {@link #NO_TIMEOUT_BACKSTOP} applies). A background command
- * ({@link ExecutionOptions#isBackground()}) takes no lock and saves no state. A timeout or interrupt kills the
- * command's process group; the state from before the command remains, and the result says so.
+ * ({@link ExecutionOptions#isBackground()}) and a hook's command ({@link ExecutionOptions#isHook()}) take no lock
+ * and save no state: they start from the session's cwd and exports, and their own {@code cd} and {@code export} end
+ * with them. A hook's command keeps the foreground's in-sandbox watchdog, so it ends at its own timeout rather than at
+ * the exec's backstop. A timeout or interrupt kills the command's process group; the state from before the command
+ * remains, and the result says so.
  *
  * <p>
  * <b>Cancellation</b> ({@link ShellFeature#CANCELLATION}, foreground and background alike). The signal of
@@ -164,7 +167,9 @@ final class SandboxShell implements VirtualShell {
         final ConnectedSlot slot = manager.connect(binding);
         pending.addAll(slot.notices());
         slot.activity().record(false);
-        if (options.isBackground()) {
+        if (options.isBackground() || options.isHook()) {
+            // Neither may hold the session's shell: a background command outlives the call, and a hook runs on behalf
+            // of the runtime between the model's own commands (§9, §12.1). Both read the session's state, save none.
             return run(slot, text, options, false);
         }
         final SandboxConnectionCache.Lease lease;
@@ -229,9 +234,12 @@ final class SandboxShell implements VirtualShell {
                 upload(files, runPrefix + ".in", options.getStdin().getBytes(options.getCharset()), "stdin");
                 invocation.stdinPath(runPrefix + ".in");
             }
-            final String script = foreground
-                    ? ShellWrapper.foreground(invocation)
-                    : ShellWrapper.background(invocation);
+            final Mode mode = foreground ? Mode.FOREGROUND : options.isHook() ? Mode.HOOK : Mode.BACKGROUND;
+            final String script = switch (mode) {
+                case FOREGROUND -> ShellWrapper.foreground(invocation);
+                case HOOK -> ShellWrapper.hook(invocation);
+                case BACKGROUND -> ShellWrapper.background(invocation);
+            };
             final Duration backstop = (timeout != null ? timeout : NO_TIMEOUT_BACKSTOP)
                     .plus(foreground ? settings.shellLockWait() : Duration.ZERO).plus(BACKSTOP_SLACK);
             // Not binding.root(): a command may have removed it, and an exec server may refuse a missing directory
@@ -240,8 +248,8 @@ final class SandboxShell implements VirtualShell {
                     .environment(slot.profile().environment()).timeout(backstop).maxCaptureBytes(captureBackstop(max))
                     .build();
             final ShellCommandResult result = await(slot, spec, options.getCancellation(),
-                    new Run(runPrefix, nonce, timeout != null ? timeout : backstop, max, options.getCharset(),
-                            foreground, options.getWorkingDirectory() != null));
+                    new Run(runPrefix, nonce, timeout != null ? timeout : backstop, max, options.getCharset(), mode,
+                            options.getWorkingDirectory() != null));
             // A result means the trailer was read, and the wrapper removed its run files before printing it.
             wrapperCleanedUp = true;
             return result;
@@ -273,6 +281,16 @@ final class SandboxShell implements VirtualShell {
         }
     }
 
+    /** Which wrapper script a run uses (§9). */
+    private enum Mode {
+        /** The model's command: the shell's lock, the state save and the watchdog. */
+        FOREGROUND,
+        /** A background command: none of the three; the exec's backstop is its timeout. */
+        BACKGROUND,
+        /** A hook's command: no lock and no save, but the watchdog, so it ends at its own timeout. */
+        HOOK
+    }
+
     /** One invocation's identity and limits. */
     private static final class Run {
         private final String prefix;
@@ -281,16 +299,19 @@ final class SandboxShell implements VirtualShell {
         private final long max;
         private final Charset charset;
         private final boolean foreground;
+        /** The wrapper runs a watchdog, which marks a timeout with {@code .timedout}. */
+        private final boolean watched;
         private final boolean ownWorkingDirectory;
 
-        private Run(String prefix, String nonce, Duration timeout, long max, Charset charset, boolean foreground,
+        private Run(String prefix, String nonce, Duration timeout, long max, Charset charset, Mode mode,
                 boolean ownWorkingDirectory) {
             this.prefix = prefix;
             this.nonce = nonce;
             this.timeout = timeout;
             this.max = max;
             this.charset = charset;
-            this.foreground = foreground;
+            this.foreground = mode == Mode.FOREGROUND;
+            this.watched = mode != Mode.BACKGROUND;
             this.ownWorkingDirectory = ownWorkingDirectory;
         }
     }
@@ -377,7 +398,7 @@ final class SandboxShell implements VirtualShell {
         if (completed.isPresent()) {
             return completed.get();
         }
-        if (run.foreground && files.stat(run.prefix + ".timedout").isPresent()) {
+        if (run.watched && files.stat(run.prefix + ".timedout").isPresent()) {
             throw timeout(files, run);
         }
         if (run.foreground && outcome.exitCode() == ShellWrapper.LOCK_BUSY_EXIT) {

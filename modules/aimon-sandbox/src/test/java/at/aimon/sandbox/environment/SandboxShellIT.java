@@ -256,6 +256,48 @@ class SandboxShellIT {
     }
 
     @Test
+    @DisplayName("§12.1: a hook's command runs while the session's shell is busy, without waiting for its lock")
+    void hookCommandTakesNoLock() throws Exception {
+        final Future<ShellCommandResult> model = executor
+                .submit(() -> bash(env, ": > /workspace/model-running; sleep 3; echo done"));
+        awaitHostFile("/workspace/model-running");
+
+        final long started = System.nanoTime();
+        final ShellCommandResult hook = bash(env, "echo guarded",
+                ExecutionOptions.builder().timeout(Duration.ofSeconds(10)).hook(true).build());
+
+        assertThat(hook.stdout()).isEqualTo("guarded\n");
+        assertThat(Duration.ofNanos(System.nanoTime() - started)).isLessThan(Duration.ofMillis(1500));
+        assertThat(model.isDone()).isFalse();
+        assertThat(model.get(20, TimeUnit.SECONDS).stdout()).isEqualTo("done\n");
+    }
+
+    @Test
+    @DisplayName("§12.1: a hook's command sees the session's cwd and exports, and its own cd/export do not persist")
+    void hookCommandReadsStateButDoesNotSaveIt() throws Exception {
+        bash(env, "mkdir -p src && cd src && export SEEN=yes");
+
+        final ShellCommandResult hook = bash(env, "pwd; echo $SEEN; export HOOK=1; cd /tmp",
+                ExecutionOptions.builder().timeout(Duration.ofSeconds(10)).hook(true).build());
+        final ShellCommandResult next = bash(env, "pwd; echo \"HOOK=$HOOK\"");
+
+        assertThat(hook.stdout()).isEqualTo("/workspace/repo/src\nyes\n");
+        assertThat(next.stdout()).isEqualTo("/workspace/repo/src\nHOOK=\n");
+    }
+
+    @Test
+    @DisplayName("§12.1: a hook's command ends at its own timeout, not at the exec's backstop seconds later")
+    void hookCommandEndsAtItsTimeout() {
+        final long started = System.nanoTime();
+
+        assertThatThrownBy(() -> bash(env, "echo started; sleep 30",
+                ExecutionOptions.builder().timeout(Duration.ofSeconds(1)).hook(true).build())).isInstanceOfSatisfying(
+                        ShellTimeoutException.class, e -> assertThat(e.stdout()).isEqualTo("started\n"));
+        // The backstop is the timeout plus 5s: core's outer deadline for a hook sits there too.
+        assertThat(Duration.ofNanos(System.nanoTime() - started)).isLessThan(Duration.ofMillis(4000));
+    }
+
+    @Test
     void aCommandChangingIfsKeepsEveryPersistedExport() throws Exception {
         bash(env, "export FOO=1 BAR='two words'");
 

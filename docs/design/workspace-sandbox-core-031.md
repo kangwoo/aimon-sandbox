@@ -429,8 +429,9 @@ Decisions for a human, at the top of the PR description: Q1 and Q2 below.
   "shell is busy" after `shellLockWait`, which a guard reads as a block. (c) may deserve its own shell key for
   hooks; that needs a core-side way to tell the shell a call is a hook.
   *Resolved after merge:* (a) the helpers and `SkillHookRejectionTest` are removed; (b) `OrcaRuntimeSandboxE2ETest`
-  owns the end-to-end guard tests; (c) core gains `ExecutionOptions.isHook()`, and `SandboxShell` honours it once that
-  core is released (WS §12.1, §20).
+  owns the end-to-end guard tests; (c) core 0.3.2 gains `ExecutionOptions.isHook()`, and `SandboxShell` runs such a
+  command without the shell lock (issue #9; WS §9, §12.1, §20). The `cd`/`export` half of (c) never happened: core
+  passes every hook `AIMON_*` variables, so the wrapper already ran it in a subshell.
 - **Q3 — `UserLocale` factory name.** TASK gives the type, the getter and the builder method; the design assumes a
   `createDefault()`-style factory mirrors the old one. To be confirmed against `at.aimon.core.base.UserLocale`
   while editing (a compile error would show it immediately).

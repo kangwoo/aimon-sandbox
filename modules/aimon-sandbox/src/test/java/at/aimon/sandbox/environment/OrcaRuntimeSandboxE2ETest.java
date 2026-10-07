@@ -28,7 +28,6 @@ import at.aimon.core.agent.session.store.InMemorySessionRecordStore;
 import at.aimon.core.agent.session.transcript.DefaultTranscriptManager;
 import at.aimon.core.agent.tool.DefaultToolExecutionManager;
 import at.aimon.core.agent.tool.DefaultToolRegistry;
-import at.aimon.core.base.UserLocale;
 import at.aimon.core.command.DefaultCommandExecutionManager;
 import at.aimon.core.command.DefaultCommandRegistry;
 import at.aimon.core.filesystem.impl.local.LocalFileSystem;
@@ -60,6 +59,7 @@ import at.aimon.core.subagent.SubagentMetadata;
 import at.aimon.core.subagent.SubagentRegistry;
 import at.aimon.core.tools.bash.BashTool;
 import at.aimon.core.tools.task.TaskTool;
+import at.aimon.sandbox.RecordingProvider;
 import at.aimon.sandbox.SandboxHarness;
 import at.aimon.sandbox.provider.SandboxProviderException;
 import at.aimon.sandbox.testkit.FaultInjectingSandboxProvider.Fault;
@@ -79,7 +79,9 @@ class OrcaRuntimeSandboxE2ETest {
     @TempDir
     Path tempDir;
 
-    private final SandboxHarness harness = SandboxHarness.standard();
+    private RecordingProvider recorder;
+    private final SandboxHarness harness = SandboxHarness.builder()
+            .decorate((provider, clock) -> recorder = new RecordingProvider(provider)).build();
     private ScriptedLlmClient llm;
     private DefaultSubagentExecutionManager subagents;
     private OrcaAgentExecutor executor;
@@ -117,15 +119,13 @@ class OrcaRuntimeSandboxE2ETest {
         toolRegistry.register(new BashTool());
         final LlmModel model = LlmModel.builder().name("m").build();
         if (withTaskTool) {
-            toolRegistry.register(new TaskTool(model, subagentRegistry, toolRegistry, hookRegistry,
-                    UserLocale.createDefault(), subagents));
+            toolRegistry.register(new TaskTool(model, subagentRegistry, toolRegistry, hookRegistry, subagents));
         }
         return OrcaAgentRuntime.builder()
                 .agent(DefaultAgent.builder().name("sandboxed").maxIterations(3).systemPrompt("You are a test agent")
                         .model(model).build())
                 .toolRegistry(toolRegistry).hookRegistry(hookRegistry).commandRegistry(commands)
                 .subagentRegistry(subagentRegistry).skillRegistry(skills).controlFileSystem(control)
-                .userLocale(UserLocale.createDefault())
                 .executionEnvironmentProvider(harness.sandbox.environmentProvider()).build();
     }
 
@@ -258,6 +258,28 @@ class OrcaRuntimeSandboxE2ETest {
         assertThat(harness.hostFile(session, "/workspace/repo/tool.txt")).isEqualTo("tool\n");
         assertThat(Files.exists(Path.of("hook-ran.txt"))).as("nothing on the host's cwd").isFalse();
         assertThat(Files.exists(tempDir.resolve("hook-ran.txt"))).isFalse();
+    }
+
+    @Test
+    @DisplayName("§12.1: a skill's preTool shell hook runs outside the model's shell session: no shell lock, no state")
+    void skillShellHookRunsOutsideTheModelsShellSession() throws Exception {
+        guardWith("    - action: { type: shell, command: \"cd /tmp; export FROM_HOOK=1; echo hook-marker\" }\n");
+        llm.respond(LlmResponse.tools(List.of(ToolUse.of("t1", "Bash", Map.of("command", "mkdir -p src; cd src")))));
+        llm.respond(LlmResponse
+                .tools(List.of(ToolUse.of("t2", "Bash", Map.of("command", "pwd; echo \"FROM_HOOK=$FROM_HOOK\"")))));
+        llm.respond(LlmResponse.text("Done."));
+
+        final OrcaAgentExecutionResult result = executor.execute(runtime(), OrcaAgentExecutionRequest.builder()
+                .userInput("go").sessionId(SessionId.generate()).principal(SandboxHarness.ALICE).build());
+
+        assertThat(result.isSuccess()).as(result.getErrorMessage()).isTrue();
+        // Core marks the hook's command (ExecutionOptions.isHook()), so the wrapper it runs in takes no shell lock —
+        // the model's own commands do.
+        assertThat(recorder.runs).filteredOn(spec -> spec.command().contains("hook-marker")).hasSize(2)
+                .allMatch(spec -> !spec.command().contains("flock"));
+        assertThat(recorder.runs).filteredOn(spec -> spec.command().contains("FROM_HOOK=$FROM_HOOK")).singleElement()
+                .matches(spec -> spec.command().contains("flock"));
+        assertThat(llm.toolResults).anyMatch(text -> text.contains("/workspace/repo/src\nFROM_HOOK=\n"));
     }
 
     @Test
