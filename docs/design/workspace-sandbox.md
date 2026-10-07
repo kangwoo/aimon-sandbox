@@ -898,6 +898,10 @@ INNER:
   `Bash(run_in_background=true)`)은 상태 파일을 **읽기만** 하고(시작 시점의 cwd·환경 변수) 락 없이 돈다. 그래서 같은
   shellKey 의 다음 명령이 기다리지 않는다. 도는 동안은 heartbeat 가 활동을 기록한다(§5.3, 상한 `backgroundHeartbeatLimit`).
   명령은 `backgroundCommandTimeout`(§5.3)에서 끝나고, 그 전에는 모델이 코어의 `KillShell` 로 끝낼 수 있다
+- **훅의 명령도 락을 잡지 않는다.** 코어가 `ExecutionOptions.isHook()` 을 켜서 넘긴 명령(스킬과 설정의 셸 훅 — 코어
+  `ShellActionRunner`)은 백그라운드 명령과 같은 길로 돈다 — 세션의 cwd·환경 변수에서 시작하고, 락을 기다리지 않고, 상태를
+  저장하지 않는다. 훅은 모델의 명령 사이에 런타임이 끼워 넣는 것이라 모델의 셸을 잡을 이유가 없다(§12.1). 타임아웃은 훅
+  액션의 것이고, heartbeat 는 백그라운드 쪽이다(락이 없으니 락의 heartbeat 파일은 쓰지 않는다)
 - `maxCaptureBytes` 는 샌드박스 쪽에서 자른다. 래퍼가 실행 파일에서 stdout·stderr 를 각각 상한까지만 내보내고 크기는
   트레일러로 알린다. 수십 MB 로그를 JVM 까지 끌고 와서 자르지 않는다. `ExecSpec.maxCaptureBytes` 는 그 상한에 1 KiB 를
   더한 값이라 프로바이더 쪽 잘림이 트레일러를 자르는 일이 없다
@@ -1457,10 +1461,11 @@ egress 정책이 허용하지 않는 host 의 바인딩을 거부하고 `default
   훅은 호스트 셸에서 돌고 샌드박스의 가용성과 무관하다
 - **가드의 판정은 샌드박스에서 나온다.** 훅 명령의 상대 경로는 샌드박스의 루트를 기준으로 하고, 종료 코드 2 는 도구
   호출을 막는다
-- **훅은 지금 그 세션 shellKey 의 포그라운드 명령이다.** 셸 락을 잡으므로, 셸 가드가 걸린 도구 호출이 병렬로 돌면
-  `shellLockWait` 뒤에 "shell is busy" 를 만날 수 있고 가드는 그것을 차단으로 읽는다. 훅의 `cd` 와 `export` 도 모델의 셸
-  상태에 저장된다. 코어가 훅 명령에 표시(`ExecutionOptions.isHook()`)를 싣도록 바꾸는 중이고, 그 코어가 나오면
-  `SandboxShell` 은 그 명령을 백그라운드 명령처럼 셸 락 없이 돌리고 상태를 저장하지 않는다(§20)
+- **훅은 모델의 셸 세션 밖에서 돈다.** 코어(0.3.2 부터)가 훅 명령에 `ExecutionOptions.isHook()` 을 싣고, `SandboxShell`
+  은 그 명령을 셸 락 없이 돌린다(§9). 그래서 모델의 명령이 셸을 쥐고 있어도 가드가 "shell is busy" 를 만나 차단으로 읽는
+  일이 없다. 훅은 세션의 cwd 와 환경 변수에서 시작하지만, 그 `cd` 와 `export` 는 남지 않는다 — 코어가 훅마다
+  `AIMON_*` 변수를 붙여 넘기므로 래퍼가 명령을 서브셸에서 돌리고, 상태는 저장되지도 않는다. `OrcaRuntimeSandboxE2ETest`
+  가 실제 `OrcaAgentExecutor` 로, 훅의 실행이 락을 잡지 않고 모델의 셸 상태를 바꾸지 않는 것을 확인한다
 
 ### 12.2 쿼터
 
@@ -2023,9 +2028,9 @@ docker 계층, K8s 에서만 드러나는 것은 k8s 계층 — 는 [`workspace-
   `WorkspaceSandbox.skillHookSetParser()` · `markdownSkillParser()` 와 `SkillHookRejectionTest` 는 지웠다. 거부가 필요한 배치는
   코어의 `NoOpShellActionExecutor` 로 파서를 만든다. (b) `OrcaRuntimeSandboxE2ETest` 가 코어 파서로 만든 `preTool` 셸 가드를
   실제 `OrcaAgentExecutor` 로 돌려, 샌드박스에서 돌고 종료 코드 2 로 막고 샌드박스가 사용 불가일 때 막는(`failOpen` 이면
-  통과하는) 것을 확인한다. (c) 코어가 훅 명령에 `ExecutionOptions.isHook()` 을 싣게 하는 변경을 코어에 올렸다. 그 코어가
-  나오면 `SandboxShell` 이 훅 명령을 락 없이, 상태를 저장하지 않고 돌린다(§12.1). 첫 릴리스(0.1.0)는 코어 0.3.1 로 내고,
-  이 저장소 쪽 변경은 그 코어를 받는 다음 버전에 넣는다
+  통과하는) 것을 확인한다. (c) 코어 0.3.2 가 훅 명령에 `ExecutionOptions.isHook()` 을 싣고(코어 PR #211), `SandboxShell` 이
+  그 명령을 락 없이 돌린다(이슈 #9, §9 · §12.1). 고치면서 드러난 것 — 0.1.0 의 문서는 훅의 `cd`/`export` 가 모델의 셸
+  상태에 남는다고 했지만 그런 적은 없었다. 훅에는 늘 `AIMON_*` 변수가 붙어 래퍼가 서브셸에서 돌렸다. 실제 문제는 락뿐이었다
 - ~~**백그라운드 명령을 끝내는 도구**~~ *(코어 0.3.1 과 이 모듈의 취소 지원으로 닫았다)* — 코어의 `KillShell` 이 취소 신호를
   걸고 `SandboxShell` 이 그 신호로 원격 명령을 끝낸다(§7, §9). 끝내지 않은 명령은 `backgroundCommandTimeout` 에서 끝난다(§5.3).
   남은 한계는 다음 두 항목이다

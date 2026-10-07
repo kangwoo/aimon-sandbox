@@ -5,6 +5,25 @@ All notable aimon-sandbox changes are recorded here. The format is loosely based
 
 ## [Unreleased]
 
+Needs aimon-core **0.3.2**. Until it is released, `main` resolves `0.3.2-SNAPSHOT` from Central's snapshot repository
+(filtered to `at.aimon.core` and to snapshots), and `scripts/release.sh` refuses to release.
+
+### Fixed: a skill's shell hook no longer waits for the model's shell (#9)
+
+- **A hook's command takes no shell lock.** aimon-core 0.3.2 marks it with `ExecutionOptions.isHook()`, and
+  `SandboxShell` runs it like a background command: it starts from the session's cwd and exports, saves no state, and
+  does not wait for the session's lock. Before, a `preTool` shell guard firing while the session's shell was busy could
+  wait `shell-lock-wait`, meet "shell is busy", and read that as a block. Its timeout is still the hook's own.
+- **Correction to the 0.1.0 notes.** They said a hook's `cd` and `export` persisted into the model's shell state. They
+  never did: core passes every hook `AIMON_*` variables, so the wrapper ran it in a subshell. The shell lock was the
+  only real effect.
+
+### Changed
+
+- **aimon-core 0.3.2-SNAPSHOT.** Core removed `UserLocale` (EE-60); nothing in this library's main code used it.
+- **`scripts/release.sh` refuses while `gradle/libs.versions.toml` pins a SNAPSHOT**, so the pin above cannot be
+  released by accident.
+
 ## [0.1.0] - 2026-10-05
 
 The first release under the `at.aimon.sandbox` group: the **workspace sandbox**

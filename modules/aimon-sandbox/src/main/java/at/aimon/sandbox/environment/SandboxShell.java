@@ -58,7 +58,9 @@ import at.aimon.sandbox.workspace.SandboxWorkspaceManager;
  * {@code flock} covers other nodes) and runs the wrapper with a heartbeat. The command timeout starts when the lock is
  * held; lock waits and provisioning do not count against it, and a {@code null} timeout is none, as core defines it
  * (only the exec's backstop of {@link #NO_TIMEOUT_BACKSTOP} applies). A background command
- * ({@link ExecutionOptions#isBackground()}) takes no lock and saves no state. A timeout or interrupt kills the
+ * ({@link ExecutionOptions#isBackground()}) and a hook's command ({@link ExecutionOptions#isHook()}) take no lock
+ * and save no state: they start from the session's cwd and exports, and their own {@code cd} and {@code export} end
+ * with them. A timeout or interrupt kills the
  * command's process group; the state from before the command remains, and the result says so.
  *
  * <p>
@@ -164,7 +166,9 @@ final class SandboxShell implements VirtualShell {
         final ConnectedSlot slot = manager.connect(binding);
         pending.addAll(slot.notices());
         slot.activity().record(false);
-        if (options.isBackground()) {
+        if (options.isBackground() || options.isHook()) {
+            // Neither may hold the session's shell: a background command outlives the call, and a hook runs on behalf
+            // of the runtime between the model's own commands (§9, §12.1). Both read the session's state, save none.
             return run(slot, text, options, false);
         }
         final SandboxConnectionCache.Lease lease;
