@@ -729,6 +729,12 @@ owner 는 세션 소유자로 정해지고, 그 주체는 검사에서 막힌다
 워크스페이스가 아니라 **세션에 대한 권한**이다 — `SessionOwnerLookup` 이 답한 세션 소유자만 바꾸고, 그 빈이 없으면 거부한다.
 옵션으로 붙인 세션의 턴도 `connect` 에서 **실행하는** 주체로 다시 검사한다.
 
+**운영자 경로는 owner 검사를 하지 않는다**([관리 설계](workspace-sandbox-management.md) §5.5). `SandboxAdministration.of(WorkspaceSandbox)` 는 모든 워크스페이스와
+붙은 세션을 보이고, 대신 만들기 · 세션 옵션 · 슬롯 terminate · close · reopen · purge 를 owner 와 테넌트를 보지 않고 한다.
+JVM 안의 보안 경계가 아니라 **따로 만드는 API 면**이다 — `WorkspaceSandbox` 가 건네지 않으므로, 호스트가 자기 운영자 인가
+뒤에만 둔다. 쓰기는 모두 행위자(`actor`)를 이벤트에 남긴다. 대신 만들 때의 owner 는 주체 검사와 상한을 그대로 받고, 운영자가
+세션을 붙일 때도 세션 소유자가 그 워크스페이스를 쓸 수 있어야 한다.
+
 **주체가 없거나 시스템 주체인 실행.** 코어에서 `Principal` 은 선택값이고, Spring 스타터의 기본 진입점은 요청을
 `Principal.system()` 으로 제출한다. 그래서 `require-principal: true` 는 "주체가 있다"가 아니라 **"`USER` 또는 `GROUP`
 주체다"** 를 뜻한다. 주체가 없거나 `SYSTEM` · `SERVICE` 인 실행은 바인딩 단계에서 거부한다. 이 주체 검사는 바인딩만이 아니라 `Principal` 을 받는
@@ -1147,6 +1153,11 @@ generation · `providerRef` · 상태가 판정 때와 같을 때만 다시 쓴�
 
 `orphanGrace` 는 `provisionTimeout` 보다 길어야 한다. 짧으면 레코드 쓰기가 늦은 정상 프로비저닝을 고아로
 오인한다. 이 조건은 기동 시 검사한다(§13.2).
+
+운영자의 샌드박스 목록(`SandboxAdministration.sandboxes()`, [관리 설계](workspace-sandbox-management.md) §6.8)은 같은 순서(scan 을 끝까지 → `list`)와 같은
+판정(`SandboxReconciler.classify`, 유예 전)을 쓰되 아무것도 지우지 않는다. 샌드박스는 `h(sandboxId)` 로만 보이고, `list` 가
+실패하면 일부만 보여 주지 않고 호출이 실패한다. 유예가 지났는지는 프로바이더가 `createdAt` 을 줄 때만 보인다 — 조정기의
+`firstSeen` 은 노드 로컬이다.
 
 모든 노드에서 janitor 가 돌아도 된다. 모든 조치가 CAS 와 destroy 직전의 재확인으로 보호되고 프로바이더 호출은
 멱등이기 때문이다. 리더 선출은 두지 않는다 — 선출 저장소가 하나 더 생기는 비용이 중복 `list` 호출보다 크다. 단
@@ -1754,7 +1765,8 @@ span 속성: `aimon.sandbox.workspace` · `aimon.sandbox.slot` · `aimon.sandbox
 orphan-destroyed · duplicate-destroyed · volume-deleted · workspace-closed · workspace-reopened · workspace-created ·
 workspace-purged · session-options-set · session-options-cleared)는
 `SandboxEventListener` 로 내보낸다. 애플리케이션은 그것을 자기 감사 로그로 보낸다. 이벤트는 `workspaceId` · `slot` ·
-`generation` · `owner` · `profile` · 원인을 담고, 주체가 요청한 것에는 `actor`(`tenant/TYPE:id`)를, 세션 옵션 이벤트에는
+`generation` · `owner` · `profile` · 원인을 담고, 주체가 요청한 것 — owner 의 close · reopen · purge 와 운영자의 모든 쓰기,
+그 close 가 낸 terminated 까지 — 에는 `actor`(`tenant/TYPE:id`, 테넌트를 모르면 `TYPE:id`)를, 세션 옵션 이벤트에는
 `session` 을 담는다. `owner` 는 모든 이벤트에 있다(세션 옵션 이벤트는 세션의 소유자). 워크스페이스가 없을 수 있는 것은 세션
 옵션 이벤트뿐이고, 그것은 `workspace()` 로 읽는다(`workspaceId()` 는 0.1.0 의 형태 그대로다). 테넌트별 감사는 `owner` 로 가른다.
 
@@ -2232,6 +2244,9 @@ docker 계층, K8s 에서만 드러나는 것은 k8s 계층 — 는 [`workspace-
 - **`sandbox.workspace` 를 쓰는 권한을 가볍게 다루지 말 것.** 그 에이전트의 모든 세션을 그 워크스페이스로 보내는 권한이다.
   다른 주체의 세션은 공유된 워크스페이스에만 닿지만, 테넌트가 정의를 쓰는 호스트는 이것을 알아야 한다(§8.4)
 - **공유 워크스페이스를 격리 경계로 쓰지 말 것.** 붙은 모든 세션이 한 신뢰 도메인이다(§8.4)
+- **`SandboxAdministration` 을 `WorkspaceSandbox` 의 getter 로 만들지 말고, 일반 사용자 경로에 두지 말 것.** owner 검사가 없는
+  운영자 면이다. 호스트의 운영자 인가 뒤에만 둔다(§8.3)
+- **운영자 목록에 프로바이더 sandbox id 를 싣지 말 것.** `h(sandboxId)` 로 식별한다(§10.4)
 
 ---
 

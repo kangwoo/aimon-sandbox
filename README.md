@@ -116,6 +116,25 @@ workspaces.purge(ws.id(), alice);                                               
 - **Files do not persist yet.** A slot ends after its profile's `terminate-after`, and the next use starts from an
   empty `/workspace` (with the usual "recreated" notice). Persistent files come with shared volumes (step 5).
 
+### Administration
+
+`SandboxAdministration.of(sandbox)` is the operator's surface. It lists every workspace (by state, origin, name,
+tenant and owner) with the sessions attached to it, and every sandbox the provider runs for the deployment with the
+janitor's verdict on it (`OK`, `IN_FLIGHT`, `ORPHAN`, `STALE`, …, identified by a hash, never the raw sandbox id). It
+can create on behalf of an owner, attach any session, terminate a slot, close, reopen and purge:
+
+```java
+SandboxAdministration admin = SandboxAdministration.of(sandbox);
+admin.sandboxes().forEach(view -> log.info("{} {}", view.refHash(), view.verdict()));
+admin.terminateSlot(workspaceId, "primary", operator);   // the next use provisions a new generation
+```
+
+- **It checks no owner or tenant.** It is not a security boundary inside the JVM but a separate API surface: build
+  it only behind your own operator authorization, and never hand it to ordinary callers.
+- **Every write records the actor** on its `SandboxEvent` (`actor()`), so the audit log tells operator actions apart.
+- An operator can attach a session only to a workspace the session's owner may use, and needs the `SessionOwnerLookup`
+  for it too.
+
 ## Build
 
 ```bash

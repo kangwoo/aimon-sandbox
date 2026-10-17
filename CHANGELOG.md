@@ -34,6 +34,14 @@ Management design [`docs/design/workspace-sandbox-management.md`](docs/design/wo
 - **Events**: types `WORKSPACE_CREATED`, `WORKSPACE_PURGED`, `SESSION_OPTIONS_SET`, `SESSION_OPTIONS_CLEARED`, and
   `session()`, `actor()` and `workspace()` (the `Optional` workspace; `workspaceId()` throws on a session event that
   names none). A listener that throws a `LinkageError` no longer fails the transition it hears of.
+- **`SandboxAdministration.of(sandbox)`** (design PR 2): `workspaces(AdminWorkspaceQuery)` (state, origin, name,
+  tenant and owner filters), `workspace(id)` with its attached sessions, `sessions(id, after, limit)`, `sandboxes()`
+  — every provider sandbox of the deployment with the reconciler's verdict, by `refHash`, `pastGrace` when the provider
+  reports `createdAt` — and owner-check-free writes: `create` on behalf of an owner, `setSessionOptions` /
+  `clearSessionOptions`, `terminateSlot`, `close`, `reopen`, `purge`. A separate API surface, not a JVM security
+  boundary: expose it only behind your operator authorization.
+- **`actor()` on events** of every operator write, of an owner's own close, reopen, purge and session-options calls,
+  and of the terminations a close causes; the janitor's carry none.
 - **Recorded failures** never quote the provider's raw sandbox id: a server message that does gets the id's hash instead.
 
 ### Breaking for custom `SandboxWorkspaceStore`s

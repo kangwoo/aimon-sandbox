@@ -26,6 +26,9 @@
   `SessionOptionsBindingPolicy` 가 설정된 정책을 감싸 세션 옵션 → 정의의 `sandbox.workspace` → unattached 규칙 순으로 정한다.
   공유 워크스페이스는 하나의 신뢰 도메인이다 — 붙은 모든 세션이 서로의 파일과 셸 상태를 읽는다.
   설계는 [`workspace-sandbox-management.md`](../../docs/design/workspace-sandbox-management.md)
+- `SandboxAdministration` — `SandboxAdministration.of(WorkspaceSandbox)`: 운영자 면. 모든 워크스페이스와 붙은 세션, 조정기의
+  판정을 붙인 프로바이더 샌드박스 목록, owner 검사 없는 쓰기(대신 만들기 · 세션 옵션 · terminate · close · reopen · purge,
+  모두 `actor` 를 남긴다). 호스트의 운영자 인가 뒤에만 둔다
 
 아직 없는 것: `primary` 밖의 슬롯 · 공유 볼륨 · seed · 오케스트레이터 도구(5단계), 영속
 저장소(6단계), pause/resume · worktree 격리(7단계). 그런 설정은 조용히 무시하지 않고 기동 시 거부한다. 구현 설계와 설계에서
