@@ -35,8 +35,7 @@ import at.aimon.sandbox.workspace.SandboxWorkspaceManager;
  *
  * Every call connects first (lazy provisioning) and records activity; notices the connect produced are queued for
  * core's {@code drainNotices()}, which puts them on this very tool's result. There is no other path restriction:
- * nothing outside the sandbox is reachable, and inside it the
- * shell can do anything the file tools could.
+ * nothing outside the sandbox is reachable, and inside it the shell can do anything the file tools could.
  */
 final class SandboxFileSystem implements VirtualFileSystem {
 
