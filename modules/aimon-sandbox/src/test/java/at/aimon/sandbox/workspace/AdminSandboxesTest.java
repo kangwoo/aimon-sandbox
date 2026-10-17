@@ -27,7 +27,6 @@ import at.aimon.sandbox.provider.SandboxProviderException;
 import at.aimon.sandbox.testkit.FaultInjectingSandboxProvider.Fault;
 import at.aimon.sandbox.testkit.FaultInjectingSandboxProvider.Operation;
 import at.aimon.sandbox.testkit.SandboxTestProfiles;
-import at.aimon.sandbox.workspace.SandboxReconciler.Verdict;
 
 /**
  * {@code SandboxAdministration.sandboxes()} (management design §6.8): every listed sandbox with the reconciler's
@@ -68,7 +67,7 @@ class AdminSandboxesTest {
 
         final SandboxView view = view(slot.providerRef().orElseThrow());
 
-        assertThat(view.verdict()).isEqualTo(Verdict.OK);
+        assertThat(view.verdict()).isEqualTo(SandboxVerdict.OK);
         assertThat(view.workspaceId()).contains(harness.record(session).id());
         assertThat(view.slot()).contains("primary");
         assertThat(view.generation()).contains(1L);
@@ -94,8 +93,8 @@ class AdminSandboxesTest {
                 .build());
         final ProviderSandbox claimed = phantom.add(provisioning.id().value(), "prov0001", 3, null);
 
-        assertThat(view(ahead.ref()).verdict()).isEqualTo(Verdict.IN_FLIGHT);
-        assertThat(view(claimed.ref()).verdict()).isEqualTo(Verdict.IN_FLIGHT);
+        assertThat(view(ahead.ref()).verdict()).isEqualTo(SandboxVerdict.IN_FLIGHT);
+        assertThat(view(claimed.ref()).verdict()).isEqualTo(SandboxVerdict.IN_FLIGHT);
     }
 
     @Test
@@ -107,9 +106,9 @@ class AdminSandboxesTest {
         final ProviderSandbox young = phantom.add("ws:gone", "inc00001", 1, harness.clock.instant());
         final ProviderSandbox undated = phantom.add("ws:gone", "inc00001", 2, null);
 
-        assertThat(view(mismatch.ref()).verdict()).isEqualTo(Verdict.ORPHAN);
+        assertThat(view(mismatch.ref()).verdict()).isEqualTo(SandboxVerdict.ORPHAN);
         assertThat(view(mismatch.ref()).pastGrace()).contains(true);
-        assertThat(view(young.ref()).verdict()).isEqualTo(Verdict.ORPHAN);
+        assertThat(view(young.ref()).verdict()).isEqualTo(SandboxVerdict.ORPHAN);
         assertThat(view(young.ref()).pastGrace()).contains(false);
         assertThat(view(young.ref()).workspaceId()).as("no record to resolve to").isEmpty();
         assertThat(view(undated.ref()).pastGrace()).isEmpty();
@@ -125,8 +124,9 @@ class AdminSandboxesTest {
         harness.store.update(harness.record(session).id(), harness.record(session).version(),
                 harness.record(session).withSlot(harness.primary(session).toBuilder().generation(2).build()));
 
-        assertThat(view(older.ref()).verdict()).isEqualTo(Verdict.STALE);
+        assertThat(view(older.ref()).verdict()).isEqualTo(SandboxVerdict.STALE);
         assertThat(view(older.ref()).generation()).contains(1L);
+        assertThat(view(older.ref()).pastGrace()).as("a stale sandbox goes without grace").isEmpty();
     }
 
     @Test
@@ -148,8 +148,8 @@ class AdminSandboxesTest {
                                         .profileHash("h").build())
                                 .build()));
 
-        assertThat(view(unparseable.ref()).verdict()).isEqualTo(Verdict.SKIP);
-        assertThat(view(slot.providerRef().orElseThrow()).verdict()).isEqualTo(Verdict.SKIP);
+        assertThat(view(unparseable.ref()).verdict()).isEqualTo(SandboxVerdict.SKIP);
+        assertThat(view(slot.providerRef().orElseThrow()).verdict()).isEqualTo(SandboxVerdict.SKIP);
     }
 
     @Test
@@ -174,5 +174,75 @@ class AdminSandboxesTest {
 
         assertThatThrownBy(() -> admin().sandboxes()).isInstanceOf(SandboxProviderException.class);
         assertThat(Optional.of(harness.faults.calls(Operation.LIST))).contains(1);
+    }
+
+    @Test
+    @DisplayName("review m3/m7: a DUPLICATE carries pastGrace; a FAILED_LEFTOVER, destroyed without grace, does not")
+    void duplicatesAndFailedLeftovers() throws Exception {
+        final SessionId session = started();
+        final ProviderSandbox duplicate = phantom.add("ws:" + session.value(), harness.record(session).incarnation(), 1,
+                harness.clock.instant().minus(Duration.ofMinutes(11)));
+        final ProviderSandbox recentDuplicate = phantom.add("ws:" + session.value(),
+                harness.record(session).incarnation(), 1, harness.clock.instant());
+        harness.faults.injectOnce(Operation.CREATE, Fault.succeedButLoseResponse());
+        final SessionId failed = SessionId.generate();
+        assertThatThrownBy(() -> bash(harness.mainTurn(failed, ALICE), "true"))
+                .hasMessageContaining("could not be provisioned");
+        final SandboxView leftover = admin().sandboxes().stream()
+                .filter(v -> v.workspaceId().map(id -> id.value().equals("ws:" + failed.value())).orElse(false))
+                .findFirst().orElseThrow();
+
+        assertThat(view(duplicate.ref()).verdict()).isEqualTo(SandboxVerdict.DUPLICATE);
+        assertThat(view(duplicate.ref()).pastGrace()).contains(true);
+        assertThat(view(recentDuplicate.ref()).pastGrace()).contains(false);
+        assertThat(leftover.verdict()).isEqualTo(SandboxVerdict.FAILED_LEFTOVER);
+        assertThat(leftover.pastGrace()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("review m3: an IN_FLIGHT sandbox ahead of its record carries pastGrace; a claimed one does not")
+    void anInFlightSandboxAheadOfItsRecordCarriesItsGrace() throws Exception {
+        final SessionId session = started();
+        final ProviderSandbox ahead = phantom.add("ws:" + session.value(), harness.record(session).incarnation(), 5,
+                harness.clock.instant().minus(Duration.ofMinutes(11)));
+        final ProviderSandbox undated = phantom.add("ws:" + session.value(), harness.record(session).incarnation(), 6,
+                null);
+
+        assertThat(view(ahead.ref()).verdict()).isEqualTo(SandboxVerdict.IN_FLIGHT);
+        assertThat(view(ahead.ref()).pastGrace()).contains(true);
+        assertThat(view(undated.ref()).pastGrace()).as("no createdAt, no answer").isEmpty();
+    }
+
+    @Test
+    @DisplayName("review m7: a record created after the scan reads as ORPHAN, not yet past its grace — a snapshot")
+    void aRecordCreatedAfterTheScanReadsAsAYoungOrphan() {
+        final InMemorySandboxWorkspaceStore store = new InMemorySandboxWorkspaceStore();
+        final SandboxWorkspaceId late = SandboxWorkspaceId.of("ws:late");
+        final ProviderSandbox[] listed = new ProviderSandbox[1];
+        try (SandboxHarness racing = SandboxHarness.builder().store(store)
+                .decorate((local, clock) -> new at.aimon.sandbox.DelegatingProvider(local) {
+                    @Override
+                    public List<ProviderSandbox> list(Map<String, String> labels) {
+                        // Between the administration's scan and its listing, a connect creates the record and its
+                        // sandbox.
+                        store.createIfAbsent(
+                                SandboxWorkspace.builder().id(late).owner(WorkspaceOwner.of(TenantId.DEFAULT, ALICE))
+                                        .incarnation("late0001").stateSince(clock.instant()).createdAt(clock.instant())
+                                        .lastActivityAt(clock.instant()).build());
+                        listed[0] = ProviderSandbox.of(ProviderSandboxRef.of("local", "late"),
+                                ProviderSandboxState.RUNNING,
+                                SandboxLabels.labels("test", late.value(), "late0001", "primary", 1, "default"), null,
+                                clock.instant());
+                        return List.of(listed[0]);
+                    }
+                }).build()) {
+            final List<SandboxView> views = SandboxAdministration.of(racing.sandbox).sandboxes();
+
+            assertThat(views).singleElement().satisfies(view -> {
+                assertThat(view.verdict()).isEqualTo(SandboxVerdict.ORPHAN);
+                assertThat(view.pastGrace()).contains(false);
+                assertThat(view.workspaceId()).isEmpty();
+            });
+        }
     }
 }

@@ -39,7 +39,7 @@ import at.aimon.sandbox.testkit.ManualScheduler;
 import at.aimon.sandbox.workspace.CreateWorkspace;
 import at.aimon.sandbox.workspace.InMemorySandboxWorkspaceStore;
 import at.aimon.sandbox.workspace.InMemorySessionOptionsStore;
-import at.aimon.sandbox.workspace.SandboxReconciler;
+import at.aimon.sandbox.workspace.SandboxVerdict;
 import at.aimon.sandbox.workspace.SandboxView;
 import at.aimon.sandbox.workspace.SandboxWorkspaceId;
 import at.aimon.sandbox.workspace.SessionOptionsStore;
@@ -186,7 +186,7 @@ class ManagedWorkspaceSandboxIT {
 
         assertThat(sandboxes).filteredOn(view -> view.refHash().equals(SandboxLabels.h(ref.sandboxId())))
                 .singleElement().satisfies(view -> {
-                    assertThat(view.verdict()).isEqualTo(SandboxReconciler.Verdict.OK);
+                    assertThat(view.verdict()).isEqualTo(SandboxVerdict.OK);
                     assertThat(view.workspaceId()).contains(created.id());
                     assertThat(view.generation()).contains(1L);
                 });

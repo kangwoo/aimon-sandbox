@@ -67,7 +67,8 @@ public final class SandboxAdministration {
      * @param id
      *            the workspace
      * @return the workspace and the first {@value #DETAIL_SESSIONS} sessions attached to it; empty when it does not
-     *         exist
+     *         exist. The record and the sessions are two reads: a purge in between can show the sessions of a
+     *         workspace that is already gone (the purge clears them right after)
      */
     public Optional<WorkspaceDetail> workspace(SandboxWorkspaceId id) {
         return manager.adminDescribe(id)
@@ -88,10 +89,11 @@ public final class SandboxAdministration {
     }
 
     /**
-     * Every sandbox the provider runs for this deployment, matched to its record and given the reconciler's verdict
-     * ({@code OK}, {@code IN_FLIGHT}, {@code ORPHAN}, {@code STALE}, {@code FAILED_LEFTOVER}, {@code DUPLICATE},
-     * {@code SKIP}). Informational: only the janitor destroys. Reads the whole store and the whole listing on every
-     * call — an operator call, not a hot path.
+     * Every sandbox the provider runs for this deployment, matched to its record and given the reconciler's
+     * classification before grace ({@code OK}, {@code IN_FLIGHT}, {@code ORPHAN}, {@code STALE},
+     * {@code FAILED_LEFTOVER}, {@code DUPLICATE}, {@code SKIP}). Informational: only the janitor destroys. Reads the
+     * whole store into memory and the whole listing on every call, uncached — an operator call, not something to
+     * poll.
      *
      * @return one view per listed sandbox
      * @throws at.aimon.sandbox.provider.SandboxProviderException
@@ -146,8 +148,23 @@ public final class SandboxAdministration {
     }
 
     /**
+     * Deletes any session's options record outright — the cleanup for a host that deleted sessions without
+     * {@code SandboxWorkspaces.deleteSessionOptions}.
+     *
+     * @param session
+     *            the session, known to the {@code SessionOwnerLookup}
+     * @param actor
+     *            the operator, recorded
+     */
+    public void deleteSessionOptions(SessionId session, Principal actor) {
+        manager.adminDeleteSessionOptions(session, actor);
+    }
+
+    /**
      * Terminates one slot's sandbox. The workspace stays OPEN and its next use provisions a new generation with an
-     * empty {@code /workspace}; a command running in it fails as "lost".
+     * empty {@code /workspace}; a command running in it fails as "lost". Terminating a FAILED slot clears its
+     * recorded failure and backoff, so the next use retries at once. A slot already TERMINATED is left alone; a
+     * PROVISIONING one is refused — terminated under its claimer, it would leave an orphan and provision again.
      *
      * @param id
      *            the workspace
@@ -155,6 +172,8 @@ public final class SandboxAdministration {
      *            the slot
      * @param actor
      *            the operator, recorded
+     * @throws at.aimon.sandbox.workspace.SandboxUnavailableException
+     *             when the workspace or the slot does not exist, or the slot is provisioning
      */
     public void terminateSlot(SandboxWorkspaceId id, String slot, Principal actor) {
         manager.adminTerminateSlot(id, slot, actor);

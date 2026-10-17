@@ -129,6 +129,9 @@ class SandboxAdministrationTest {
         assertThat(ids(AdminWorkspaceQuery.builder().tenant(TenantId.of("t2")).build())).containsExactly(bobs);
         assertThat(ids(AdminWorkspaceQuery.builder().owner(WorkspaceOwner.of(TenantId.of("t2"), BOB)).build()))
                 .containsExactly(bobs);
+        assertThat(ids(AdminWorkspaceQuery.builder().origin(WorkspaceOrigin.DERIVED).build()))
+                .as("the store ignores origin too").isEmpty();
+        assertThat(ids(AdminWorkspaceQuery.builder().tenant(TenantId.of("t9")).build())).isEmpty();
     }
 
     @Test
@@ -269,5 +272,107 @@ class SandboxAdministrationTest {
         harness.sandbox.janitor().runOnce();
 
         assertThat(events(SandboxEvent.Type.TERMINATED)).isNotEmpty().allSatisfy(e -> assertThat(e.actor()).isEmpty());
+    }
+
+    @Test
+    @DisplayName("review m1: a PROVISIONING slot is refused; a FAILED one is terminated and retried on next use")
+    void terminateRefusesAProvisioningSlotAndRetriesAFailedOne() throws Exception {
+        final java.time.Instant now = harness.clock.instant();
+        final SandboxWorkspace provisioning = harness.store.createIfAbsent(
+                SandboxWorkspace.builder().id(SandboxWorkspaceId.of("wsm:00000000-0000-0000-0000-00000000000a"))
+                        .owner(WorkspaceOwner.of(TenantId.of("t1"), ALICE)).origin(WorkspaceOrigin.MANAGED)
+                        .incarnation("prov0001").stateSince(now).createdAt(now).lastActivityAt(now)
+                        .slots(java.util.Map.of("primary",
+                                at.aimon.sandbox.workspace.SandboxSlot.builder().name("primary").profile("standard")
+                                        .profileHash("h").state(SlotState.PROVISIONING).generation(1)
+                                        .provisioning(at.aimon.sandbox.workspace.ProvisioningClaim.of(now, "node"))
+                                        .lastActivityAt(now).build()))
+                        .build());
+
+        assertThatThrownBy(() -> admin().terminateSlot(provisioning.id(), "primary", OPERATOR))
+                .isInstanceOf(SandboxUnavailableException.class).hasMessageContaining("is provisioning");
+        assertThat(harness.store.find(provisioning.id()).orElseThrow().slot("primary").orElseThrow().state())
+                .isEqualTo(SlotState.PROVISIONING);
+
+        harness.faults.injectOnce(at.aimon.sandbox.testkit.FaultInjectingSandboxProvider.Operation.CREATE,
+                at.aimon.sandbox.testkit.FaultInjectingSandboxProvider.Fault
+                        .fail(at.aimon.sandbox.provider.SandboxProviderException.Kind.TRANSIENT));
+        final SandboxWorkspaceId failed = org.assertj.core.api.Assertions
+                .catchThrowableOfType(at.aimon.sandbox.workspace.WorkspaceProvisioningException.class,
+                        () -> harness.sandbox.workspaces().create(CreateWorkspace.named("failed"), ALICE))
+                .workspaceId();
+        assertThatThrownBy(() -> harness.sandbox.workspaces().provision(failed, ALICE))
+                .hasMessageContaining("next attempt");
+
+        admin().terminateSlot(failed, "primary", OPERATOR);
+
+        assertThat(harness.sandbox.workspaces().provision(failed, ALICE).slot("primary").orElseThrow().state())
+                .as("the backoff went with the failure").isEqualTo(SlotState.RUNNING);
+    }
+
+    @Test
+    @DisplayName("review m6: a slot the workspace does not have is an error, not a silent success")
+    void terminateOfAnAbsentSlotIsRefused() {
+        final SandboxWorkspaceId id = create("typo", ALICE);
+
+        assertThatThrownBy(() -> admin().terminateSlot(id, "primray", OPERATOR))
+                .isInstanceOf(SandboxUnavailableException.class).hasMessageContaining("has no slot 'primray'");
+        assertThat(events(SandboxEvent.Type.TERMINATED)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("review m2: setBy is the operator in the tenant its resolver knows")
+    void setByUsesTheOperatorsOwnTenant() {
+        final Principal tenantOperator = Principal.user("t9-ops");
+        final SandboxWorkspaceId id = create("attach", ALICE);
+        final SessionId session = SessionId.generate();
+
+        admin().setSessionOptions(session, SessionSandboxOptions.Update.attach(id), tenantOperator);
+
+        assertThat(harness.sessionOptions.find(session).orElseThrow().setBy())
+                .isEqualTo(WorkspaceOwner.of(TenantId.of("t9"), tenantOperator));
+        assertThat(events(SandboxEvent.Type.SESSION_OPTIONS_SET)).singleElement()
+                .satisfies(e -> assertThat(e.actor()).contains("t9/USER:t9-ops"));
+    }
+
+    @Test
+    @DisplayName("review m4: reopen runs the owner through today's principal gate before anything changes")
+    void reopenRefusesAnOwnerTheGateNowRefuses() {
+        harness.close();
+        harness = SandboxHarness.builder().tenantResolver(principal -> TenantId.of("t1"))
+                .sessionOwnerLookup(id -> Optional.of(ALICE))
+                .settings(s -> s.requirePrincipal(true).allowedSystemPrincipals(Set.of("system"))).build();
+        final SandboxWorkspaceId id = harness.sandbox.workspaces()
+                .create(CreateWorkspace.named("nightly"), Principal.system()).id();
+        harness.sandbox.workspaces().close(id, Principal.system());
+
+        // Shares the store and the local provider, so only its own assembly is closed: closing the harness would
+        // close the shared provider too.
+        final SandboxHarness redeployed = SandboxHarness.builder().store(harness.store).local(harness.local)
+                .tenantResolver(principal -> TenantId.of("t1")).sessionOwnerLookup(s -> Optional.of(ALICE))
+                .settings(s -> s.requirePrincipal(true)).build();
+        try {
+            assertThatThrownBy(() -> SandboxAdministration.of(redeployed.sandbox).reopen(id, OPERATOR))
+                    .isInstanceOf(BindingRejectedException.class).hasMessageContaining("allowed-system-principals");
+            assertThat(redeployed.store.find(id).orElseThrow().state()).isEqualTo(WorkspaceState.CLOSED);
+        } finally {
+            redeployed.sandbox.close();
+        }
+        assertThat(admin().reopen(id, OPERATOR).state()).as("where the gate admits it").isEqualTo(WorkspaceState.OPEN);
+    }
+
+    @Test
+    @DisplayName("review N2: the operator deletes any session's options record outright")
+    void theOperatorDeletesSessionOptions() {
+        final SandboxWorkspaceId id = create("left over", ALICE);
+        final SessionId session = SessionId.generate();
+        harness.sandbox.workspaces().setSessionOptions(session, SessionSandboxOptions.Update.attach(id), ALICE);
+        harness.sandbox.workspaces().clearSessionOptions(session, ALICE);
+
+        admin().deleteSessionOptions(session, OPERATOR);
+
+        assertThat(harness.sessionOptions.find(session)).isEmpty();
+        assertThat(events(SandboxEvent.Type.SESSION_OPTIONS_CLEARED)).last()
+                .satisfies(e -> assertThat(e.actor()).contains("SERVICE:ops-console"));
     }
 }

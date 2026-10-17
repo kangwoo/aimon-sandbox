@@ -1236,7 +1236,10 @@ public final class SandboxWorkspaceManager {
      *            the principal asking
      */
     public void deleteSessionOptions(SessionId session, Principal caller) {
-        final Acting acting = Acting.as(callers.callerOf(Optional.ofNullable(caller)));
+        deleteSessionOptions(session, Acting.as(callers.callerOf(Optional.ofNullable(caller))));
+    }
+
+    private void deleteSessionOptions(SessionId session, Acting acting) {
         final WorkspaceOwner sessionOwner = requireSessionOwner(session, acting);
         for (int attempt = 0; attempt <= settings.casRetries(); attempt++) {
             final Optional<SessionSandboxOptions> current = sessionOptions.find(session);
@@ -1342,7 +1345,7 @@ public final class SandboxWorkspaceManager {
     /** The actor of an event: the resolved principal, or its {@code TYPE:id} when no tenant is known for it. */
     private String actorOf(Principal actor, WorkspaceOwner fallback) {
         if (actor == null) {
-            return String.valueOf(fallback);
+            return Objects.requireNonNull(fallback, "an event without an actor principal needs a fallback").toString();
         }
         try {
             return callers.ownerOf(actor).toString();
@@ -1366,20 +1369,24 @@ public final class SandboxWorkspaceManager {
     private static final class Acting {
         private final WorkspaceOwner who;
         private final Principal administrator;
+        /** The administrator as the tenant resolver sees it; {@code null} when it knows no tenant for it. */
+        private final WorkspaceOwner resolved;
         private final String actor;
 
-        private Acting(WorkspaceOwner who, Principal administrator, String actor) {
+        private Acting(WorkspaceOwner who, Principal administrator, WorkspaceOwner resolved, String actor) {
             this.who = who;
             this.administrator = administrator;
+            this.resolved = resolved;
             this.actor = actor;
         }
 
         static Acting as(WorkspaceOwner who) {
-            return new Acting(who, null, who.toString());
+            return new Acting(who, null, null, who.toString());
         }
 
-        static Acting administrator(Principal actor, String recorded) {
-            return new Acting(null, actor, recorded);
+        static Acting administrator(Principal actor, WorkspaceOwner resolved) {
+            return new Acting(null, actor, resolved,
+                    resolved != null ? resolved.toString() : actor.getType().name() + ":" + actor.getId());
         }
 
         boolean isAdministrator() {
@@ -1397,7 +1404,10 @@ public final class SandboxWorkspaceManager {
          * @return who to record as having set a session's options
          */
         WorkspaceOwner recordedAs(TenantId fallbackTenant) {
-            return who != null ? who : WorkspaceOwner.of(fallbackTenant, administrator);
+            if (who != null) {
+                return who;
+            }
+            return resolved != null ? resolved : WorkspaceOwner.of(fallbackTenant, administrator);
         }
 
         void checkManage(SandboxWorkspaceManager manager, SandboxWorkspace workspace) {
@@ -1413,7 +1423,13 @@ public final class SandboxWorkspaceManager {
 
     private Acting administrator(Principal actor) {
         Objects.requireNonNull(actor, "actor must not be null");
-        return Acting.administrator(actor, actorOf(actor, null));
+        WorkspaceOwner resolved;
+        try {
+            resolved = callers.ownerOf(actor);
+        } catch (RuntimeException e) {
+            resolved = null;
+        }
+        return Acting.administrator(actor, resolved);
     }
 
     /**
@@ -1493,6 +1509,19 @@ public final class SandboxWorkspaceManager {
     }
 
     /**
+     * <b>Internal.</b> Public only for use across this library's packages: not supported API, and it may change in
+     * any release. Use {@code SandboxAdministration}.
+     *
+     * @param session
+     *            the session, known to the {@code SessionOwnerLookup}
+     * @param actor
+     *            the operator, recorded
+     */
+    public void adminDeleteSessionOptions(SessionId session, Principal actor) {
+        deleteSessionOptions(session, administrator(actor));
+    }
+
+    /**
      * Terminates one slot (§6.7): CAS to TERMINATED, then destroy, with cause "terminated by administrator". The
      * workspace stays OPEN and the next use provisions a new generation; a command running in it fails as "lost". A
      * slot that is absent or already TERMINATED is left alone.
@@ -1513,11 +1542,28 @@ public final class SandboxWorkspaceManager {
      */
     public boolean adminTerminateSlot(SandboxWorkspaceId id, String slot, Principal actor) {
         final Acting acting = administrator(actor);
-        if (store.find(id).isEmpty()) {
-            throw doesNotExist(id);
+        final SandboxWorkspace found = store.find(id).orElseThrow(() -> doesNotExist(id));
+        final SandboxSlot current = found.slot(slot).orElseThrow(
+                () -> new SandboxUnavailableException("sandbox workspace " + id + " has no slot '" + slot + "'"));
+        if (current.state() == SlotState.PROVISIONING) {
+            throw provisioningRefused(id, slot);
         }
-        return terminateSlot(id, slot, "terminated by administrator", workspace -> true, current -> true,
-                acting.actor());
+        // Re-checked inside the CAS: a slot that started provisioning since is refused the same way, not terminated
+        // under its claimer — whose create would then leave an orphan and provision again at once.
+        final boolean[] provisioning = new boolean[1];
+        final boolean terminated = terminateSlot(id, slot, "terminated by administrator", workspace -> true, s -> {
+            provisioning[0] = s.state() == SlotState.PROVISIONING;
+            return !provisioning[0];
+        }, acting.actor());
+        if (provisioning[0]) {
+            throw provisioningRefused(id, slot);
+        }
+        return terminated;
+    }
+
+    private static SandboxUnavailableException provisioningRefused(SandboxWorkspaceId id, String slot) {
+        return new SandboxUnavailableException("slot '" + slot + "' of sandbox workspace " + id + " is provisioning; "
+                + "terminate it once that has settled (the janitor reclaims an abandoned claim)");
     }
 
     /**
@@ -1547,10 +1593,26 @@ public final class SandboxWorkspaceManager {
      * @return the workspace, {@code primary} RUNNING
      */
     public WorkspaceView adminReopen(SandboxWorkspaceId id, Principal actor) {
-        reopen(id, administrator(actor));
+        final Acting acting = administrator(actor);
+        final SandboxWorkspace before = store.find(id).orElseThrow(() -> doesNotExist(id));
+        // The owner through the principal gate first, as create on behalf of does: the deployment may refuse a
+        // principal it once accepted (require-principal turned on, an allowed system principal removed).
+        callers.callerOf(Optional.ofNullable(principalOf(before.owner())));
+        reopen(id, acting);
         final SandboxWorkspace found = store.find(id).orElseThrow(() -> doesNotExist(id));
         // As its owner: the use check inside connect then always passes, as an operator's call must.
         return provision(id, found.owner());
+    }
+
+    /** @return the principal an owner was recorded from; {@code null} for an {@code anonymous} owner */
+    private static Principal principalOf(WorkspaceOwner owner) {
+        if (WorkspaceOwner.ANONYMOUS.equals(owner.principal())) {
+            return null;
+        }
+        final int colon = owner.principal().indexOf(':');
+        final String id = owner.principal().substring(colon + 1);
+        return Principal.builder().type(Principal.Type.valueOf(owner.principal().substring(0, colon))).id(id)
+                .displayName(id).build();
     }
 
     /**
@@ -1597,15 +1659,19 @@ public final class SandboxWorkspaceManager {
         for (ProviderSandbox sandbox : listed) {
             final SandboxWorkspace record = byHash.get(sandbox.labels().get(SandboxLabels.WORKSPACE));
             final SandboxReconciler.Verdict verdict = SandboxReconciler.classify(record, sandbox);
+            // What the janitor waits for: the grace of an ORPHAN or a DUPLICATE, and of an IN_FLIGHT sandbox ahead of
+            // its record's generation, which it treats as ORPHAN once the grace is over (§6.8).
+            final boolean graced = verdict.afterGrace() || verdict == SandboxReconciler.Verdict.IN_FLIGHT
+                    && SandboxReconciler.inFlightByGeneration(record, sandbox);
             final SandboxView.Builder view = SandboxView.builder().refHash(SandboxLabels.h(sandbox.ref().sandboxId()))
                     .providerState(sandbox.state()).expiresAt(sandbox.expiresAt().orElse(null))
-                    .createdAt(sandbox.createdAt().orElse(null)).verdict(verdict);
+                    .createdAt(sandbox.createdAt().orElse(null)).verdict(SandboxVerdict.valueOf(verdict.name()));
             if (record != null) {
                 final long generation = SandboxReconciler.parseGeneration(sandbox);
                 view.workspaceId(record.id()).slot(sandbox.labels().get(SandboxLabels.SLOT))
                         .generation(generation < 0 ? null : generation);
             }
-            if (verdict == SandboxReconciler.Verdict.ORPHAN || verdict == SandboxReconciler.Verdict.STALE) {
+            if (graced) {
                 // Only the provider's createdAt: the reconciler's firstSeen is node-local and not visible here.
                 sandbox.createdAt().ifPresent(created -> view
                         .pastGrace(!Duration.between(created, now).minus(settings.orphanGrace()).isNegative()));

@@ -22,7 +22,7 @@ public final class SandboxView {
     private final SandboxWorkspaceId workspaceId;
     private final String slot;
     private final Long generation;
-    private final SandboxReconciler.Verdict verdict;
+    private final SandboxVerdict verdict;
     private final Boolean pastGrace;
 
     private SandboxView(Builder builder) {
@@ -82,14 +82,16 @@ public final class SandboxView {
         return Optional.ofNullable(generation);
     }
 
-    /** @return the reconciler's verdict, before grace ({@code SandboxReconciler.classify}) */
-    public SandboxReconciler.Verdict verdict() {
+    /** @return the reconciler's classification, before grace */
+    public SandboxVerdict verdict() {
         return verdict;
     }
 
     /**
-     * @return for an {@code ORPHAN} or {@code STALE}, whether it is older than {@code orphan-grace} — present only when
-     *         the provider reports {@code createdAt}. Informational: only the janitor destroys
+     * @return for what the janitor destroys only after {@code orphan-grace} — an {@code ORPHAN}, a {@code DUPLICATE},
+     *         an {@code IN_FLIGHT} sandbox ahead of its record — whether it is older than that; present only when the
+     *         provider reports {@code createdAt}. A {@code STALE} or {@code FAILED_LEFTOVER} sandbox goes on the next
+     *         pass, without grace. Informational: only the janitor destroys
      */
     public Optional<Boolean> pastGrace() {
         return Optional.ofNullable(pastGrace);
@@ -110,7 +112,7 @@ public final class SandboxView {
         private SandboxWorkspaceId workspaceId;
         private String slot;
         private Long generation;
-        private SandboxReconciler.Verdict verdict;
+        private SandboxVerdict verdict;
         private Boolean pastGrace;
 
         private Builder() {
@@ -151,7 +153,7 @@ public final class SandboxView {
             return this;
         }
 
-        public Builder verdict(SandboxReconciler.Verdict verdict) {
+        public Builder verdict(SandboxVerdict verdict) {
             this.verdict = verdict;
             return this;
         }

@@ -120,8 +120,10 @@ workspaces.purge(ws.id(), alice);                                               
 
 `SandboxAdministration.of(sandbox)` is the operator's surface. It lists every workspace (by state, origin, name,
 tenant and owner) with the sessions attached to it, and every sandbox the provider runs for the deployment with the
-janitor's verdict on it (`OK`, `IN_FLIGHT`, `ORPHAN`, `STALE`, …, identified by a hash, never the raw sandbox id). It
-can create on behalf of an owner, attach any session, terminate a slot, close, reopen and purge:
+reconciler's classification of it before grace (`OK`, `IN_FLIGHT`, `ORPHAN`, `STALE`, …, identified by a hash, never
+the raw sandbox id, with `pastGrace` where the janitor waits for one). It
+can create on behalf of an owner, attach and detach any session or delete its options, terminate a slot, close,
+reopen and purge:
 
 ```java
 SandboxAdministration admin = SandboxAdministration.of(sandbox);
