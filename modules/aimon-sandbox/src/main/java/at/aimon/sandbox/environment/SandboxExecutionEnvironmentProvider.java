@@ -31,7 +31,8 @@ import at.aimon.sandbox.workspace.WorkspaceOwner;
  * aimon-core's {@link ExecutionEnvironmentProvider}, answered with sandboxes (docs/design/workspace-sandbox.md §7).
  *
  * <p>
- * {@link #resolve} makes no provider call and at most one store read: it binds the request (§8) and returns a
+ * {@link #resolve} makes no provider call and at most one workspace-store read and, for a session, one options-store
+ * read (docs/design/workspace-sandbox-management.md §6.3): it binds the request (§8) and returns a
  * {@link SandboxExecutionEnvironment} whose descriptor carries the profile's <i>declared</i> platform, OS and shell,
  * so a turn that runs no command provisions nothing and the prompt does not change between generations. A binding that
  * cannot be made is thrown as core's {@code ExecutionEnvironmentUnavailableException}; core then installs an
@@ -143,9 +144,11 @@ public final class SandboxExecutionEnvironmentProvider implements ExecutionEnvir
         // one would — refused under require-principal, anonymous otherwise — and the owner check still decides
         // whether that caller may use the parent's workspace (§8.2, §8.3). It never inherits the parent's caller.
         final WorkspaceOwner caller = callers.callerOf(request.principal());
+        // A fork inherits mustExist (it must not create what its parent may not) but never the parent's switch: the
+        // parent's environment announces and records it.
         return parentBinding.toBuilder().caller(caller).slot(choice.slot())
                 .requiredProfile(choice.requiredProfile().orElse(null)).shellKey(ShellKey.execution(executionId))
-                .root(root).build();
+                .root(root).workspaceSwitch(null).build();
     }
 
     /**

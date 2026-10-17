@@ -38,7 +38,10 @@ public final class SandboxExecutionEnvironment implements ExecutionEnvironment {
         this.descriptor = Objects.requireNonNull(descriptor, "descriptor must not be null");
         this.backgroundCommandTimeout = Objects.requireNonNull(backgroundCommandTimeout,
                 "backgroundCommandTimeout must not be null");
-        final PendingNotices pending = new PendingNotices();
+        // §6.4 of the management design: the switch is announced after the first successful connect, and recorded
+        // once the notice reached a command result.
+        final PendingNotices pending = new PendingNotices(binding.workspaceSwitch().orElse(null),
+                change -> manager.recordLastWorkspace(change.session(), change.optionsVersion(), change.to()));
         this.fileSystem = new SandboxFileSystem(binding, manager, pending);
         this.shell = new SandboxShell(binding, manager, connections, settings, pending, clock);
         this.staging = new SandboxStaging(binding, manager, connections, pending, fileSystem);

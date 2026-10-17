@@ -15,7 +15,8 @@ import at.aimon.sandbox.workspace.WorkspaceOwner;
  * <p>
  * A binding that names a workspace it did not derive — a session's attachment, an agent default — is
  * {@link #mustExist()}: {@code connect} never creates its record (docs/design/workspace-sandbox-management.md §5.3).
- * {@link #toBuilder()} copies it, so the environment provider's rebuilds keep it and forks inherit it.
+ * {@link #toBuilder()} copies it, so the environment provider's rebuilds keep it and forks inherit it. It copies the
+ * {@link #workspaceSwitch()} too; the provider drops that one for forks.
  */
 public final class SandboxBinding {
 
@@ -33,6 +34,7 @@ public final class SandboxBinding {
     private final ShellKey shellKey;
     private final String root;
     private final boolean mustExist;
+    private final WorkspaceSwitch workspaceSwitch;
 
     private SandboxBinding(Builder builder) {
         this.workspaceId = Objects.requireNonNull(builder.workspaceId, "workspaceId must not be null");
@@ -43,6 +45,7 @@ public final class SandboxBinding {
         this.shellKey = Objects.requireNonNull(builder.shellKey, "shellKey must not be null");
         this.root = Objects.requireNonNull(builder.root, "root must not be null");
         this.mustExist = builder.mustExist;
+        this.workspaceSwitch = builder.workspaceSwitch;
     }
 
     /** @return a new builder ({@code slot = primary}, {@code root = /workspace/repo}) */
@@ -53,7 +56,8 @@ public final class SandboxBinding {
     /** @return a builder holding this binding's values */
     public Builder toBuilder() {
         return new Builder().workspaceId(workspaceId).owner(owner).caller(caller).slot(slot)
-                .requiredProfile(requiredProfile).shellKey(shellKey).root(root).mustExist(mustExist);
+                .requiredProfile(requiredProfile).shellKey(shellKey).root(root).mustExist(mustExist)
+                .workspaceSwitch(workspaceSwitch);
     }
 
     /** @return the workspace */
@@ -99,6 +103,11 @@ public final class SandboxBinding {
         return mustExist;
     }
 
+    /** @return the switch to announce after the first successful connect, for a session's root binding (§6.4) */
+    public Optional<WorkspaceSwitch> workspaceSwitch() {
+        return Optional.ofNullable(workspaceSwitch);
+    }
+
     @Override
     public String toString() {
         return "SandboxBinding{" + workspaceId + ", slot=" + slot + ", shellKey=" + shellKey + ", root=" + root
@@ -116,6 +125,7 @@ public final class SandboxBinding {
         private ShellKey shellKey;
         private String root = DEFAULT_ROOT;
         private boolean mustExist;
+        private WorkspaceSwitch workspaceSwitch;
 
         private Builder() {
         }
@@ -157,6 +167,11 @@ public final class SandboxBinding {
 
         public Builder mustExist(boolean mustExist) {
             this.mustExist = mustExist;
+            return this;
+        }
+
+        public Builder workspaceSwitch(WorkspaceSwitch workspaceSwitch) {
+            this.workspaceSwitch = workspaceSwitch;
             return this;
         }
 

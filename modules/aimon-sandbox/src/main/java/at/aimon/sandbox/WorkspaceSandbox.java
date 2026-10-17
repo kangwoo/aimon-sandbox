@@ -10,6 +10,7 @@ import at.aimon.sandbox.binding.CallerResolver;
 import at.aimon.sandbox.binding.DefaultSandboxBindingPolicy;
 import at.aimon.sandbox.binding.SandboxBindingPolicy;
 import at.aimon.sandbox.binding.SandboxTenantResolver;
+import at.aimon.sandbox.binding.SessionOptionsBindingPolicy;
 import at.aimon.sandbox.binding.SessionOwnerLookup;
 import at.aimon.sandbox.environment.SandboxExecutionEnvironmentProvider;
 import at.aimon.sandbox.profile.SandboxProfileRegistry;
@@ -106,9 +107,11 @@ public final class WorkspaceSandbox implements AutoCloseable {
                     .clock(clock).scheduler(scheduler).build();
             this.workspaces = new SandboxWorkspaces(manager);
             this.janitor = new SandboxJanitor(manager, janitorScheduler);
-            final SandboxBindingPolicy policy = builder.bindingPolicy != null
+            final SandboxBindingPolicy configured = builder.bindingPolicy != null
                     ? builder.bindingPolicy
                     : new DefaultSandboxBindingPolicy(callers, profiles, builder.sessionOwnerLookup);
+            final SandboxBindingPolicy policy = new SessionOptionsBindingPolicy(configured, callers, profiles,
+                    sessionOptions, settings.unattached());
             this.environmentProvider = SandboxExecutionEnvironmentProvider.builder().policy(policy).callers(callers)
                     .manager(manager).connections(connections).profiles(profiles).store(store).settings(settings)
                     .clock(clock).build();
@@ -279,7 +282,12 @@ public final class WorkspaceSandbox implements AutoCloseable {
             return this;
         }
 
-        /** Default: {@link DefaultSandboxBindingPolicy}. */
+        /**
+         * Default: {@link DefaultSandboxBindingPolicy}. Either way it is wrapped in a
+         * {@link SessionOptionsBindingPolicy}:
+         * session options and a definition's {@code sandbox.workspace} resolve first, and this policy binds what is
+         * left unattached under {@code per-session}.
+         */
         public Builder bindingPolicy(SandboxBindingPolicy bindingPolicy) {
             this.bindingPolicy = bindingPolicy;
             return this;
