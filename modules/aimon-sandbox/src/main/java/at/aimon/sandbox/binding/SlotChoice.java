@@ -25,10 +25,9 @@ public final class SlotChoice {
      * and then needs the workspace owned by that principal or shared ({@code access: tenant}) with its tenant.
      *
      * <p>
-     * Also read, under the same key, from the request's attributes ({@link BindingContext#requestAttributes()}), where
-     * a
-     * host sets it as {@code environment.sandbox.workspace} ({@link SandboxRequestAttributes#WORKSPACE}) for one
-     * execution only.
+     * Also read, under the same key, from the request's attributes ({@link BindingContext#requestAttributes()}),
+     * where a host sets it as {@code environment.sandbox.workspace} ({@link SandboxRequestAttributes#WORKSPACE}) for
+     * one execution only.
      */
     public static final String WORKSPACE_ATTRIBUTE = "sandbox.workspace";
 

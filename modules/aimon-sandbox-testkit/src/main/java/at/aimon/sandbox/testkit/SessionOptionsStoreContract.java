@@ -32,10 +32,8 @@ import at.aimon.sandbox.workspace.WorkspaceOwner;
  * The contract every {@link SessionOptionsStore} must pass (docs/design/workspace-sandbox-management.md §4.5, §5.2):
  * create-only and CAS puts, {@link StaleVersionException} for a stale, absent or deleted CAS, no version reuse after
  * delete, records that read back exactly as returned, stable {@code byWorkspace}, {@code workspaces} and
- * {@code sessions}
- * paging, and an
- * idempotent {@code deleteByWorkspace} that keeps every other field. {@code InMemorySessionOptionsStore} passes it; a
- * persistent store (step 6) must pass the same suite.
+ * {@code sessions} paging, and an idempotent {@code deleteByWorkspace} that keeps every other field.
+ * {@code InMemorySessionOptionsStore} passes it; a persistent store (step 6) must pass the same suite.
  *
  * <p>
  * Extend it and implement {@link #createStore()}; every test gets a fresh, empty store.

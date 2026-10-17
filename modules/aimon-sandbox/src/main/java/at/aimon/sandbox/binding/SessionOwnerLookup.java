@@ -38,9 +38,8 @@ public interface SessionOwnerLookup {
     Optional<Principal> ownerOf(SessionId sessionId);
 
     /**
-     * The owner core recorded for the session ({@code SessionRecordView.getOwner()}). Each call loads the whole record
-     * —
-     * core has no narrower read yet — and a store failure propagates.
+     * The owner core recorded for the session ({@code SessionRecordView.getOwner()}). Each call loads the whole
+     * record — core has no narrower read yet — and a store failure propagates.
      *
      * @param records
      *            core's session store

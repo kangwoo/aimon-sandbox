@@ -31,10 +31,9 @@ import at.aimon.sandbox.workspace.WorkspaceState;
 /**
  * The rights matrix of management design §9.1: {setSessionOptions, clearSessionOptions, sessionOptions, describe,
  * provision, connect, a turn and a routine placed by request attribute (core-033 §6.1), close, reopen, purge} ×
- * {owner, tenant-mate, other tenant, anonymous} × deployment {principal,
- * tenant} × record
- * access {absent, principal, tenant}. The expectations are the rules of §6.2 and §6.5 restated, not read back from the
- * code: use follows the effective access, manage and the right over a session are the owner principal's.
+ * {owner, tenant-mate, other tenant, anonymous} × deployment {principal, tenant} × record access {absent, principal,
+ * tenant}. The expectations are the rules of §6.2 and §6.5 restated, not read back from the code: use follows the
+ * effective access, manage and the right over a session are the owner principal's.
  */
 class ManagedRightsMatrixTest {
 
@@ -55,7 +54,12 @@ class ManagedRightsMatrixTest {
     }
 
     private enum Operation {
-        SET_SESSION_OPTIONS, CLEAR_SESSION_OPTIONS, SESSION_OPTIONS, DESCRIBE, PROVISION, CONNECT, REQUESTED_TURN, REQUESTED_ROUTINE, CLOSE, REOPEN, PURGE
+        // the right over a session
+        SET_SESSION_OPTIONS, CLEAR_SESSION_OPTIONS, SESSION_OPTIONS,
+        // use: directly, and placed by request attribute (core-033 §6.1)
+        DESCRIBE, PROVISION, CONNECT, REQUESTED_TURN, REQUESTED_ROUTINE,
+        // manage
+        CLOSE, REOPEN, PURGE
     }
 
     static Stream<Arguments> deploymentsAndAccess() {

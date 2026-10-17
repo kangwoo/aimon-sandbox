@@ -225,10 +225,9 @@ public final class SessionOptionsBindingPolicy implements SandboxBindingPolicy {
      * §6.4: a session that lands somewhere else than it last connected carries a switch. Without an options record
      * only a request-attribute redirect does — otherwise the session never moved — and its notice uses the from-absent
      * wording; the recorder then creates the record. A record that never attached the session
-     * ({@code lastWorkspaceId} and {@code workspace} both empty — it only set a rule) is recorded silently when rows
-     * 1–3
-     * bound it: the session ran where it runs now, under the delegate or the agent default, before the record existed.
-     * Row 0 with no {@code lastWorkspaceId} is always announced (core-033 design §6.4).
+     * ({@code lastWorkspaceId} and {@code workspace} both empty — it only set a rule) is recorded silently when
+     * rows 1–3 bound it: the session ran where it runs now, under the delegate or the agent default, before the record
+     * existed. Row 0 with no {@code lastWorkspaceId} is always announced (core-033 design §6.4).
      */
     private static SandboxBinding withSwitch(SandboxBinding binding, SessionId session,
             Optional<SessionSandboxOptions> record, boolean requested) {
