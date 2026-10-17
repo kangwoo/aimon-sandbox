@@ -312,7 +312,7 @@ live.submit(prompt, SubmitOptions.builder()
         .executionAttributes(SandboxRequestAttributes.workspace(SandboxWorkspaceId.of("wsm:…")))
         .build());
 
-schedulingSpec.withRoutineExecutionAttributes((task, executionId) ->
+schedulingSpec = schedulingSpec.withRoutineExecutionAttributes((task, executionId) ->
         myTaskPlacement(task).map(SandboxRequestAttributes::workspace).orElse(Map.of()));
 ```
 

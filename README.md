@@ -139,7 +139,7 @@ workspaces.purge(ws.id(), alice);                                               
   ```java
   live.submit(prompt, SubmitOptions.builder()
           .executionAttributes(SandboxRequestAttributes.workspace(ws.id())).build());
-  schedulingSpec.withRoutineExecutionAttributes((task, executionId) ->
+  schedulingSpec = schedulingSpec.withRoutineExecutionAttributes((task, executionId) ->
           placementOf(task.getId()).map(SandboxRequestAttributes::workspace).orElse(Map.of()));
   ```
 
