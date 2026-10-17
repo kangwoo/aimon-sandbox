@@ -7,13 +7,15 @@ import java.util.Optional;
 import java.util.Set;
 
 /**
- * A {@link SandboxWorkspaceStore#scan} query: state, tenant and time filters, and a keyset page (records ordered by
- * id, starting after {@link #afterId()}).
+ * A {@link SandboxWorkspaceStore#scan} query: state, tenant, owner, origin and time filters, and a keyset page
+ * (records ordered by id, starting after {@link #afterId()}). {@link #next} carries every filter.
  */
 public final class WorkspaceScan {
 
     private final Set<WorkspaceState> states;
     private final TenantId tenant;
+    private final WorkspaceOwner owner;
+    private final WorkspaceOrigin origin;
     private final Instant lastActivityBefore;
     private final Instant stateSinceBefore;
     private final SandboxWorkspaceId afterId;
@@ -24,6 +26,8 @@ public final class WorkspaceScan {
                 ? Set.copyOf(EnumSet.allOf(WorkspaceState.class))
                 : Set.copyOf(builder.states);
         this.tenant = builder.tenant;
+        this.owner = builder.owner;
+        this.origin = builder.origin;
         this.lastActivityBefore = builder.lastActivityBefore;
         this.stateSinceBefore = builder.stateSinceBefore;
         this.afterId = builder.afterId;
@@ -50,6 +54,12 @@ public final class WorkspaceScan {
         if (tenant != null && !tenant.equals(record.owner().tenant())) {
             return false;
         }
+        if (owner != null && !owner.equals(record.owner())) {
+            return false;
+        }
+        if (origin != null && origin != record.origin()) {
+            return false;
+        }
         if (lastActivityBefore != null && !record.lastActivityAt().isBefore(lastActivityBefore)) {
             return false;
         }
@@ -65,6 +75,16 @@ public final class WorkspaceScan {
     /** @return the owner tenant to include */
     public Optional<TenantId> tenant() {
         return Optional.ofNullable(tenant);
+    }
+
+    /** @return the owner to include: tenant and principal */
+    public Optional<WorkspaceOwner> owner() {
+        return Optional.ofNullable(owner);
+    }
+
+    /** @return the origin to include */
+    public Optional<WorkspaceOrigin> origin() {
+        return Optional.ofNullable(origin);
     }
 
     /** @return include only records whose {@code lastActivityAt} is before this */
@@ -93,14 +113,17 @@ public final class WorkspaceScan {
      * @return the query for the next page
      */
     public WorkspaceScan next(SandboxWorkspaceId lastId) {
-        return new Builder().states(states).tenant(tenant).lastActivityBefore(lastActivityBefore)
-                .stateSinceBefore(stateSinceBefore).afterId(lastId).limit(limit).build();
+        return new Builder().states(states).tenant(tenant).owner(owner).origin(origin)
+                .lastActivityBefore(lastActivityBefore).stateSinceBefore(stateSinceBefore).afterId(lastId).limit(limit)
+                .build();
     }
 
     /** Builder for {@link WorkspaceScan}. */
     public static final class Builder {
         private Set<WorkspaceState> states = Set.of();
         private TenantId tenant;
+        private WorkspaceOwner owner;
+        private WorkspaceOrigin origin;
         private Instant lastActivityBefore;
         private Instant stateSinceBefore;
         private SandboxWorkspaceId afterId;
@@ -116,6 +139,16 @@ public final class WorkspaceScan {
 
         public Builder tenant(TenantId tenant) {
             this.tenant = tenant;
+            return this;
+        }
+
+        public Builder owner(WorkspaceOwner owner) {
+            this.owner = owner;
+            return this;
+        }
+
+        public Builder origin(WorkspaceOrigin origin) {
+            this.origin = origin;
             return this;
         }
 

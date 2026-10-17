@@ -19,6 +19,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import at.aimon.core.base.Principal;
+import at.aimon.sandbox.SandboxSettings;
 import at.aimon.sandbox.provider.ProviderSandboxRef;
 import at.aimon.sandbox.workspace.CloseCause;
 import at.aimon.sandbox.workspace.ProvisioningClaim;
@@ -29,6 +30,7 @@ import at.aimon.sandbox.workspace.SandboxWorkspaceStore;
 import at.aimon.sandbox.workspace.SlotState;
 import at.aimon.sandbox.workspace.StaleVersionException;
 import at.aimon.sandbox.workspace.TenantId;
+import at.aimon.sandbox.workspace.WorkspaceOrigin;
 import at.aimon.sandbox.workspace.WorkspaceOwner;
 import at.aimon.sandbox.workspace.WorkspaceScan;
 import at.aimon.sandbox.workspace.WorkspaceState;
@@ -37,7 +39,8 @@ import at.aimon.sandbox.workspace.WorkspaceState;
  * The contract every {@link SandboxWorkspaceStore} must pass (docs/design/workspace-sandbox.md §16): one winner for
  * concurrent {@code createIfAbsent}, {@link StaleVersionException} for a stale, absent or deleted CAS, the version the
  * store assigns (never the caller's, never one a deleted record had), records that read back exactly as returned,
- * scan filters and keyset paging, and tombstones kept until a CAS-guarded delete. {@code InMemorySandboxWorkspaceStore}
+ * scan filters (owner and origin too, kept across pages) and keyset paging, the managed fields, and tombstones kept
+ * until a CAS-guarded delete. {@code InMemorySandboxWorkspaceStore}
  * passes it from
  * implementation step 3; the JDBC store (step 6) must pass the same suite, so the two cannot drift apart.
  *
@@ -347,6 +350,51 @@ public abstract class SandboxWorkspaceStoreContract {
         }
 
         assertThat(seen).isEqualTo(expected);
+    }
+
+    @Test
+    void scanPagesKeepOwnerAndOriginFilters() {
+        final WorkspaceOwner alice = WorkspaceOwner.of(TenantId.of("t"), Principal.user("alice"));
+        final WorkspaceOwner bob = WorkspaceOwner.of(TenantId.of("t"), Principal.user("bob"));
+        final List<String> expected = new ArrayList<>();
+        for (int i = 0; i < 30; i++) {
+            final String id = String.format("ws:%03d", i);
+            final WorkspaceOwner owner = i % 2 == 0 ? alice : bob;
+            final WorkspaceOrigin origin = i % 3 == 0 ? WorkspaceOrigin.DERIVED : WorkspaceOrigin.MANAGED;
+            store.createIfAbsent(workspace(id, "t").toBuilder().owner(owner).origin(origin).build());
+            if (owner.equals(alice) && origin == WorkspaceOrigin.MANAGED) {
+                expected.add(id);
+            }
+        }
+        final List<String> seen = new ArrayList<>();
+        WorkspaceScan scan = WorkspaceScan.builder().owner(alice).origin(WorkspaceOrigin.MANAGED).limit(3).build();
+        int pages = 0;
+        while (true) {
+            final List<SandboxWorkspace> page = store.scan(scan);
+            pages++;
+            page.forEach(workspace -> seen.add(workspace.id().value()));
+            if (page.size() < scan.limit()) {
+                break;
+            }
+            scan = scan.next(page.get(page.size() - 1).id());
+        }
+
+        assertThat(pages).isGreaterThan(1);
+        assertThat(seen).isEqualTo(expected);
+    }
+
+    @Test
+    void managedFieldsReadBackAsStored() {
+        final SandboxWorkspace created = store
+                .createIfAbsent(workspace("wsm:a", "t").toBuilder().origin(WorkspaceOrigin.MANAGED).name("my workspace")
+                        .profile("standard").access(SandboxSettings.WorkspaceAccess.TENANT).build());
+
+        assertThat(store.find(created.id())).contains(created);
+        assertThat(created.origin()).isEqualTo(WorkspaceOrigin.MANAGED);
+        assertThat(created.name()).contains("my workspace");
+        assertThat(created.profile()).contains("standard");
+        assertThat(created.access()).contains(SandboxSettings.WorkspaceAccess.TENANT);
+        assertThat(store.createIfAbsent(workspace("ws:b", "t")).origin()).isEqualTo(WorkspaceOrigin.DERIVED);
     }
 
     private List<String> ids(WorkspaceScan scan) {
