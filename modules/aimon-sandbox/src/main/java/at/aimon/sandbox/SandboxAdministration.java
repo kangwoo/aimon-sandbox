@@ -1,5 +1,6 @@
 package at.aimon.sandbox;
 
+import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 
@@ -8,6 +9,7 @@ import at.aimon.core.base.Principal;
 import at.aimon.sandbox.workspace.AdminWorkspaceQuery;
 import at.aimon.sandbox.workspace.CreateWorkspace;
 import at.aimon.sandbox.workspace.Page;
+import at.aimon.sandbox.workspace.SandboxView;
 import at.aimon.sandbox.workspace.SandboxWorkspaceId;
 import at.aimon.sandbox.workspace.SandboxWorkspaceManager;
 import at.aimon.sandbox.workspace.SessionOptionsView;
@@ -17,8 +19,8 @@ import at.aimon.sandbox.workspace.WorkspaceView;
 
 /**
  * The operator's view of every workspace and sandbox (docs/design/workspace-sandbox-management.md §5.5): list and
- * describe every workspace and the sessions attached to it, and create on behalf of, attach, terminate, close, reopen
- * and purge.
+ * describe every workspace and the sessions attached to it, list what the provider actually runs with the janitor's
+ * verdict, and create on behalf of, attach, terminate, close, reopen and purge.
  *
  * <p>
  * <b>It checks no owner or tenant on the actor.</b> It is not a security boundary inside the JVM — in-process code can
@@ -83,6 +85,20 @@ public final class SandboxAdministration {
      */
     public Page<SessionOptionsView, SessionId> sessions(SandboxWorkspaceId id, Optional<SessionId> after, int limit) {
         return manager.adminSessions(id, after, limit);
+    }
+
+    /**
+     * Every sandbox the provider runs for this deployment, matched to its record and given the reconciler's verdict
+     * ({@code OK}, {@code IN_FLIGHT}, {@code ORPHAN}, {@code STALE}, {@code FAILED_LEFTOVER}, {@code DUPLICATE},
+     * {@code SKIP}). Informational: only the janitor destroys. Reads the whole store and the whole listing on every
+     * call — an operator call, not a hot path.
+     *
+     * @return one view per listed sandbox
+     * @throws at.aimon.sandbox.provider.SandboxProviderException
+     *             when the provider cannot list
+     */
+    public List<SandboxView> sandboxes() {
+        return manager.adminSandboxes();
     }
 
     /**

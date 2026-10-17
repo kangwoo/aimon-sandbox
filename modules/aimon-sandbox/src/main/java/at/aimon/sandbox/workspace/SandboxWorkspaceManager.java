@@ -1566,6 +1566,55 @@ public final class SandboxWorkspaceManager {
         purge(id, administrator(actor));
     }
 
+    /**
+     * Every sandbox the provider runs for this deployment, with the reconciler's verdict (§6.8): the store is scanned
+     * first, to the end, then the provider listed — the reconciler's order (WS §10.4). Informational: nothing is
+     * destroyed. O(records + sandboxes), uncached.
+     *
+     * <p>
+     * <b>Internal.</b> Public only for use across this library's packages: not supported API, and it may change in
+     * any release. Use {@code SandboxAdministration}.
+     *
+     * @return one view per listed sandbox
+     * @throws at.aimon.sandbox.provider.SandboxProviderException
+     *             when the provider cannot list: no partial view that hides sandboxes
+     */
+    public List<SandboxView> adminSandboxes() {
+        final Map<String, SandboxWorkspace> byHash = new LinkedHashMap<>();
+        WorkspaceScan scan = WorkspaceScan.builder().build();
+        while (true) {
+            final List<SandboxWorkspace> page = store.scan(scan);
+            page.forEach(record -> byHash.put(SandboxLabels.h(record.id().value()), record));
+            if (page.size() < scan.limit()) {
+                break;
+            }
+            scan = scan.next(page.get(page.size() - 1).id());
+        }
+        final List<ProviderSandbox> listed = provider
+                .list(Map.of(SandboxLabels.MANAGED, "true", SandboxLabels.DEPLOYMENT, settings.deployment()));
+        final Instant now = clock.instant();
+        final List<SandboxView> views = new ArrayList<>();
+        for (ProviderSandbox sandbox : listed) {
+            final SandboxWorkspace record = byHash.get(sandbox.labels().get(SandboxLabels.WORKSPACE));
+            final SandboxReconciler.Verdict verdict = SandboxReconciler.classify(record, sandbox);
+            final SandboxView.Builder view = SandboxView.builder().refHash(SandboxLabels.h(sandbox.ref().sandboxId()))
+                    .providerState(sandbox.state()).expiresAt(sandbox.expiresAt().orElse(null))
+                    .createdAt(sandbox.createdAt().orElse(null)).verdict(verdict);
+            if (record != null) {
+                final long generation = SandboxReconciler.parseGeneration(sandbox);
+                view.workspaceId(record.id()).slot(sandbox.labels().get(SandboxLabels.SLOT))
+                        .generation(generation < 0 ? null : generation);
+            }
+            if (verdict == SandboxReconciler.Verdict.ORPHAN || verdict == SandboxReconciler.Verdict.STALE) {
+                // Only the provider's createdAt: the reconciler's firstSeen is node-local and not visible here.
+                sandbox.createdAt().ifPresent(created -> view
+                        .pastGrace(!Duration.between(created, now).minus(settings.orphanGrace()).isNegative()));
+            }
+            views.add(view.build());
+        }
+        return views;
+    }
+
     // ---------------------------------------------------------------------------------------------------------------
     // reconciliation (§10.4 item 2) — every write guarded on generation, providerRef and state
     // ---------------------------------------------------------------------------------------------------------------

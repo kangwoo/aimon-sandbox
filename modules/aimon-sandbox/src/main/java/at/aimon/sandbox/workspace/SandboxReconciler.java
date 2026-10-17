@@ -38,13 +38,17 @@ import at.aimon.sandbox.provider.SandboxLabels;
  * <p>
  * Not here yet: DRIFT (paused/running disagreement — nothing pauses before step 7) and volume reconciliation (item 3,
  * step 5).
+ *
+ * <p>
+ * <b>Internal.</b> Public only so the administration's sandbox listing can show {@link #classify}'s {@link Verdict}
+ * (docs/design/workspace-sandbox-management.md §6.8): not supported API, and it may change in any release.
  */
-final class SandboxReconciler {
+public final class SandboxReconciler {
 
     private static final Logger log = LoggerFactory.getLogger(SandboxReconciler.class);
 
     /** What reconciliation makes of one listed sandbox (the §10.4 table). */
-    enum Verdict {
+    public enum Verdict {
         /** Its labels do not say what it is, or it failed the label comparison (§6.3): not ours to judge. */
         SKIP(false, false),
         /** The record's current sandbox. */
@@ -257,7 +261,7 @@ final class SandboxReconciler {
                 || !sandbox.labels().containsKey(SandboxLabels.INCARNATION);
     }
 
-    private static long parseGeneration(ProviderSandbox sandbox) {
+    static long parseGeneration(ProviderSandbox sandbox) {
         try {
             final long generation = Long.parseLong(sandbox.labels().getOrDefault(SandboxLabels.GENERATION, ""));
             return generation < 1 ? -1 : generation;
@@ -276,7 +280,7 @@ final class SandboxReconciler {
      *            the listed sandbox
      * @return the verdict
      */
-    static Verdict classify(SandboxWorkspace record, ProviderSandbox sandbox) {
+    public static Verdict classify(SandboxWorkspace record, ProviderSandbox sandbox) {
         if (unparseable(sandbox)) {
             return Verdict.SKIP;
         }
