@@ -791,7 +791,8 @@ the first table.
 
 ### Smaller points
 
-- **No commits.** §11's sequence was not executed in this change; the work is left uncommitted for the run's next step.
+- **Commits differ from §11.** The work landed as three commits — the pin (`build:`), one `feat:` for all three seams
+  and one `docs:` — instead of §11's five, followed by separate fix commits from the PR #27 reviews.
 - `SandboxRequestAttributes.unattached(rule)` writes `per-session` / `reject`, the spelling `UnattachedRule.parse` and
   definition files use.
 - The Docker tier ran (Docker 29.2.1): `ManagedWorkspaceSandboxIT` gained a request-attribute turn and a
