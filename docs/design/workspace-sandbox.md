@@ -730,7 +730,7 @@ workspaceId 를 결정론적으로 만들기 때문에 별도의 세션→워크
 `SubmitRequest.owner(...)` 를 실었을 때만, 처음 값으로, 강제하지 않고). `WorkspaceSandbox.Builder.sessionRecords(...)` 를 주면
 그 소유자를 쓰고, 애플리케이션의 `SessionOwnerLookup.ownerOf(SessionId)` 는 코어가 소유자를 기록하지 않은 세션에만 묻는
 대체 경로가 된다. 둘 중 하나만 줄 수도 있다. `require-principal: true` 이면 둘 중 하나가 필수이고 없으면 기동을
-거부한다(§13.2). 어느 출처도 소유자를 모르는 세션은 바인딩이 거부된다 — `require-principal` 이면 요청 주체로 물러서지 않는다.
+거부한다(§13.2). 어느 출처도 소유자를 모르는 세션은 `require-principal` 과 상관없이 바인딩이 거부된다 — 요청 주체로 물러서지 않는다.
 그것이 이 설정이 막으려는 "먼저 부른 쪽이 owner" 이기 때문이다([코어 0.3.3 이행 설계](workspace-sandbox-core-033.md) §5.2). 그러면 레코드가 없을 때(`InMemory` 재시작, 툼스톤 만료 뒤) 세션 id 를 아는 다른 주체가 먼저 불러도
 owner 는 세션 소유자로 정해지고, 그 주체는 검사에서 막힌다. 단일 테넌트 배포에서 빈이 없으면 요청 주체를 owner 로
 쓴다 — 먼저 부른 쪽이 owner 가 되는 약점을 받아들이는 구성이다. CLOSED 레코드는 `closedRetention` 동안 툼스톤으로 남아

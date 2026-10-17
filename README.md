@@ -68,8 +68,11 @@ SessionSpec.builder().lifecycleListener(sandbox.sessionLifecycleListener());   /
 - **Session owners come from core.** With `sessionRecords(...)`, the owner core recorded for a session — set by
   `SubmitRequest.owner(...)` on the submit that creates it — owns its `ws:{sessionId}` workspace and its options. A
   host whose older sessions were created without an owner keeps its `SessionOwnerLookup` too; it is asked only for
-  those. With `require-principal` on, a session no source knows the owner of gets no sandbox: there is no fallback to
-  "whoever calls first". Each main-turn bind loads the session's record once.
+  those. Once any owner source is wired, a session no source knows the owner of gets no sandbox — with or without
+  `require-principal`: there is no fallback to "whoever calls first". So a host that wires `sessionRecords(...)`
+  before it sets `SubmitRequest.owner(...)` gets an unavailable environment on every main turn, its older sessions'
+  included, until it sets the owner or keeps a `SessionOwnerLookup` that answers for them. Each main-turn bind loads
+  the session's record once.
 - **Register the session lifecycle listener.** When core's session router deletes a session, it removes the
   session's sandbox options and closes and deletes its `ws:{sessionId}` workspace (a managed workspace it was attached
   to is shared and stays). Only the deleting node hears of it, which is enough: everything it removes is in the

@@ -30,7 +30,9 @@ which `scripts/release.sh` refuses to release
   session — set by `SubmitRequest.owner(...)` on the submit that creates it — is the session's owner for its
   `ws:{sessionId}` workspace and its options, with a `SessionOwnerLookup`, when also wired, asked only for sessions
   recorded without one. `SessionOwnerLookup.recorded(...)` and `orElse(...)` compose the same by hand. It satisfies
-  `require-principal` on its own. Under `require-principal`, a session no source knows the owner of gets no sandbox.
+  `require-principal` on its own. Once any owner source is wired, a session no source knows the owner of gets no
+  sandbox, with or without `require-principal`: wiring `sessionRecords(...)` without setting `SubmitRequest.owner(...)`
+  refuses every main turn, older sessions included, unless a `SessionOwnerLookup` answers for them.
 - **`WorkspaceSandbox.sessionLifecycleListener()`** (`SandboxSessionCleanup`): register it with core's session
   router (`SessionRouterBuilder.lifecycleListener`, `SessionSpec.Builder.lifecycleListener`, or a Spring bean). On a
   delete it removes the session's options and closes and deletes its `ws:{sessionId}` workspace, without
