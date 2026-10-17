@@ -1247,15 +1247,15 @@ public final class SandboxWorkspaceManager {
     /**
      * Deletes a session's options record outright, {@code lastWorkspaceId} included: the administrator's cleanup for a
      * session deleted outside core's router, which fires no {@code SessionLifecycleListener}. Such a session may be
-     * unknown to every owner source by now, so an unknown owner does not stop the delete; the event then names the
-     * record's {@code setBy}.
+     * unknown to every owner source by now, and a single-tenant host has none at all — yet a request attribute can
+     * still leave a {@code lastWorkspaceId} record behind there — so the owner only names the event: unknown, the
+     * event names the record's {@code setBy}.
      */
     private void deleteSessionOptions(SessionId session, Acting acting) {
         Objects.requireNonNull(session, "session must not be null");
-        if (sessionOwners == null) {
-            throw new BindingRejectedException("session options need a session owner lookup (SessionOwnerLookup)");
-        }
-        final Optional<WorkspaceOwner> knownOwner = sessionOwners.ownerOf(session).map(callers::ownerOf);
+        final Optional<WorkspaceOwner> knownOwner = sessionOwners == null
+                ? Optional.empty()
+                : sessionOwners.ownerOf(session).map(callers::ownerOf);
         for (int attempt = 0; attempt <= settings.casRetries(); attempt++) {
             final Optional<SessionSandboxOptions> current = sessionOptions.find(session);
             if (current.isEmpty()) {

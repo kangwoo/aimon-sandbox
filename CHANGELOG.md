@@ -62,7 +62,8 @@ which `scripts/release.sh` refuses to release
 
 - **`SandboxWorkspaces.deleteSessionOptions` is removed** (it was added in this cycle, never released). Register the
   lifecycle listener instead; for sessions deleted outside the router, use `SandboxAdministration.deleteSessionOptions`
-  — which no longer needs the owner source to still know the session — or rely on the janitor's sweep.
+  — which needs no owner source at all any more, so it also removes the `lastWorkspaceId` record a request attribute
+  leaves on a single-tenant host — or rely on the janitor's sweep.
 - **`CloseCause` has a third constant**: an exhaustive `switch` over it needs a branch for `SESSION_DELETED`. A store
   that persists the enum by name needs nothing.
 - **A custom `SessionOptionsStore` must implement `sessions(...)`**; run the updated contract.

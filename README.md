@@ -178,8 +178,8 @@ admin.terminateSlot(workspaceId, "primary", operator);   // the next use provisi
   it only behind your own operator authorization, and never hand it to ordinary callers.
 - **Every write records the actor** on its `SandboxEvent` (`actor()`), so the audit log tells operator actions apart.
 - An operator can attach a session only to a workspace the session's owner may use, and needs an owner source
-  (`sessionRecords(...)` or a `SessionOwnerLookup`) for it too. Deleting a session's options needs one wired, but not
-  that it still knows the session.
+  (`sessionRecords(...)` or a `SessionOwnerLookup`) for it too. Deleting a session's options needs no owner source:
+  the session may be unknown by now, and a single-tenant host placing turns by request attribute has none.
 
 ## Build
 

@@ -751,8 +751,9 @@ the first table.
 
 - **The operator's `deleteSessionOptions` could not clean up a session deleted outside the router (§2.3, §8).** It ran
   `requireSessionOwner`, which with `sessionRecords(...)` alone answers "unknown session" for exactly the sessions it
-  is kept for. It now needs an owner source to be wired, but not to know the session; the event then names the
-  record's `setBy`. The owner-facing set, clear and view keep the full check.
+  is kept for. It now needs no owner source at all — neither wired nor knowing the session (PR #27 review: row 0 leaves
+  a `lastWorkspaceId` record on a single-tenant host too, where nothing else could remove it); the event then names
+  the record's `setBy`. The owner-facing set, clear and view keep the full check.
 - **`recordLastWorkspace` (§3.4 (b)) is two methods.** The environment calls the public, internal
   `recordLastWorkspaceLater(session, OptionalLong, workspace, setBy)`, which hands the write to the background
   executor; the write itself is package-private. A silent switch recorded at the first connect goes the same way.

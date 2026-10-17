@@ -7,6 +7,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.Set;
 
 import org.junit.jupiter.api.AfterEach;
@@ -376,5 +377,26 @@ class SandboxAdministrationTest {
         assertThat(harness.sessionOptions.find(session)).isEmpty();
         assertThat(events(SandboxEvent.Type.SESSION_OPTIONS_CLEARED)).last()
                 .satisfies(e -> assertThat(e.actor()).contains("SERVICE:ops-console"));
+    }
+
+    @Test
+    @DisplayName("PR #27 review: without any owner source the operator still deletes a request attribute's record")
+    void theOperatorDeletesABookkeepingRecordWithoutAnOwnerSource() {
+        final SessionId session = SessionId.generate();
+        final WorkspaceOwner caller = WorkspaceOwner.of(TenantId.of("t1"), ALICE);
+        try (SandboxHarness single = SandboxHarness.builder().tenantResolver(BY_PREFIX).build()) {
+            single.sessionOptions.put(SessionSandboxOptions.builder().session(session).setBy(caller)
+                    .lastWorkspaceId(SandboxWorkspaceId.of("wsm:pinned")).updatedAt(single.clock.instant()).build(),
+                    OptionalLong.empty());
+
+            SandboxAdministration.of(single.sandbox).deleteSessionOptions(session, OPERATOR);
+
+            assertThat(single.sessionOptions.find(session)).isEmpty();
+            assertThat(single.events).filteredOn(e -> e.type() == SandboxEvent.Type.SESSION_OPTIONS_CLEARED)
+                    .singleElement().satisfies(e -> {
+                        assertThat(e.actor()).contains("SERVICE:ops-console");
+                        assertThat(e.owner()).as("no owner source: the record's setBy").isEqualTo(caller);
+                    });
+        }
     }
 }
