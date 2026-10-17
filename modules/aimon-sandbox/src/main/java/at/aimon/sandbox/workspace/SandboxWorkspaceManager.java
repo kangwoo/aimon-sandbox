@@ -1328,7 +1328,8 @@ public final class SandboxWorkspaceManager {
             WorkspaceOwner setBy) {
         try {
             if (expectedVersion.isEmpty()) {
-                if (sessionRecords != null && !sessionRecords.get().exists(session)) {
+                final Optional<SessionRecordStore> records = sessionRecords();
+                if (records.isPresent() && !records.get().exists(session)) {
                     log.debug("Session {} no longer exists; its last workspace is not recorded", session.value());
                     return;
                 }
