@@ -52,6 +52,10 @@ public final class SandboxWorkspaces {
      * lost
      * the response finds it by {@link #list} (name, creation time).
      *
+     * <p>
+     * With {@code require-principal} off, a call without a principal creates an {@code anonymous}-owned workspace,
+     * which every other principal-less caller may use and manage — single-tenant semantics.
+     *
      * @param request
      *            name, profile and access
      * @param caller
@@ -132,7 +136,8 @@ public final class SandboxWorkspaces {
 
     /**
      * Clears a session's attachment and rule: its next turn falls back to the agent default or the unattached rule,
-     * and hears that it moved. Hosts call this — or {@code SessionOptionsStore.delete} — when they delete a session.
+     * and hears that it moved — so a small record of where it last ran is kept. To remove the record too, when the
+     * session itself is deleted, call {@link #deleteSessionOptions}.
      *
      * @param session
      *            the session
@@ -141,6 +146,20 @@ public final class SandboxWorkspaces {
      */
     public void clearSessionOptions(SessionId session, Principal caller) {
         manager.clearSessionOptions(session, caller);
+    }
+
+    /**
+     * Deletes a session's options record outright. Hosts call this when they delete the session — before their
+     * {@code SessionOwnerLookup} forgets it, since the same right applies — or the record stays until its workspace is
+     * purged, and a record of where the session last ran stays for good.
+     *
+     * @param session
+     *            the session
+     * @param caller
+     *            the session's owner
+     */
+    public void deleteSessionOptions(SessionId session, Principal caller) {
+        manager.deleteSessionOptions(session, caller);
     }
 
     /**

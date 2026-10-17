@@ -13,7 +13,8 @@ import at.aimon.core.agent.session.SessionId;
  *
  * <p>
  * The two session types ({@link Type#SESSION_OPTIONS_SET}, {@link Type#SESSION_OPTIONS_CLEARED}) carry the
- * {@link #session()} and may lack a workspace and an owner; every other type has both.
+ * {@link #session()} and the session's owner, and may lack a workspace: read it with {@link #workspace()}. Every other
+ * type has one, so {@link #workspaceId()} — kept for listeners written against 0.1.0 — answers for all of them.
  */
 public final class SandboxEvent {
 
@@ -46,7 +47,7 @@ public final class SandboxEvent {
         /** A session's sandbox options were cleared. */
         SESSION_OPTIONS_CLEARED;
 
-        /** @return whether this is one of the session types, which may lack a workspace and an owner */
+        /** @return whether this is one of the session types, which may lack a workspace */
         public boolean isSessionType() {
             return this == SESSION_OPTIONS_SET || this == SESSION_OPTIONS_CLEARED;
         }
@@ -65,14 +66,13 @@ public final class SandboxEvent {
 
     private SandboxEvent(Builder builder) {
         this.type = Objects.requireNonNull(builder.type, "type must not be null");
-        if (!type.isSessionType()) {
-            Objects.requireNonNull(builder.workspaceId, "workspaceId must not be null");
-            Objects.requireNonNull(builder.owner, "owner must not be null");
-        } else {
+        if (type.isSessionType()) {
             Objects.requireNonNull(builder.session, "session must not be null");
+        } else {
+            Objects.requireNonNull(builder.workspaceId, "workspaceId must not be null");
         }
         this.workspaceId = builder.workspaceId;
-        this.owner = builder.owner;
+        this.owner = Objects.requireNonNull(builder.owner, "owner must not be null");
         this.session = builder.session;
         this.actor = builder.actor;
         this.slot = builder.slot;
@@ -92,14 +92,27 @@ public final class SandboxEvent {
         return type;
     }
 
-    /** @return the workspace; always present except, possibly, for the session types */
-    public Optional<SandboxWorkspaceId> workspaceId() {
+    /**
+     * @return the workspace
+     * @throws IllegalStateException
+     *             for a session event that names no workspace (a rule-only set, or a clear of one); use
+     *             {@link #workspace()} for those types
+     */
+    public SandboxWorkspaceId workspaceId() {
+        if (workspaceId == null) {
+            throw new IllegalStateException(type + " for session " + session.value() + " names no workspace");
+        }
+        return workspaceId;
+    }
+
+    /** @return the workspace; empty only for a session event that names none */
+    public Optional<SandboxWorkspaceId> workspace() {
         return Optional.ofNullable(workspaceId);
     }
 
-    /** @return the workspace's owner; always present except, possibly, for the session types */
-    public Optional<WorkspaceOwner> owner() {
-        return Optional.ofNullable(owner);
+    /** @return the workspace's owner — for the session types, the session's owner */
+    public WorkspaceOwner owner() {
+        return owner;
     }
 
     /** @return the session, for the session types */

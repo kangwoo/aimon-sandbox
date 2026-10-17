@@ -101,7 +101,8 @@ workspaces.purge(ws.id(), alice);                                               
   failed first provisioning keeps the workspace and throws `WorkspaceProvisioningException` with its id: retry with
   `provision(id)` or `purge` it. One owner holds at most `max-managed-per-owner` (20) managed workspaces.
 - **Session options need a `SessionOwnerLookup`**: only a session's owner sets them, to a workspace that owner may
-  use. Delete them with the session (`clearSessionOptions`), or they stay until the workspace is purged.
+  use. `clearSessionOptions` detaches a session but keeps a small record of where it last ran; when you delete the
+  session, call `deleteSessionOptions` (while your lookup still knows it), or that record stays.
 - **An agent default**: a definition's `attributes: { sandbox: { workspace: wsm:…, unattached: reject } }` binds every
   session of that agent that is not attached elsewhere, and `reject` refuses unattached sessions a sandbox. The
   `unattached` setting is the floor; a definition and a session's own option can only tighten it. Writing

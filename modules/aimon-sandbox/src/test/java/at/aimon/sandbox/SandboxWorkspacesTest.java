@@ -107,7 +107,7 @@ class SandboxWorkspacesTest {
         assertThat(harness.local.sandboxCount()).isOne();
         assertThat(harness.events).filteredOn(e -> e.type() == SandboxEvent.Type.WORKSPACE_CREATED).singleElement()
                 .satisfies(e -> {
-                    assertThat(e.workspaceId()).contains(view.id());
+                    assertThat(e.workspace()).contains(view.id());
                     assertThat(e.actor()).contains("default/USER:alice");
                 });
     }
@@ -416,7 +416,7 @@ class SandboxWorkspacesTest {
         assertThat(harness.events).filteredOn(e -> e.type().isSessionType()).hasSize(2).allSatisfy(e -> {
             assertThat(e.session()).contains(session);
             assertThat(e.actor()).contains("default/USER:alice");
-            assertThat(e.workspaceId()).contains(view.id());
+            assertThat(e.workspace()).contains(view.id());
         });
     }
 
@@ -522,5 +522,169 @@ class SandboxWorkspacesTest {
 
         assertThatThrownBy(() -> workspaces().setSessionOptions(session,
                 SessionSandboxOptions.Update.rule(UnattachedRule.REJECT), ALICE)).hasMessageContaining("busy");
+    }
+
+    // ----------------------------------------------------------------------------------------------------------------
+    // review of PR 1
+    // ----------------------------------------------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("review M1: owner() is always set, workspaceId() keeps its 0.1.0 signature, workspace() may be empty")
+    void sessionEventsKeepTheOldAccessors() {
+        workspaces().setSessionOptions(session, SessionSandboxOptions.Update.rule(UnattachedRule.REJECT), ALICE);
+
+        final SandboxEvent set = harness.events.stream().filter(e -> e.type() == SandboxEvent.Type.SESSION_OPTIONS_SET)
+                .findFirst().orElseThrow();
+        assertThat(set.owner()).isEqualTo(WorkspaceOwner.of(TenantId.DEFAULT, ALICE));
+        assertThat(set.workspace()).isEmpty();
+        assertThatThrownBy(set::workspaceId).isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("names no workspace");
+        assertThatThrownBy(() -> SandboxEvent.builder().type(SandboxEvent.Type.SESSION_OPTIONS_SET).session(session)
+                .cause("x").at(harness.clock.instant()).build()).hasMessageContaining("owner");
+    }
+
+    @Test
+    @DisplayName("review M1: a listener that fails to link does not fail the provisioning it hears of")
+    void aMislinkedListenerDoesNotFailTheTransition() {
+        harness.close();
+        harness = SandboxHarness.builder().listener(event -> {
+            throw new NoSuchMethodError("SandboxEvent.owner()Lat/aimon/sandbox/workspace/WorkspaceOwner;");
+        }).build();
+
+        final WorkspaceView view = workspaces().create(CreateWorkspace.named("linked"), ALICE);
+
+        assertThat(view.slot("primary").orElseThrow().state()).isEqualTo(SlotState.RUNNING);
+        assertThat(harness.events).extracting(SandboxEvent::type).contains(SandboxEvent.Type.PROVISIONED);
+    }
+
+    @Test
+    @DisplayName("review M2: a store that ignores the owner and origin filters shows nobody else's workspaces")
+    void aStoreIgnoringTheNewFiltersCannotLeakWorkspaces() {
+        harness.close();
+        harness = SandboxHarness.builder().settings(s -> s.maxManagedPerOwner(2))
+                .store(new DelegatingStore(new InMemorySandboxWorkspaceStore()) {
+                    @Override
+                    public List<SandboxWorkspace> scan(WorkspaceScan scan) {
+                        // A 0.1.0-era store: states, tenant, times and the page only.
+                        return delegate
+                                .scan(WorkspaceScan.builder().states(scan.states()).tenant(scan.tenant().orElse(null))
+                                        .afterId(scan.afterId().orElse(null)).limit(scan.limit()).build());
+                    }
+                }).build();
+        workspaces().create(CreateWorkspace.named("bob 1"), BOB);
+        workspaces().create(CreateWorkspace.named("bob 2"), BOB);
+        final WorkspaceView mine = workspaces().create(CreateWorkspace.named("alice"), ALICE);
+
+        assertThat(workspaces().list(ALICE, WorkspaceQuery.builder().build()).items()).extracting(WorkspaceView::id)
+                .containsExactly(mine.id());
+        assertThat(workspaces().create(CreateWorkspace.named("alice 2"), ALICE).owner())
+                .as("bob's workspaces do not count toward alice's limit")
+                .isEqualTo(WorkspaceOwner.of(TenantId.DEFAULT, ALICE));
+    }
+
+    @Test
+    @DisplayName("review m1: an unprovisioned managed workspace's descriptor declares the profile it was created with")
+    void theDescriptorFollowsTheCreatedWithProfile() {
+        harness.close();
+        harness = SandboxHarness.builder().sessionOwnerLookup(SandboxWorkspacesTest::owner)
+                .profile(SandboxTestProfiles.local("standard").build())
+                .profile(SandboxTestProfiles.local("big").backgroundCommandTimeout(Duration.ofMinutes(7)).build())
+                .build();
+        harness.faults.injectOnce(Operation.CREATE, Fault.fail(SandboxProviderException.Kind.TRANSIENT));
+        final SandboxWorkspaceId id = catchThrowableOfType(WorkspaceProvisioningException.class,
+                () -> workspaces().create(CreateWorkspace.builder().name("big").profile("big").build(), ALICE))
+                .workspaceId();
+        harness.store.update(id, record(id).version(), record(id).toBuilder().slots(Map.of()).build());
+        workspaces().setSessionOptions(session, SessionSandboxOptions.Update.attach(id), ALICE);
+
+        final at.aimon.core.environment.ExecutionEnvironment turn = harness.mainTurn(session, ALICE);
+        assertThat(turn.descriptor().notes().orElseThrow()).contains("profile 'big'");
+        assertThat(turn.backgroundCommandTimeout()).contains(Duration.ofMinutes(7));
+    }
+
+    @Test
+    @DisplayName("review m4: deleteSessionOptions removes the record, lastWorkspaceId and all")
+    void deleteSessionOptionsRemovesTheRecord() {
+        final WorkspaceView view = workspaces().create(CreateWorkspace.named("forget"), ALICE);
+        workspaces().setSessionOptions(session, SessionSandboxOptions.Update.attach(view.id()), ALICE);
+        workspaces().clearSessionOptions(session, ALICE);
+        assertThat(harness.sessionOptions.find(session)).isPresent();
+
+        assertThatThrownBy(() -> workspaces().deleteSessionOptions(session, BOB))
+                .hasMessageContaining("only the owner");
+        workspaces().deleteSessionOptions(session, ALICE);
+        workspaces().deleteSessionOptions(session, ALICE);
+
+        assertThat(harness.sessionOptions.find(session)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("review m6: provision accepts a primary slot that a definition's sandbox.profile built first")
+    void provisionAcceptsTheSlotsOwnProfile() throws Exception {
+        harness.close();
+        harness = SandboxHarness.builder().sessionOwnerLookup(SandboxWorkspacesTest::owner)
+                .profile(SandboxTestProfiles.local("standard").build())
+                .profile(SandboxTestProfiles.local("other").build()).build();
+        harness.faults.injectOnce(Operation.CREATE, Fault.fail(SandboxProviderException.Kind.TRANSIENT));
+        final SandboxWorkspaceId id = catchThrowableOfType(WorkspaceProvisioningException.class,
+                () -> workspaces().create(CreateWorkspace.named("first"), ALICE)).workspaceId();
+        harness.store.update(id, record(id).version(), record(id).toBuilder().slots(Map.of()).build());
+        SandboxHarness.bash(harness.resolve(at.aimon.core.environment.EnvironmentRequest.builder()
+                .agentRuntimeId(SandboxHarness.RUNTIME).sessionId(session).principal(ALICE)
+                .agent(at.aimon.core.agent.DefaultAgent.builder().name("other").systemPrompt("p")
+                        .model(at.aimon.core.llm.LlmModel.builder().name("m").build())
+                        .attributes(Map.of(at.aimon.sandbox.binding.SlotChoice.WORKSPACE_ATTRIBUTE, id.value(),
+                                at.aimon.sandbox.binding.SlotChoice.PROFILE_ATTRIBUTE, "other"))
+                        .build())
+                .build()), "true");
+        assertThat(record(id).slot("primary").orElseThrow().profile()).isEqualTo("other");
+
+        assertThat(workspaces().provision(id, ALICE).slot("primary").orElseThrow().state())
+                .isEqualTo(SlotState.RUNNING);
+        workspaces().close(id, ALICE);
+        assertThat(workspaces().reopen(id, ALICE).slot("primary").orElseThrow().profile()).isEqualTo("other");
+    }
+
+    @Test
+    @DisplayName("review m7: a recorded failure that quotes the provider's sandbox id shows only its hash")
+    void aRecordedFailureCarriesNoRawSandboxId() {
+        final String[] created = new String[1];
+        harness.close();
+        harness = SandboxHarness.builder().decorate((provider, clock) -> new DelegatingProvider(provider) {
+            @Override
+            public at.aimon.sandbox.provider.ProviderSandboxRef create(at.aimon.sandbox.provider.CreateSpec spec) {
+                final at.aimon.sandbox.provider.ProviderSandboxRef ref = super.create(spec);
+                created[0] = ref.sandboxId();
+                return ref;
+            }
+
+            @Override
+            public Optional<at.aimon.sandbox.provider.ProviderSandbox> status(
+                    at.aimon.sandbox.provider.ProviderSandboxRef ref) {
+                throw new SandboxProviderException("sandbox " + ref.sandboxId() + " is not ready",
+                        SandboxProviderException.Kind.TRANSIENT, null);
+            }
+        }).build();
+
+        final WorkspaceProvisioningException failed = catchThrowableOfType(WorkspaceProvisioningException.class,
+                () -> workspaces().create(CreateWorkspace.named("leaky"), ALICE));
+        final WorkspaceView view = workspaces().describe(failed.workspaceId(), ALICE).orElseThrow();
+
+        assertThat(view.slot("primary").orElseThrow().failure().orElseThrow().message()).contains("is not ready")
+                .doesNotContain(created[0]);
+        assertThat(strings(view)).noneMatch(s -> s.contains(created[0]));
+        assertThat(failed.getMessage()).doesNotContain(created[0]);
+    }
+
+    @Test
+    @DisplayName("review m10: an empty update is a clear and keeps no empty record")
+    void anEmptyUpdateIsAClear() {
+        workspaces().setSessionOptions(session, SessionSandboxOptions.Update.rule(UnattachedRule.REJECT), ALICE);
+
+        workspaces().setSessionOptions(session, SessionSandboxOptions.Update.of(null, null), ALICE);
+
+        assertThat(harness.sessionOptions.find(session)).isEmpty();
+        workspaces().setSessionOptions(session, SessionSandboxOptions.Update.of(null, null), ALICE);
+        assertThat(harness.sessionOptions.find(session)).isEmpty();
     }
 }

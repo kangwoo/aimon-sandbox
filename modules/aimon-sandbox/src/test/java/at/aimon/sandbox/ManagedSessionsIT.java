@@ -258,4 +258,53 @@ class ManagedSessionsIT {
                 .contains(second.value());
         assertThat(bash(harness.mainTurn(session, ALICE), "true").notices()).isEmpty();
     }
+
+    @Test
+    @DisplayName("review m2: a hook's result does not take the switch notice; the model's next command does")
+    void aHookDoesNotConsumeTheSwitchNotice() throws Exception {
+        final SandboxWorkspaceId id = create("hooked");
+        attach(id);
+        final ExecutionEnvironment turn = harness.mainTurn(session, ALICE);
+
+        final ShellCommandResult hook = bash(turn, "true", at.aimon.core.shell.ExecutionOptions.builder()
+                .timeout(java.time.Duration.ofSeconds(20)).hook(true).build());
+
+        assertThat(hook.notices()).isEmpty();
+        assertThat(harness.sessionOptions.find(session).orElseThrow().lastWorkspaceId()).isEmpty();
+        assertThat(bash(turn, "true").notices()).singleElement().asString().contains(id.value());
+        assertThat(harness.sessionOptions.find(session).orElseThrow().lastWorkspaceId()).contains(id);
+    }
+
+    @Test
+    @DisplayName("review m3: a rule-only record under an agent default announces no move")
+    void aRuleOnlyRecordUnderAnAgentDefaultIsSilent() throws Exception {
+        final SandboxWorkspaceId id = create("agent default");
+        final java.util.function.Supplier<ExecutionEnvironment> turn = () -> harness.resolve(
+                EnvironmentRequest.builder().agentRuntimeId(SandboxHarness.RUNTIME).sessionId(session).principal(ALICE)
+                        .agent(DefaultAgent.builder().name("helper").systemPrompt("p")
+                                .model(LlmModel.builder().name("m").build())
+                                .attributes(Map.of(SlotChoice.WORKSPACE_ATTRIBUTE, id.value())).build())
+                        .build());
+        bash(turn.get(), "true");
+
+        workspaces().setSessionOptions(session, SessionSandboxOptions.Update.rule(UnattachedRule.REJECT), ALICE);
+
+        assertThat(bash(turn.get(), "true").notices()).isEmpty();
+        assertThat(harness.sessionOptions.find(session).orElseThrow().lastWorkspaceId()).contains(id);
+    }
+
+    @Test
+    @DisplayName("review m5: a clear after a turn of file tools only still announces the move back")
+    void aClearAfterFileToolsOnlyStillAnnouncesTheMove() throws Exception {
+        final SandboxWorkspaceId id = create("files only");
+        attach(id);
+        harness.mainTurn(session, ALICE).fileSystem().write("/workspace/repo/edited.txt", "x");
+        assertThat(harness.sessionOptions.find(session).orElseThrow().lastWorkspaceId()).isEmpty();
+
+        workspaces().clearSessionOptions(session, ALICE);
+
+        assertThat(harness.sessionOptions.find(session).orElseThrow().lastWorkspaceId()).contains(id);
+        assertThat(bash(harness.mainTurn(session, ALICE), "true").notices()).singleElement().asString()
+                .contains("ws:" + session.value());
+    }
 }

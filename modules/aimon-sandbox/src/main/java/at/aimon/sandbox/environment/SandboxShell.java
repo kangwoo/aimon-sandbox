@@ -162,7 +162,7 @@ final class SandboxShell implements VirtualShell {
         final ShellCancellation cancellation = options.getCancellation();
         if (cancellation.isCancelled()) {
             // Before connect: a command that is not to run provisions nothing and records no activity.
-            throw cancelledBeforeStart();
+            throw cancelledBeforeStart(options.isHook());
         }
         final ConnectedSlot slot = manager.connect(binding);
         pending.addAll(slot.notices());
@@ -188,7 +188,7 @@ final class SandboxShell implements VirtualShell {
         try (lease) {
             if (cancellation.isCancelled()) {
                 // Tripped while provisioning or waiting for the lock: neither wait is aborted, the command is.
-                throw cancelledBeforeStart();
+                throw cancelledBeforeStart(false);
             }
             return run(slot, text, options, true);
         }
@@ -255,7 +255,8 @@ final class SandboxShell implements VirtualShell {
             return result;
         } catch (SandboxNotFoundException e) {
             slot.activity().markLost();
-            throw new ShellExecutionException(SandboxWorkspaceManager.LOST_MESSAGE, e, "", "", false, pending.drain());
+            throw new ShellExecutionException(SandboxWorkspaceManager.LOST_MESSAGE, e, "", "", false,
+                    options.isHook() ? List.of() : pending.drain());
         } catch (SandboxProviderException e) {
             throw new SandboxUnavailableException("the sandbox cannot be reached: " + e.getMessage(), e);
         } finally {
@@ -299,6 +300,7 @@ final class SandboxShell implements VirtualShell {
         private final long max;
         private final Charset charset;
         private final boolean foreground;
+        private final boolean hook;
         /** The wrapper runs a watchdog, which marks a timeout with {@code .timedout}. */
         private final boolean watched;
         private final boolean ownWorkingDirectory;
@@ -311,6 +313,7 @@ final class SandboxShell implements VirtualShell {
             this.max = max;
             this.charset = charset;
             this.foreground = mode == Mode.FOREGROUND;
+            this.hook = mode == Mode.HOOK;
             this.watched = mode != Mode.BACKGROUND;
             this.ownWorkingDirectory = ownWorkingDirectory;
         }
@@ -335,7 +338,7 @@ final class SandboxShell implements VirtualShell {
         final ExecOutcome outcome;
         try {
             if (cancelled.get()) {
-                throw cancelledBeforeStart();
+                throw cancelledBeforeStart(run.hook);
             }
             final Heartbeat heartbeat = slot.activity().startHeartbeat(!run.foreground,
                     run.foreground ? () -> writeHeartbeat(slot.connection().files(), heartbeatFile) : null, () -> {
@@ -364,7 +367,7 @@ final class SandboxShell implements VirtualShell {
                 }
                 Thread.currentThread().interrupt();
                 throw new ShellExecutionException("the command was interrupted and killed", e, "", "", false,
-                        notices(List.of(KILLED_NOTICE)));
+                        notices(run, List.of(KILLED_NOTICE)));
             } finally {
                 heartbeat.close();
             }
@@ -382,8 +385,7 @@ final class SandboxShell implements VirtualShell {
             throw cancelled(slot.connection().files(), run, outcome);
         }
         if (lost.get()) {
-            throw new ShellExecutionException(SandboxWorkspaceManager.LOST_MESSAGE, null, "", "", false,
-                    pending.drain());
+            throw new ShellExecutionException(SandboxWorkspaceManager.LOST_MESSAGE, null, "", "", false, drain(run));
         }
         return classify(slot, outcome, run, duration);
     }
@@ -402,14 +404,14 @@ final class SandboxShell implements VirtualShell {
             throw timeout(files, run);
         }
         if (run.foreground && outcome.exitCode() == ShellWrapper.LOCK_BUSY_EXIT) {
-            throw new ShellExecutionException(busyLockMessage(slot), null, "", "", false, pending.drain());
+            throw new ShellExecutionException(busyLockMessage(slot), null, "", "", false, drain(run));
         }
         final byte[] stderr = outcome.stderr();
         throw new ShellExecutionException(
                 "the sandbox shell wrapper failed (exit " + outcome.exitCode() + "): "
                         + new String(stderr, run.charset).strip(),
                 null, new String(outcome.stdout(), run.charset), new String(stderr, run.charset),
-                outcome.stdoutTruncated() || outcome.stderrTruncated(), pending.drain());
+                outcome.stdoutTruncated() || outcome.stderrTruncated(), drain(run));
     }
 
     /**
@@ -432,7 +434,7 @@ final class SandboxShell implements VirtualShell {
         final boolean truncated = Long.parseLong(m.group(2)) > run.max || Long.parseLong(m.group(3)) > run.max;
         return Optional
                 .of(new ShellCommandResult(Integer.parseInt(m.group(1)), new String(outcome.stdout(), run.charset),
-                        new String(stderr, 0, marker, run.charset), duration, truncated, notices(extra)));
+                        new String(stderr, 0, marker, run.charset), duration, truncated, notices(run, extra)));
     }
 
     /**
@@ -458,7 +460,7 @@ final class SandboxShell implements VirtualShell {
         final Capture stderr = readRunFile(files, run.prefix + ".err", run).orElse(Capture.EMPTY);
         return new ShellTimeoutException("the command timed out after " + run.timeout.toMillis() + "ms and was killed",
                 run.timeout, stdout.content, stderr.content, stdout.truncated || stderr.truncated,
-                notices(List.of(KILLED_NOTICE)));
+                notices(run, List.of(KILLED_NOTICE)));
     }
 
     /**
@@ -474,11 +476,12 @@ final class SandboxShell implements VirtualShell {
                 ? Capture.EMPTY
                 : new Capture(new String(outcome.stderr(), run.charset), outcome.stderrTruncated()));
         return new ShellCancelledException(CANCELLED_MESSAGE, stdout.content, stderr.content,
-                stdout.truncated || stderr.truncated, notices(List.of(KILLED_NOTICE)));
+                stdout.truncated || stderr.truncated, notices(run, List.of(KILLED_NOTICE)));
     }
 
-    private ShellCancelledException cancelledBeforeStart() {
-        return new ShellCancelledException(CANCELLED_BEFORE_START_MESSAGE, "", "", false, pending.drain());
+    private ShellCancelledException cancelledBeforeStart(boolean hook) {
+        return new ShellCancelledException(CANCELLED_BEFORE_START_MESSAGE, "", "", false,
+                hook ? List.of() : pending.drain());
     }
 
     /** The stop action of a cancellation listener: it runs on someone else's thread and must not throw. */
@@ -506,8 +509,17 @@ final class SandboxShell implements VirtualShell {
                 + "; retry once it finishes";
     }
 
-    private List<String> notices(List<String> extra) {
-        final List<String> all = new ArrayList<>(pending.drain());
+    /**
+     * The pending notices for this run's result. A hook's result takes none: whether core shows it to the model
+     * depends on the hook, so a reset or a workspace switch waits for the model's own next command (management design
+     * §6.4) — and the switch is recorded only once that command carried it.
+     */
+    private List<String> drain(Run run) {
+        return run.hook ? List.of() : pending.drain();
+    }
+
+    private List<String> notices(Run run, List<String> extra) {
+        final List<String> all = new ArrayList<>(drain(run));
         all.addAll(extra);
         return all;
     }

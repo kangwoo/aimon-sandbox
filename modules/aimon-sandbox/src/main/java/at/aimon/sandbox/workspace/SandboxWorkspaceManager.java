@@ -484,9 +484,10 @@ public final class SandboxWorkspaceManager {
         try {
             status = provider.status(ref);
         } catch (SandboxProviderException e) {
-            throw fail(workspace, slot, profile, kindOf(e), "create", e.getMessage(), ref);
+            throw fail(workspace, slot, profile, kindOf(e), "create", redact(e.getMessage(), ref), ref);
         } catch (RuntimeException e) {
-            throw fail(workspace, slot, profile, SlotFailure.Kind.TRANSIENT, "create", String.valueOf(e), ref);
+            throw fail(workspace, slot, profile, SlotFailure.Kind.TRANSIENT, "create", redact(String.valueOf(e), ref),
+                    ref);
         }
         if (status.isEmpty()) {
             throw fail(workspace, slot, profile, SlotFailure.Kind.TRANSIENT, "create",
@@ -506,6 +507,18 @@ public final class SandboxWorkspaceManager {
             return;
         }
         emit(SandboxEvent.Type.PROVISIONED, running.get(), running.get().slot(slot.name()).orElseThrow(), key);
+    }
+
+    /**
+     * A provider's or server's message with the sandbox's raw id replaced by its hash, as {@link ProviderSandboxRef}
+     * prints it: a recorded failure reaches owner-facing views and the model, and the id plus network reach is root in
+     * the sandbox (WS §13.3; management design §5.4).
+     */
+    static String redact(String message, ProviderSandboxRef ref) {
+        if (message == null || ref == null || ref.sandboxId().isEmpty()) {
+            return message;
+        }
+        return message.replace(ref.sandboxId(), "#" + SandboxLabels.h(ref.sandboxId()));
     }
 
     private Optional<SandboxSlot> sameClaim(SandboxWorkspace current, SandboxSlot claimed) {
@@ -563,13 +576,14 @@ public final class SandboxWorkspaceManager {
             activity(workspace, slot, profile).markLost();
             throw new SandboxUnavailableException(LOST_MESSAGE, e);
         } catch (RuntimeException e) {
-            throw new SandboxUnavailableException("the sandbox could not be prepared: " + e.getMessage(), e);
+            throw new SandboxUnavailableException("the sandbox could not be prepared: " + redact(e.getMessage(), ref),
+                    e);
         }
         if (failure.isPresent()) {
             final Instant now = clock.instant();
             final SlotFailure recorded = SlotFailure.builder().at(now).kind(SlotFailure.Kind.PERMANENT)
-                    .step(failure.get().step()).reason(failure.get().reason()).profileHash(profile.contentHash())
-                    .build();
+                    .step(failure.get().step()).reason(redact(failure.get().reason(), ref))
+                    .profileHash(profile.contentHash()).build();
             final Optional<SandboxWorkspace> stored = mutate(workspace.id(),
                     current -> sameGeneration(current, slot)
                             .map(s -> current.withSlot(
@@ -902,13 +916,16 @@ public final class SandboxWorkspaceManager {
         return provision(created.id(), who);
     }
 
-    /** Best effort, like admission: two concurrent creates may both pass. */
+    /**
+     * Best effort, like admission: two concurrent creates may both pass. Each record is checked against the scan
+     * again — a store written before the owner and origin filters existed returns every record.
+     */
     private int countManaged(WorkspaceOwner owner) {
         int count = 0;
         WorkspaceScan scan = WorkspaceScan.builder().owner(owner).origin(WorkspaceOrigin.MANAGED).build();
         while (true) {
             final List<SandboxWorkspace> page = store.scan(scan);
-            count += page.size();
+            count += (int) page.stream().filter(scan::matches).count();
             if (page.size() < scan.limit()) {
                 return count;
             }
@@ -941,8 +958,11 @@ public final class SandboxWorkspaceManager {
     private WorkspaceView provision(SandboxWorkspaceId id, WorkspaceOwner who) {
         final SandboxWorkspace found = store.find(id).orElseThrow(() -> doesNotExist(id));
         checkUse(found, who);
+        // The created-with profile is required only for a slot yet to exist: one a definition's sandbox.profile built
+        // first is accepted as it is, as connect accepts it for a binding that names none.
+        final String required = found.slot(SandboxBinding.PRIMARY).isEmpty() ? found.profile().orElse(null) : null;
         try {
-            provisionSlot(id, SandboxBinding.PRIMARY, found.profile().orElse(null), who);
+            provisionSlot(id, SandboxBinding.PRIMARY, required, who);
         } catch (SandboxUnavailableException e) {
             throw new WorkspaceProvisioningException(id, e);
         }
@@ -1043,11 +1063,13 @@ public final class SandboxWorkspaceManager {
         final List<WorkspaceView> items = new ArrayList<>();
         WorkspaceScan scan = WorkspaceScan.builder().owner(who).origin(query.origin().orElse(null))
                 .states(query.states()).afterId(query.after().orElse(null)).limit(query.limit()).build();
-        // The name prefix is not a store filter: scan on until the page is full or the store is exhausted.
+        // The name prefix is not a store filter: scan on until the page is full or the store is exhausted. Every
+        // record is checked against the scan again, so a store that ignores a filter cannot show another's workspace.
         while (true) {
             final List<SandboxWorkspace> page = store.scan(scan);
             for (SandboxWorkspace workspace : page) {
-                if (query.namePrefix().map(prefix -> workspace.name().orElse("").startsWith(prefix)).orElse(true)) {
+                if (scan.matches(workspace) && query.namePrefix()
+                        .map(prefix -> workspace.name().orElse("").startsWith(prefix)).orElse(true)) {
                     items.add(view(workspace));
                     if (items.size() == query.limit()) {
                         return Page.of(items, workspace.id());
@@ -1086,6 +1108,11 @@ public final class SandboxWorkspaceManager {
      */
     public void setSessionOptions(SessionId session, SessionSandboxOptions.Update update, Principal caller) {
         Objects.requireNonNull(update, "update must not be null");
+        if (update.workspace().isEmpty() && update.unattached().isEmpty()) {
+            // Nothing to set is a clear: no record is kept that holds nothing.
+            clearSessionOptions(session, caller);
+            return;
+        }
         final WorkspaceOwner who = callers.callerOf(Optional.ofNullable(caller));
         final WorkspaceOwner sessionOwner = requireSessionOwner(session, who);
         final Optional<SandboxWorkspaceId> target = update.workspace()
@@ -1134,15 +1161,55 @@ public final class SandboxWorkspaceManager {
             if (current.isEmpty()) {
                 return;
             }
+            final SessionSandboxOptions record = current.get();
+            // Where the session last ran: recorded, else the workspace it is being detached from — a turn of file
+            // tools only never recorded it, and the next turn must still hear that it moved (§6.4).
+            final Optional<SandboxWorkspaceId> last = record.lastWorkspaceId().or(record::workspace);
             try {
-                if (current.get().lastWorkspaceId().isEmpty()) {
-                    sessionOptions.delete(session, current.get().version());
+                if (last.isEmpty()) {
+                    sessionOptions.delete(session, record.version());
                 } else {
-                    sessionOptions.put(current.get().toBuilder().setBy(who).workspace(null).unattached(null)
-                            .updatedAt(clock.instant()).build(), OptionalLong.of(current.get().version()));
+                    sessionOptions.put(record.toBuilder().setBy(who).workspace(null).unattached(null)
+                            .lastWorkspaceId(last.get()).updatedAt(clock.instant()).build(),
+                            OptionalLong.of(record.version()));
                 }
-                emitSession(SandboxEvent.Type.SESSION_OPTIONS_CLEARED, session, current.get().workspace().orElse(null),
+                emitSession(SandboxEvent.Type.SESSION_OPTIONS_CLEARED, session, record.workspace().orElse(null),
                         sessionOwner, who, "cleared");
+                return;
+            } catch (StaleVersionException e) {
+                log.debug("CAS conflict on the options of session {} (attempt {}); re-reading", session.value(),
+                        attempt + 1);
+            }
+        }
+        throw optionsBusy();
+    }
+
+    /**
+     * Deletes a session's options record outright, {@code lastWorkspaceId} included — what a host calls when it
+     * deletes the session (while its {@code SessionOwnerLookup} still knows it). The same rights as
+     * {@link #setSessionOptions}. Absent is success.
+     *
+     * <p>
+     * <b>Internal.</b> Public only for use across this library's packages: not supported API, and it may change in
+     * any release.
+     *
+     * @param session
+     *            the session
+     * @param caller
+     *            the principal asking
+     */
+    public void deleteSessionOptions(SessionId session, Principal caller) {
+        final WorkspaceOwner who = callers.callerOf(Optional.ofNullable(caller));
+        final WorkspaceOwner sessionOwner = requireSessionOwner(session, who);
+        for (int attempt = 0; attempt <= settings.casRetries(); attempt++) {
+            final Optional<SessionSandboxOptions> current = sessionOptions.find(session);
+            if (current.isEmpty()) {
+                return;
+            }
+            try {
+                sessionOptions.delete(session, current.get().version());
+                emitSession(SandboxEvent.Type.SESSION_OPTIONS_CLEARED, session, current.get().workspace().orElse(null),
+                        sessionOwner, who, "deleted");
                 return;
             } catch (StaleVersionException e) {
                 log.debug("CAS conflict on the options of session {} (attempt {}); re-reading", session.value(),
@@ -1437,7 +1504,8 @@ public final class SandboxWorkspaceManager {
     private void publish(SandboxEvent.Type type, SandboxEvent.Builder event) {
         try {
             events.onEvent(event.build());
-        } catch (RuntimeException e) {
+        } catch (RuntimeException | LinkageError e) {
+            // A LinkageError too: a listener built against another version must not fail what it hears of.
             log.warn("SandboxEventListener failed on {}: {}", type, e.getMessage(), e);
         }
     }

@@ -23,6 +23,7 @@ import at.aimon.sandbox.binding.SlotChoice;
 import at.aimon.sandbox.profile.SandboxProfile;
 import at.aimon.sandbox.profile.SandboxProfileRegistry;
 import at.aimon.sandbox.provider.SandboxConnectionCache;
+import at.aimon.sandbox.workspace.SandboxSlot;
 import at.aimon.sandbox.workspace.SandboxWorkspaceManager;
 import at.aimon.sandbox.workspace.SandboxWorkspaceStore;
 import at.aimon.sandbox.workspace.WorkspaceOwner;
@@ -152,7 +153,9 @@ public final class SandboxExecutionEnvironmentProvider implements ExecutionEnvir
     }
 
     /**
-     * The profile the descriptor declares: the required one, else the slot's (one store read), else the default. The
+     * The profile the descriptor declares: the required one, else the slot's (one store read), else — for
+     * {@code primary} of a managed workspace that has no slot yet — the profile it was created with, else the default:
+     * the profile {@code connect} will build (management design §6.1). The
      * background ceiling is read from it too, while the heartbeat limit it defaults to is applied from the connected
      * slot's profile; the two are the same profile on every path that runs a command, because {@code connect}
      * refuses a slot whose profile differs from the required one or was removed.
@@ -164,9 +167,10 @@ public final class SandboxExecutionEnvironmentProvider implements ExecutionEnvir
                     "the definition requires sandbox profile '" + required.get() + "', which is not configured"));
         }
         // A slot whose profile was removed by a redeploy is refused by connect(); the prompt still needs values.
-        return store.find(binding.workspaceId()).flatMap(workspace -> workspace.slot(binding.slot()))
-                .flatMap(slot -> profiles.find(slot.profile()))
-                .orElseGet(() -> profiles.find(profiles.defaultProfileName()).orElseThrow());
+        return store.find(binding.workspaceId())
+                .flatMap(workspace -> workspace.slot(binding.slot()).map(SandboxSlot::profile).or(
+                        () -> SandboxBinding.PRIMARY.equals(binding.slot()) ? workspace.profile() : Optional.empty()))
+                .flatMap(profiles::find).orElseGet(() -> profiles.find(profiles.defaultProfileName()).orElseThrow());
     }
 
     /**

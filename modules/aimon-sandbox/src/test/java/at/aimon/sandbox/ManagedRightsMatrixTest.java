@@ -26,7 +26,8 @@ import at.aimon.sandbox.workspace.WorkspaceState;
 
 /**
  * The rights matrix of management design §9.1: {setSessionOptions, clearSessionOptions, sessionOptions, describe,
- * close, reopen, purge} × {owner, tenant-mate, other tenant, anonymous} × deployment {principal, tenant} × record
+ * provision, connect, close, reopen, purge} × {owner, tenant-mate, other tenant, anonymous} × deployment {principal,
+ * tenant} × record
  * access {absent, principal, tenant}. The expectations are the rules of §6.2 and §6.5 restated, not read back from the
  * code: use follows the effective access, manage and the right over a session are the owner principal's.
  */
@@ -49,7 +50,7 @@ class ManagedRightsMatrixTest {
     }
 
     private enum Operation {
-        SET_SESSION_OPTIONS, CLEAR_SESSION_OPTIONS, SESSION_OPTIONS, DESCRIBE, CLOSE, REOPEN, PURGE
+        SET_SESSION_OPTIONS, CLEAR_SESSION_OPTIONS, SESSION_OPTIONS, DESCRIBE, PROVISION, CONNECT, CLOSE, REOPEN, PURGE
     }
 
     static Stream<Arguments> deploymentsAndAccess() {
@@ -68,7 +69,7 @@ class ManagedRightsMatrixTest {
     void everyOperationFollowsItsRule(WorkspaceAccess deployment, Optional<WorkspaceAccess> access) {
         final SessionId session = SessionId.generate();
         try (SandboxHarness h = SandboxHarness.builder().tenantResolver(BY_PREFIX)
-                .sessionOwnerLookup(id -> id.equals(session) ? Optional.of(ALICE) : Optional.empty())
+                .sessionOwnerLookup(id -> Optional.of(ALICE))
                 .settings(s -> s.workspaceAccess(deployment).allowSharedWorkspaces(true)
                         .maxManagedPerOwner(SandboxSettings.UNLIMITED).maxRunningPerTenant(SandboxSettings.UNLIMITED))
                 .build()) {
@@ -89,7 +90,7 @@ class ManagedRightsMatrixTest {
                             .apply(operation == Operation.REOPEN || operation == Operation.PURGE
                                     ? WorkspaceState.CLOSED
                                     : WorkspaceState.OPEN);
-                    final boolean actual = attempt(workspaces, operation, caller.principal, session, id);
+                    final boolean actual = attempt(h, workspaces, operation, caller.principal, session, id);
                     if (actual != expected) {
                         mismatches
                                 .add(operation + " by " + caller + ": expected " + (expected ? "allowed" : "refused"));
@@ -105,6 +106,8 @@ class ManagedRightsMatrixTest {
             Optional<WorkspaceAccess> access) {
         switch (operation) {
             case DESCRIBE :
+            case PROVISION :
+            case CONNECT :
                 final boolean sameTenant = caller == Caller.OWNER || caller == Caller.TENANT_MATE;
                 return sameTenant && (caller == Caller.OWNER || access.orElse(deployment) == WorkspaceAccess.TENANT);
             case SET_SESSION_OPTIONS :
@@ -118,10 +121,22 @@ class ManagedRightsMatrixTest {
         }
     }
 
-    private static boolean attempt(SandboxWorkspaces workspaces, Operation operation, Principal caller,
-            SessionId session, SandboxWorkspaceId id) {
+    private static boolean attempt(SandboxHarness harness, SandboxWorkspaces workspaces, Operation operation,
+            Principal caller, SessionId session, SandboxWorkspaceId id) {
         if (operation == Operation.DESCRIBE) {
             return workspaces.describe(id, caller).isPresent();
+        }
+        if (operation == Operation.CONNECT) {
+            // A session of the owner's, attached by the owner; the turn runs as the caller (§6.2).
+            final SessionId attached = SessionId.generate();
+            workspaces.setSessionOptions(attached, SessionSandboxOptions.Update.attach(id), ALICE);
+            final Throwable refused = catchThrowable(
+                    () -> SandboxHarness.bash(harness.mainTurn(attached, caller), "true"));
+            if (refused != null) {
+                assertThat(refused).isInstanceOf(ExecutionEnvironmentUnavailableException.class)
+                        .hasMessageContaining("not permitted");
+            }
+            return refused == null;
         }
         final Throwable thrown = catchThrowable(() -> {
             switch (operation) {
@@ -133,6 +148,9 @@ class ManagedRightsMatrixTest {
                     break;
                 case SESSION_OPTIONS :
                     workspaces.sessionOptions(session, caller);
+                    break;
+                case PROVISION :
+                    workspaces.provision(id, caller);
                     break;
                 case CLOSE :
                     workspaces.close(id, caller);

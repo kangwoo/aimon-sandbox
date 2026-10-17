@@ -36,7 +36,9 @@ import at.aimon.sandbox.testkit.ManualClock;
 import at.aimon.sandbox.testkit.ManualScheduler;
 import at.aimon.sandbox.workspace.CreateWorkspace;
 import at.aimon.sandbox.workspace.InMemorySandboxWorkspaceStore;
+import at.aimon.sandbox.workspace.InMemorySessionOptionsStore;
 import at.aimon.sandbox.workspace.SandboxWorkspaceId;
+import at.aimon.sandbox.workspace.SessionOptionsStore;
 import at.aimon.sandbox.workspace.SessionSandboxOptions;
 import at.aimon.sandbox.workspace.SlotState;
 import at.aimon.sandbox.workspace.WorkspaceQuery;
@@ -58,6 +60,7 @@ class ManagedWorkspaceSandboxIT {
 
     private final ManualClock clock = new ManualClock(Instant.now());
     private final ManualScheduler scheduler = new ManualScheduler(clock);
+    private final SessionOptionsStore sessionOptions = new InMemorySessionOptionsStore();
     private OpenSandboxProvider provider;
     private WorkspaceSandbox assembly;
 
@@ -71,8 +74,8 @@ class ManagedWorkspaceSandboxIT {
                 .nodeId("managed-it-" + UUID.randomUUID()).profiles(List.of(profile)).defaultProfile("it")
                 .closeWait(Duration.ofSeconds(20)).build();
         assembly = WorkspaceSandbox.builder().settings(settings).provider(provider)
-                .store(new InMemorySandboxWorkspaceStore()).sessionOwnerLookup(session -> Optional.of(ALICE))
-                .clock(clock).scheduler(scheduler).build();
+                .store(new InMemorySandboxWorkspaceStore()).sessionOptionsStore(sessionOptions)
+                .sessionOwnerLookup(session -> Optional.of(ALICE)).clock(clock).scheduler(scheduler).build();
     }
 
     @AfterEach
@@ -159,10 +162,10 @@ class ManagedWorkspaceSandboxIT {
 
         // The facade clears the attachment on purge; an option left pointing at the id (a failed second step) reads
         // "does not exist" until the janitor's sweep.
-        final SessionSandboxOptions options = assembly.sessionOptionsStore().find(session).orElseThrow();
+        final SessionSandboxOptions options = sessionOptions.find(session).orElseThrow();
         workspaces().purge(id, ALICE);
-        assembly.sessionOptionsStore().put(options.toBuilder().lastWorkspaceId(id).build(),
-                java.util.OptionalLong.of(assembly.sessionOptionsStore().find(session).orElseThrow().version()));
+        sessionOptions.put(options.toBuilder().lastWorkspaceId(id).build(),
+                java.util.OptionalLong.of(sessionOptions.find(session).orElseThrow().version()));
         assertThatThrownBy(() -> bash(mainTurn(session), "true")).hasMessageContaining("does not exist");
         assertThat(assembly.store().find(id)).isEmpty();
     }

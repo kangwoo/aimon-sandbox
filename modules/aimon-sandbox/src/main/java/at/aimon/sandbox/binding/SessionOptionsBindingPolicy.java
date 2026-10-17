@@ -167,8 +167,10 @@ public final class SessionOptionsBindingPolicy implements SandboxBindingPolicy {
     }
 
     /**
-     * §6.4: a session with an options record that lands somewhere else than it last connected carries a switch. The
-     * first record of a session that only set a rule and lands in the delegate's own workspace is recorded silently.
+     * §6.4: a session with an options record that lands somewhere else than it last connected carries a switch. A
+     * record that never attached the session ({@code lastWorkspaceId} and {@code workspace} both empty — it only set a
+     * rule) is recorded silently, whatever row bound it: the session ran where it runs now, under the delegate or the
+     * agent default, before the record existed.
      */
     private static SandboxBinding withSwitch(SandboxBinding binding, SessionSandboxOptions record) {
         final SandboxWorkspaceId to = binding.workspaceId();
@@ -176,7 +178,7 @@ public final class SessionOptionsBindingPolicy implements SandboxBindingPolicy {
         if (from.isPresent() && from.get().equals(to)) {
             return binding;
         }
-        final WorkspaceSwitch change = from.isEmpty() && !binding.mustExist()
+        final WorkspaceSwitch change = from.isEmpty() && record.workspace().isEmpty()
                 ? WorkspaceSwitch.silent(record.session(), to, record.version())
                 : WorkspaceSwitch.announced(record.session(), from.orElse(null), to, record.version());
         return binding.toBuilder().workspaceSwitch(change).build();

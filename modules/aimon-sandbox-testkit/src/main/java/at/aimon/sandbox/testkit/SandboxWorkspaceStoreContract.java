@@ -397,6 +397,24 @@ public abstract class SandboxWorkspaceStoreContract {
         assertThat(store.createIfAbsent(workspace("ws:b", "t")).origin()).isEqualTo(WorkspaceOrigin.DERIVED);
     }
 
+    @Test
+    void managedFieldsSurviveUpdateForEveryAccess() {
+        for (SandboxSettings.WorkspaceAccess access : SandboxSettings.WorkspaceAccess.values()) {
+            final SandboxWorkspace created = store.createIfAbsent(workspace("wsm:" + access, "t").toBuilder()
+                    .origin(WorkspaceOrigin.MANAGED).name("n-" + access).profile("standard").access(access).build());
+
+            final SandboxWorkspace updated = store.update(created.id(), created.version(), created.withSlot(slot(1))
+                    .toBuilder().state(WorkspaceState.CLOSED).closeCause(CloseCause.IDLE).build());
+
+            final SandboxWorkspace read = store.find(created.id()).orElseThrow();
+            assertThat(read).isEqualTo(updated);
+            assertThat(read.origin()).isEqualTo(WorkspaceOrigin.MANAGED);
+            assertThat(read.name()).contains("n-" + access);
+            assertThat(read.profile()).contains("standard");
+            assertThat(read.access()).as("an access mode is kept, never read back as 'none'").contains(access);
+        }
+    }
+
     private List<String> ids(WorkspaceScan scan) {
         return store.scan(scan).stream().map(workspace -> workspace.id().value()).toList();
     }

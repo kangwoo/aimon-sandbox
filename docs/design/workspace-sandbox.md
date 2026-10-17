@@ -1755,7 +1755,8 @@ orphan-destroyed · duplicate-destroyed · volume-deleted · workspace-closed ·
 workspace-purged · session-options-set · session-options-cleared)는
 `SandboxEventListener` 로 내보낸다. 애플리케이션은 그것을 자기 감사 로그로 보낸다. 이벤트는 `workspaceId` · `slot` ·
 `generation` · `owner` · `profile` · 원인을 담고, 주체가 요청한 것에는 `actor`(`tenant/TYPE:id`)를, 세션 옵션 이벤트에는
-`session` 을 담는다. 세션 옵션 이벤트만 `workspaceId` 가 없을 수 있다. 테넌트별 감사는 `owner` 로 가른다.
+`session` 을 담는다. `owner` 는 모든 이벤트에 있다(세션 옵션 이벤트는 세션의 소유자). 워크스페이스가 없을 수 있는 것은 세션
+옵션 이벤트뿐이고, 그것은 `workspace()` 로 읽는다(`workspaceId()` 는 0.1.0 의 형태 그대로다). 테넌트별 감사는 `owner` 로 가른다.
 
 ---
 

@@ -390,8 +390,11 @@ This covers attach, re-attach, clear (falling back to `ws:{sid}` or the agent de
 one rule, and writes only when the workspace actually changed. A session with no options record has never been
 redirected and gets no notice. Forks never carry a switch.
 
-- When `from` is absent and `to` is the delegate's derived id (a record that so far only set `unattached`), the policy
-  records it silently — nothing moved.
+- When `from` is absent and the record has no `workspace` (it so far only set `unattached`), the switch is recorded
+  silently, whatever row bound it — the delegate's derived id or an agent default: nothing moved.
+- A hook command's result takes no pending notice: the switch waits for the model's own next command.
+- `clearSessionOptions` keeps the record with `lastWorkspaceId` set to the workspace it detaches from when none was
+  recorded yet (a turn of file tools only), so the move back is still announced.
 - The `lastWorkspaceId` write happens **after the notice is drained** into a command result (`PendingNotices` drains on
   `Bash`), so a turn that only used file tools leaves it unwritten and the next `Bash` still announces the switch.
 - The write is best-effort: a store error or a lost CAS is logged and never fails the tool call (worst case: the notice
@@ -500,7 +503,7 @@ O(records + sandboxes) per call, uncached — an operator call, not a hot path.
 ### 9.1 Default tier
 
 - **Binding**: `SessionOptionsBindingPolicyTest` — the §6.3 order; the three-layer rule (floor × agent × session,
-  including "agent cannot loosen the floor" and "session can loosen the agent within the floor"); `REJECT`; malformed
+  including "agent cannot loosen the floor" and "session cannot loosen the agent"); `REJECT`; malformed
   and `ws:` defaults; forks untouched. `bindRootKeepsMustExist`, `forkOfAttachedSessionKeepsMustExist`,
   `connectWithMustExistOnMissingRecordCreatesNothing` (store stays empty).
 - **Create**: provisions and returns RUNNING; two creates → two ids; `max-managed-per-owner`; admission refusal keeps
@@ -531,7 +534,8 @@ exist". One documented-behaviour test: a session can read another session's shel
 
 `OrcaRuntimeSandboxE2ETest`: an agent with `sandbox.workspace` runs `Bash` in the pre-created sandbox; session options
 of another workspace override it; with `sandbox.unattached: reject` an unattached session's tool call reports the
-rejection; a session option `per-session` lets it run when the floor allows.
+rejection; a session option `per-session` lets it run where neither the floor nor the agent tightens, and cannot lift
+an agent's `reject`.
 
 ---
 
@@ -642,14 +646,18 @@ smallest change that keeps the design's intent.
 |---|--------|-------|-----|
 | P1 | `Page<T>(items, next?)` (§5.4) | `Page<T, K>`: `next()` is typed by the listing's key (`SessionId` for `byWorkspace`, `SandboxWorkspaceId` for `workspaces` and `list`) | the `after` parameters are typed (§5.2); an untyped cursor would need parsing back into one |
 | P2 | `SessionSandboxOptions.Update` unspecified | replaces both fields (an absent one is cleared) and keeps `lastWorkspaceId`; factories `attach(id)`, `rule(rule)`, `of(id, rule)` | one meaning for "set", no partial-patch ambiguity |
-| P3 | the record's `profile` is the required profile "of rows 1–2 of §6.3" (§6.1) | applied by the manager when it provisions a new `primary` slot and the binding requires none — for every binding to the record | the policy would need a second workspace-store read per bind to learn it; the manager already holds the record. Same result for rows 1–2 |
-| P4 | the policy compares and "records it silently" (§6.4) | the policy never writes: a first rule-only record landing in the delegate's workspace carries a *silent* `WorkspaceSwitch`, which the environment records at its first successful connect; announced switches are recorded once their notice is drained (as designed). A switch carries the options version it was read at, so the write is a CAS on it | one writer of `lastWorkspaceId`, one best-effort path |
-| P5 | §9.1 "session can loosen the agent within the floor"; §9.3 "a session option `per-session` lets it run when the floor allows" | tests assert §6.3 / §14 N4 instead: `strictest(floor, agent, session)` — a session cannot loosen an agent's `reject`. The E2E shows a session `reject` refusing, `per-session` running where neither floor nor agent tightens, and an agent `reject` holding against a session `per-session` | §9.1/§9.3 wording predates review 2's N4; §6.3 is the rule |
+| P3 | the record's `profile` is the required profile "of rows 1–2 of §6.3" (§6.1) | applied by the manager when it provisions a new `primary` slot and the binding requires none — for every binding to the record. The descriptor declares it too while no slot exists, and `provision(id)` requires it only for a slot yet to exist (a slot a definition's `sandbox.profile` built first is accepted) | the policy would need a second workspace-store read per bind to learn it; the manager already holds the record. Same result for rows 1–2 |
+| P4 | the policy compares and "records it silently" (§6.4) | the policy never writes: a record that never attached the session (no `lastWorkspaceId`, no `workspace`) carries a *silent* `WorkspaceSwitch` whatever row bound it, which the environment records at its first successful connect; announced switches are recorded once their notice is drained (as designed). A switch carries the options version it was read at, so the write is a CAS on it | one writer of `lastWorkspaceId`, one best-effort path |
+| P5 | §9.1 "session can loosen the agent within the floor"; §9.3 "a session option `per-session` lets it run when the floor allows" (both texts now corrected) | tests assert §6.3 / §14 N4 instead: `strictest(floor, agent, session)` — a session cannot loosen an agent's `reject`. The E2E shows a session `reject` refusing, `per-session` running where neither floor nor agent tightens, and an agent `reject` holding against a session `per-session` | §9.1/§9.3 wording predates review 2's N4; §6.3 is the rule |
 | P6 | `ManagedWorkspaceSandboxIT` (§9.2): "listed with verdict `OK`", "admin terminate → next command re-provisions" | listed through the owner's `list`; the verdict and admin terminate move to PR 2's IT | `sandboxes()` and `SandboxAdministration.terminateSlot` are PR 2 (§10) |
-| P7 | `clearSessionOptions` deletes `workspace` and `unattached` (§6.2) | as designed, and deletes the record when nothing else is left (no `lastWorkspaceId`) | a record with no field left only costs a read per turn |
+| P7 | `clearSessionOptions` deletes `workspace` and `unattached` (§6.2) | as designed; `lastWorkspaceId` falls back to the workspace being detached from, and only a record with nothing left (a rule-only one) is deleted. An empty `Update` is a clear. A new `deleteSessionOptions(session, caller)` removes the record outright — what a host calls when it deletes the session | a record with no field left only costs a read per turn; a detached session must still hear it moved; hosts need a way to remove the rest |
 | P8 | `purge` of a missing id unspecified | success, like `close` (WS §15) | idempotent retry after a lost response |
 | P9 | new manager entry points (§4.1) | the manager also hosts `setSessionOptions` / `clearSessionOptions` / `sessionOptions` / `describe` / `listOwned` and returns views; it takes the `SessionOwnerLookup` (`Builder.sessionOwners`) and the `SessionOptionsStore` | the use check (`checkUse`) and the gate live there; the facade stays a thin layer PR 2 can share |
 | P10 | `sessionOptions(session, caller)` right unspecified | the right over the session (its owner) — same as set/clear | otherwise a tenant-mate learns where another's session runs |
-| P11 | `SESSION_OPTIONS_*` events "may lack" workspace and owner (§4.1) | they carry the session's owner as `owner` and the attached (or, on clear, previously attached) workspace when there is one | more audit context at no cost; `workspaceId()`/`owner()` are `Optional` for every type |
+| P11 | `SESSION_OPTIONS_*` events "may lack" workspace and owner (§4.1) | `owner()` is always set (the session's owner) and keeps its 0.1.0 signature; `workspaceId()` keeps its signature too and throws `IllegalStateException` on a session event naming no workspace; the new `workspace()` is the `Optional` one. `emit` also swallows a `LinkageError` from a listener | changing return types broke binary compatibility with 0.1.0 listeners (review M1) |
 | P12 | commit order (§10) | `UnattachedRule` lands in commit 1 (the options record holds one), `ManagedIds` in commit 3 (`setSessionOptions` validates with it), `WorkspaceSandbox.Builder.sessionOptionsStore` in commit 2 (the janitor sweep reads it) | each type arrives with its first user |
+| P14 | `listOwned` / `countManaged` trust the store's scan | both re-check every record with `WorkspaceScan.matches` | a store written for 0.1.0 ignores the new owner and origin filters (review M2) |
+| P15 | recorded failure reasons (§5.4: no view carries a sandbox id) | a provider's or server's message is recorded with the created sandbox's raw id replaced by its hash | server error texts may quote the id (review m7) |
+| P16 | a hook's command result | takes no pending notice (a reset or the switch waits for the model's next command) | whether core shows a hook's output to the model depends on the hook (review m2) |
+| P17 | `WorkspaceSandbox` getter for the options store (PR 1 r1) | removed; the store is reached through `workspaces()` (the builder still takes one) | a public store bypasses the right over a session (review m11) |
 | P13 | §9.1 race "notice flip vs re-attach" | a turn bound before a re-attach announces the target it was bound to and loses the `lastWorkspaceId` CAS; the next turn announces the new target once | the running turn keeps its binding (§6.2) |

@@ -154,11 +154,6 @@ public final class WorkspaceSandbox implements AutoCloseable {
         return store;
     }
 
-    /** @return the session options store */
-    public SessionOptionsStore sessionOptionsStore() {
-        return sessionOptions;
-    }
-
     /** @return the configured profiles */
     public SandboxProfileRegistry profiles() {
         return profiles;

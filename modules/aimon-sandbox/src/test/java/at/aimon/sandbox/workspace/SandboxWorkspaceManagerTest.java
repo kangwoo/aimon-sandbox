@@ -266,7 +266,7 @@ class SandboxWorkspaceManagerTest {
         assertThat(provisioned.slot()).contains("primary");
         assertThat(provisioned.generation()).contains(1L);
         assertThat(provisioned.profile()).contains("standard");
-        assertThat(provisioned.owner().orElseThrow().principal()).isEqualTo("USER:alice");
+        assertThat(provisioned.owner().principal()).isEqualTo("USER:alice");
     }
 
     @Test

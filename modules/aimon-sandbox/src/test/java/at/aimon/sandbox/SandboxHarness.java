@@ -70,7 +70,10 @@ public final class SandboxHarness implements AutoCloseable {
                 .settings(builder.profiles.toArray(SandboxProfile[]::new)).closeWait(Duration.ofSeconds(2))).build();
         final WorkspaceSandbox.Builder assembly = WorkspaceSandbox.builder().settings(settings).provider(faults)
                 .store(store).sessionOptionsStore(sessionOptions).clock(clock).scheduler(scheduler)
-                .eventListener(events::add);
+                .eventListener(event -> {
+                    events.add(event);
+                    builder.listener.onEvent(event);
+                });
         if (builder.tenantResolver != null) {
             assembly.tenantResolver(builder.tenantResolver);
         }
@@ -158,6 +161,8 @@ public final class SandboxHarness implements AutoCloseable {
         private SessionOwnerLookup sessionOwnerLookup;
         private SandboxWorkspaceStore store;
         private SessionOptionsStore sessionOptions;
+        private at.aimon.sandbox.workspace.SandboxEventListener listener = event -> {
+        };
         private LocalProcessSandboxProvider local;
         private at.aimon.sandbox.binding.SandboxBindingPolicy bindingPolicy;
 
@@ -196,6 +201,12 @@ public final class SandboxHarness implements AutoCloseable {
 
         public Builder store(SandboxWorkspaceStore store) {
             this.store = store;
+            return this;
+        }
+
+        /** Called after each event is recorded in {@code events}, e.g. to throw from a listener. */
+        public Builder listener(at.aimon.sandbox.workspace.SandboxEventListener listener) {
+            this.listener = listener;
             return this;
         }
 
