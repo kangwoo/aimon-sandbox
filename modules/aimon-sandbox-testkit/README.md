@@ -9,6 +9,8 @@
   (`aimon-sandbox-opensandbox` 의 docker 계층은 `ci-{uuid}`).
 - **`SandboxWorkspaceStoreContract`** — 모든 `SandboxWorkspaceStore` 의 계약 스위트. `InMemory` 가 통과하고, JDBC 저장소
   (6단계)도 같은 스위트를 통과해야 한다.
+- **`SessionOptionsStoreContract`** — 모든 `SessionOptionsStore` 의 계약 스위트(관리 설계 §4.5). 만들기 전용 · CAS put,
+  지운 뒤 version 재사용 없음, `byWorkspace` · `workspaces` 페이징, 멱등 `deleteByWorkspace`.
 - **`LocalProcessSandboxProvider`** — 임시 디렉터리와 로컬 프로세스로 만든 프로바이더. **격리가 없으므로 테스트
   전용이다. 운영에 쓰지 않는다.** `/workspace` 경로를 글자로 바꿔 흉내 내며, 호스트에 `flock`·`rg` 가 없으면 자기
   `PATH` 에만 대역을 둔다(`rg` 대역은 검색하지 않고 실패한다 — `hostHasRipgrep()` 으로 건너뛸 수 있다). 실제 exec 서버처럼

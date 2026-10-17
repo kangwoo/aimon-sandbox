@@ -21,6 +21,11 @@
 - `environment/` — 코어 `ExecutionEnvironmentProvider` 구현: 선언한 서술자, 경로 규칙을 건 파일 시스템, 샌드박스 안 상태
   파일로 cwd·export 를 잇는 셸, 샌드박스 안에서 검증하는 스테이징, `rg --json` 검색
 - `WorkspaceSandbox` — 위를 조립하고 기동 시 설정을 검사하는 어셈블리
+- `SandboxWorkspaces` — `WorkspaceSandbox.workspaces()`: 관리형 워크스페이스를 먼저 만들고(바로 프로비저닝), 세션을 붙이고
+  (`SessionOptionsStore`, 기본 `InMemorySessionOptionsStore` — 단일 노드 전용), close · reopen · purge 한다.
+  `SessionOptionsBindingPolicy` 가 설정된 정책을 감싸 세션 옵션 → 정의의 `sandbox.workspace` → unattached 규칙 순으로 정한다.
+  공유 워크스페이스는 하나의 신뢰 도메인이다 — 붙은 모든 세션이 서로의 파일과 셸 상태를 읽는다.
+  설계는 [`workspace-sandbox-management.md`](../../docs/design/workspace-sandbox-management.md)
 
 아직 없는 것: `primary` 밖의 슬롯 · 공유 볼륨 · seed · 오케스트레이터 도구(5단계), 영속
 저장소(6단계), pause/resume · worktree 격리(7단계). 그런 설정은 조용히 무시하지 않고 기동 시 거부한다. 구현 설계와 설계에서

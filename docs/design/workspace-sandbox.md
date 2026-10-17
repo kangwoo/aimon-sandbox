@@ -222,7 +222,9 @@ OpenSandboxProvider  ──>  OpenSandbox API (/command)  ──>  execd in sand
 
 | 필드 | 뜻 |
 |------|-----|
-| `id` | `SandboxWorkspaceId` — 불투명 문자열. 기본 정책은 루트 세션에서 결정론적으로 만든다(§8.2) |
+| `id` | `SandboxWorkspaceId` — 불투명 문자열. 기본 정책은 루트 세션에서 결정론적으로 만든다(§8.2). 관리형 워크스페이스(`SandboxWorkspaces.create`)는 `wsm:{UUID}` 를 새로 뽑고, 그 id 는 다시 쓰지 않는다([관리 설계](workspace-sandbox-management.md) §3.1) |
+| `origin` | `DERIVED`(`connect` 가 파생 id 로 만든 것, 기본값) · `MANAGED`(`create` 가 만든 것). janitor 는 `MANAGED` 의 CLOSED 레코드를 지우지 않는다(§10.5) |
+| `name`? · `profile`? · `access`? | 관리형만: 사람이 보는 이름(모델에는 보이지 않는다, 유일하지 않다), `create` 가 요구한 프로파일(슬롯이 아직 없어도 남아 `primary` 의 요구 프로파일이 된다), 워크스페이스 자기 접근 모드(없으면 `workspace-access`, §8.3) |
 | `owner` | `WorkspaceOwner` — `(tenantId, principal)`. principal 은 `TYPE:id`(예: `USER:alice`)로 기록한다(§8.3). 바인딩 정책이 정하고(§8.3) 레코드를 만들 때 고정된다. 호출한 실행의 주체가 아니라 **워크스페이스의 소유자**다 |
 | `state` | `OPEN` · `CLOSING` · `CLOSED` |
 | `incarnation` | 레코드를 만들 때와 `reopen` 할 때마다 새로 뽑는 짧은 무작위 id. 샌드박스 키와 공유 볼륨 이름에 들어가, 같은 워크스페이스 id 로 다시 만들어진 워크스페이스가 옛 자원과 섞이지 않게 한다(§6.3, §10.5) |
@@ -234,6 +236,11 @@ OpenSandboxProvider  ──>  OpenSandbox API (/command)  ──>  execd in sand
 | `createdAt` · `lastActivityAt` | |
 
 `SandboxWorkspace` 는 sandbox id 를 "하나" 갖지 않는다. 초안 두 개가 모두 강조한 점이고 그대로 따른다.
+
+세션을 워크스페이스에 붙이는 **세션 옵션**(`SessionSandboxOptions` — 붙은 워크스페이스, 세션 자신의 unattached 규칙,
+마지막으로 접속한 워크스페이스)은 이 레코드에 두지 않고 `SessionOptionsStore` 에 세션별로 따로 둔다. 한 워크스페이스에
+붙는 세션 수에는 상한이 없고, 워크스페이스 레코드는 가장 자주 CAS 되는 문서라 세션과 함께 자라면 안 된다([관리 설계](workspace-sandbox-management.md) §5.2).
+CAS 규칙은 §5.3 과 같다(지운 뒤 다시 만든 레코드가 옛 version 을 쓰지 않는다).
 
 ### 5.2 `SandboxSlot`
 
@@ -641,7 +648,14 @@ public interface SandboxBindingPolicy {
 그래서 프롬프트 인젝션으로 모델이 다른 워크스페이스의 id 를 불러도 닿을 경로가 없다.
 
 정의의 속성은 코어가 정의 파일의 `attributes:` 블록을 점 표기 키로 평탄화한 것이다(`sandbox.slot`,
-`sandbox.profile`). `definitionAttributes()` 는 포크면 서브에이전트의, 아니면 에이전트의 속성을 준다.
+`sandbox.profile`, `sandbox.workspace`, `sandbox.unattached`). `definitionAttributes()` 는 포크면 서브에이전트의, 아니면 에이전트의 속성을 준다.
+
+**설정된 정책은 `SessionOptionsBindingPolicy` 로 감싼다**([관리 설계](workspace-sandbox-management.md) §6.3). 루트 요청은 ① 세션 옵션이 붙인 워크스페이스,
+② 정의의 `sandbox.workspace`(관리형 `wsm:` id 만), ③ 그 밖에는 실효 unattached 규칙 —
+`strictest(설정 unattached, sandbox.unattached, 세션 옵션)` — 이 `per-session` 이면 감싼 정책(기본 정책이면 아래 §8.2)의
+바인딩, `reject` 면 사용 불가 순으로 정한다. ①②의 바인딩은 호출자를 owner 로 쓰고 `mustExist` 다(§10.1 1단계). 각 층은 위의
+층을 조이기만 한다. 그래서 "바인딩을 만드는 것은 정책뿐" 은 그대로다. 세션이 있는 루트 요청은 워크스페이스 저장소 외에
+옵션 저장소를 한 번 읽고, 그 읽기가 실패하면 `per-session` 으로 넘어가지 않고 사용 불가로 답한다.
 
 ### 8.2 기본 정책
 
@@ -676,6 +690,9 @@ workspaceId 를 결정론적으로 만들기 때문에 별도의 세션→워크
 노드로 옮겨가도 같은 id 가 다시 계산된다. 여러 세션에 걸치는 워크스페이스(티켓 하나에 세션 여럿)가
 필요한 애플리케이션은 자기 도메인에서 id 를 찾는 정책을 주입한다. 그 매핑은 애플리케이션의 데이터다.
 
+결정론적 id 가 매핑을 없애는 것은 **파생 워크스페이스**의 이야기다. 관리형 워크스페이스에는 세션 옵션(§5.1) 또는 정의의
+`sandbox.workspace` 로 닿고, 그 때문에 루틴도 `ws:{executionId}` 대신 관리형 워크스페이스에 묶일 수 있다([관리 설계](workspace-sandbox-management.md) §8 D1·D2).
+
 ### 8.3 테넌트 검사
 
 **테넌트는 주입받는다.** 코어 `Principal` 은 `type` 과 `id` 만 가지고 테넌트 필드가 없다. 그래서 애플리케이션이
@@ -703,6 +720,14 @@ owner 는 세션 소유자로 정해지고, 그 주체는 검사에서 막힌다
 
 여러 사용자가 메시지를 넣는 세션에서 `workspace-access: principal`(기본)은 소유자가 아닌 참여자의 턴을 모두 거부한다.
 그런 애플리케이션은 `tenant` 로 낮춘다.
+
+**사용 권한과 관리 권한은 다르다**([관리 설계](workspace-sandbox-management.md) §6.5). **사용**(`connect`, `provision`, `describe`, 세션 옵션의 대상이 되는 것)은
+같은 테넌트이고, 레코드의 `access` — 없으면 `workspace-access` — 가 `tenant` 이거나 principal 이 owner 와 같을 때다.
+**관리**(`close`, `reopen`, `purge`)는 `MANAGED` 레코드면 접근 모드와 상관없이 owner 의 테넌트와 principal 이어야 하고,
+`DERIVED` 레코드면 사용 규칙 그대로다. 레코드의 `access: tenant` 는 공유 결정이라 `principal` 배포에서는
+`allow-shared-workspaces: true` 가 있어야 만들 수 있다(`principal` 로 좁히는 것은 언제나 된다). 세션 옵션을 바꾸는 것은
+워크스페이스가 아니라 **세션에 대한 권한**이다 — `SessionOwnerLookup` 이 답한 세션 소유자만 바꾸고, 그 빈이 없으면 거부한다.
+옵션으로 붙인 세션의 턴도 `connect` 에서 **실행하는** 주체로 다시 검사한다.
 
 **주체가 없거나 시스템 주체인 실행.** 코어에서 `Principal` 은 선택값이고, Spring 스타터의 기본 진입점은 요청을
 `Principal.system()` 으로 제출한다. 그래서 `require-principal: true` 는 "주체가 있다"가 아니라 **"`USER` 또는 `GROUP`
@@ -736,6 +761,11 @@ experiment)` 로 만든 슬롯에 `sandbox.slot: exp-a` 만 적은 서브에이�
 슬롯을 가르는 것은 다음 경우다 — 의존성 충돌, 동시 빌드, 프로파일(네트워크·자격 증명·런타임 클래스)이
 달라야 할 때, 신뢰 도메인이 다를 때, 여러 해법을 병렬로 탐색할 때. 신뢰 도메인이 다르면 **반드시** 가른다.
 같은 샌드박스 안의 모든 실행은 같은 신뢰 도메인이다.
+
+**공유 워크스페이스도 하나의 신뢰 도메인이다**([관리 설계](workspace-sandbox-management.md) §6.5). 여러 주체가 한 `access: tenant` 워크스페이스에 붙거나 많은
+사용자의 세션이 한 에이전트 기본 워크스페이스를 쓰면, 모든 세션이 모든 파일 — `ShellWrapper` 가 명령마다 읽어 들이는
+다른 세션의 `/workspace/.aimon-shell/` 셸 상태까지 — 을 읽고 바꾸며 같은 프로파일 자격 증명을 쓴다. 그래서 주체를 넘는
+공유는 운영자가 고르는 것이다(`principal` 배포에서는 `allow-shared-workspaces`, `tenant` 배포에서는 이미 그렇다).
 
 **슬롯을 가르는 것만으로 신뢰 도메인이 갈리지는 않는다.** `/shared` 를 쓰기로 마운트한 슬롯들은 bare 저장소의
 훅·ref 와 공유 문서를 통해 서로의 실행에 영향을 준다(§11.3). 신뢰 도메인을 가르려면 슬롯을 가르고, 신뢰가 낮은
@@ -927,6 +957,7 @@ INNER:
 ```
 loop (up to casRetries; StaleVersionException -> re-read and start over):
 1. record = store.find(ws) or store.createIfAbsent(new OPEN workspace, owner from binding)
+   -- a mustExist binding (session options, sandbox.workspace) never creates: "does not exist"
 2. owner check (§8.3) -- before anything that depends on the record's state
 3. CLOSED with closeCause=idle -> CAS: reopen (new incarnation), notice "/workspace was reset" (§10.5)
    otherwise record.state != OPEN -> unavailable ("workspace closed")
@@ -989,7 +1020,15 @@ RUNNING 만 보고는 `/workspace/repo` 가 비었는지 알 수 없다. seed �
 명령이 실제로 시작된 뒤부터 센다. 대기가 길어지면 결과에 notice("sandbox provisioned in 94s")를 붙인다.
 
 세션을 여는 시점에 만들지 않는 이유: 많은 세션은 명령을 한 번도 실행하지 않는다. 샌드박스 하나는 수 초의
-기동 시간과 CPU·메모리 예약을 뜻한다.
+기동 시간과 CPU·메모리 예약을 뜻한다. 세션에 대해서는 지금도 그렇다. 관리형 워크스페이스의 `create` 는 요청에 따라
+**바로** 프로비저닝한다 — 레코드를 만든 뒤 같은 상태 기계를 2단계부터, 명령을 실행하지 않는 매니저 내부 경로
+(`provisionSlot`)로 돈다([관리 설계](workspace-sandbox-management.md) §6.1). 실패하면 레코드는 남고(슬롯 FAILED, 또는 admission 거부면 슬롯 없음)
+`provision(id)` 로 다시 시도한다.
+
+**`mustExist` 바인딩은 레코드를 만들지 않는다.** 정책이 파생하지 않은 id — 세션 옵션이나 정의가 이름 붙인 관리형 id — 를
+가리키는 바인딩이다. 레코드가 없으면(`purge` 뒤) 1단계가 `createIfAbsent` 대신 "sandbox workspace <id> does not exist" 로 답하고
+저장소는 그대로다. 그렇지 않으면 지운 관리형 id 가 바인딩한 호출자를 owner 로 다시 생긴다. 환경 제공자가 `toBuilder()` 로
+바인딩을 다시 만들므로 `toBuilder()` 가 이 표시를 옮기고, 포크도 물려받는다.
 
 CAS 가 옛 `SandboxLock` 을 대체한다. 같은 슬롯을 두 노드가 동시에 만들려 하면 한쪽만 `PROVISIONING` 전이에
 성공하고, 다른 쪽은 그 상태를 보고 기다린다. 성공한 쪽이 `create` 중에 죽으면 레코드는 `PROVISIONING` 에
@@ -1049,7 +1088,9 @@ application-scoped 단일 루프(기본 30초)이며 세 일을 한다. 3단계�
 조정)는 5단계에 들어온다. DRIFT 행은 pause 가 생기는 7단계까지 쓰이지 않는다.
 
 1. **idle 집행** — `store.scan` 으로 `pauseAfter`/`terminateAfter`/`closeAfter` 를 넘긴 대상, `closeResumeAfter`
-   (기본 5분) 넘게 CLOSING 에 머문 워크스페이스, 기한이 지난 툼스톤을 찾는다. `provisioning.since` 에서
+   (기본 5분) 넘게 CLOSING 에 머문 워크스페이스, 기한이 지난 툼스톤(`DERIVED` 만 — `MANAGED` 레코드는 `purge` 만 지운다)을
+   찾는다. 이어서 레코드가 없어진 워크스페이스에 아직 붙어 있는 세션 옵션의 연결을 지운다(`purge` 의 두 번째 쓰기가 실패한
+   경우). `provisioning.since` 에서
    `2 × provisionTimeout` 이 지나도록 아무도 넘겨받지 않은 PROVISIONING 슬롯은 버려진 claim 이다 — 같은 claim 인지 다시 읽어
    확인한 뒤 TERMINATED 로 CAS 하고, 죽은 claimer 가 그 키로 만들었을 샌드박스를 destroy 한다. `connect` 의 넘겨받기
    (`provisionTimeout`, §10.1)보다 늦게 잡아, 느리지만 살아 있는 claimer 와 다음 접속이 먼저 처리하게 한다. 전이 CAS 는 **방금 다시 읽은 레코드에서
@@ -1157,6 +1198,13 @@ owner 그대로)하며 "/workspace 가 초기화되었다" notice 를 붙인다.
 `closedRetention` 뒤(보존 볼륨이 있으면 그 기한과 함께) janitor 가 지운다(단계 3 구현 설계 §10 Q1). idle close 로 닫혔거나
 닫히는 중인 워크스페이스를 애플리케이션이 명시적으로 close 하면 원인이 `explicit` 으로 바뀌어 막는 툼스톤이 된다 — 그렇지
 않으면 세션을 끝낸 뒤의 다음 턴이 조용히 자동 reopen 된다.
+
+**`MANAGED` 레코드는 `closedRetention` 으로 지워지지 않는다**([관리 설계](workspace-sandbox-management.md) §6.6). 그 id 는 세션 옵션과 정의가 이름 붙이고 있을 수
+있다. idle close 는 그대로 적용되고(샌드박스를 없애고 레코드는 `CLOSED(idle)`, 다음 사용이 reopen 한다), 영구 삭제는
+소유자의 명시적 `purge` 다 — `MANAGED` 만, CLOSED 일 때만(먼저 close), 읽은 version 으로 `delete`(그 사이 reopen 하면 CAS 가
+지고 아무것도 바뀌지 않는다), `WORKSPACE_PURGED`, 그다음 `deleteByWorkspace(id)`. 두 번째 쓰기가 실패하면 janitor 의 스윕이
+마친다(§10.4). id 를 다시 쓰지 않으므로 두 쓰기 사이에 다른 워크스페이스가 끼어들 수 없다. `DERIVED` 툼스톤은 `purge` 할 수
+없다 — 지우면 그 세션의 다음 턴이 `ws:{sid}` 를 조용히 다시 만든다.
 
 `InMemory` 저장소는 재시작하면 툼스톤도 잃는다. 단일 노드 기본 구성에서는 재시작 뒤 닫힌 세션의 다음 턴이 새
 워크스페이스를 만든다 — 툼스톤을 지켜야 하는 애플리케이션은 영속 저장소를 쓴다(§5.3).
@@ -1525,6 +1573,9 @@ aimon:
     require-principal: true          # multi-tenant: USER/GROUP principals only; needs a tenant resolver (§8.3)
     workspace-access: principal      # principal | tenant (§8.3)
     allowed-system-principals: []    # SYSTEM/SERVICE principal ids that may use sandboxes
+    unattached: per-session          # per-session | reject: the floor of the unattached rule (§8.1)
+    allow-shared-workspaces: false   # may a managed workspace be created with access: tenant (§8.3, §8.4)
+    max-managed-per-owner: 20        # managed workspaces one owner may hold; "unlimited" must be explicit
     provision-timeout: 5m
     orphan-grace: 10m                # must exceed provision-timeout (§10.4)
     failure-backoff: 1m              # first retry delay for transient failures, doubling (§10.1)
@@ -1629,6 +1680,8 @@ aimon:
 - `default-profile` 과 `allowed-profiles` 가 모두 정의된 프로파일이다
 - `insecure-allow` 는 `HARDENED_SECURITY_CONTEXT` · `RUNTIME_CLASS` · `NETWORK_ISOLATION` 만 면제한다
 - `admission.max-running-per-tenant` 는 1 이상이거나 명시한 `unlimited` 다 — 값이 없어서 전부 허용이 되는 경로는 없다
+- `max-managed-per-owner` 도 1 이상이거나 명시한 `unlimited` 다. 세션 옵션에 필요한 `SessionOwnerLookup` 은 기동이 아니라
+  옵션을 쓸 때 검사한다 — 옵션을 쓰지 않는 배포에는 필요 없다
 
 아직 구현되지 않은 기능을 쓰는 프로파일은 조용히 무시하지 않고 **거부한다.** `pause-after`(`PAUSE_RESUME`, 7단계),
 `shared-access` 가 `none` 이 아닌 것(5단계), `seed`(5단계)가 그렇다. 3단계는 `credentials` 도 거부했지만, 4단계가 위의
@@ -1698,9 +1751,11 @@ span 속성: `aimon.sandbox.workspace` · `aimon.sandbox.slot` · `aimon.sandbox
 
 감사는 별도 서브시스템을 만들지 않는다. 명령·파일 쓰기의 감사는 코어의 도구 훅(PostToolUse)과 tracing 이
 이미 남기며, 거기에 위 span 속성이 붙는다. 샌드박스 수명 이벤트(provisioned · paused · terminated · lost ·
-orphan-destroyed · duplicate-destroyed · volume-deleted · workspace-closed · workspace-reopened)는
+orphan-destroyed · duplicate-destroyed · volume-deleted · workspace-closed · workspace-reopened · workspace-created ·
+workspace-purged · session-options-set · session-options-cleared)는
 `SandboxEventListener` 로 내보낸다. 애플리케이션은 그것을 자기 감사 로그로 보낸다. 이벤트는 `workspaceId` · `slot` ·
-`generation` · `owner` · `profile` · 원인을 담는다. 테넌트별 감사는 `owner` 로 가른다.
+`generation` · `owner` · `profile` · 원인을 담고, 주체가 요청한 것에는 `actor`(`tenant/TYPE:id`)를, 세션 옵션 이벤트에는
+`session` 을 담는다. 세션 옵션 이벤트만 `workspaceId` 가 없을 수 있다. 테넌트별 감사는 `owner` 로 가른다.
 
 ---
 
@@ -1734,6 +1789,10 @@ orphan-destroyed · duplicate-destroyed · volume-deleted · workspace-closed ·
 | idle close 뒤의 같은 id | 자동 reopen 으로 새 incarnation 에서 실행하고 "/workspace 가 초기화되었다" notice(§10.5). 그 뒤의 재생성이 실패하면 notice 를 그 에러에 싣는다(§10.1) |
 | `closedRetention` 이 지나 레코드가 지워진 뒤의 같은 id | 새 워크스페이스로 실행한다. notice 없음 — 구별할 레코드가 남지 않는다(§10.5) |
 | 포크의 부모가 없거나 사용 불가 | 포크도 사용 불가. 부모가 있으면 그 원인을 그대로 싣는다(§8.2) |
+| `mustExist` 바인딩의 레코드가 없음(`purge` 뒤, 지운 id 를 이름 붙인 정의) | 사용 불가 — "sandbox workspace <id> does not exist". 레코드를 만들지 않는다(§10.1) |
+| 붙은 워크스페이스도 기본 워크스페이스도 없고 실효 규칙이 `reject` | 사용 불가 — "this session is not attached to a sandbox workspace"(§8.1) |
+| 세션 옵션 저장소를 읽을 수 없음 | 그 세션의 루트 바인딩이 사용 불가. `per-session` 으로 넘어가지 않는다(§8.1) |
+| `sandbox.workspace` 가 `wsm:` id 가 아님 | 사용 불가 — 정의를 이름 붙여 적는다(§8.1) |
 | 세션도 실행 id 도 없는 요청 | 사용 불가 — 워크스페이스를 정할 수 없다(§8.2) |
 | owner 검사 실패(다른 테넌트·다른 사용자) | 사용 불가 · 도구 에러. 워크스페이스가 있다는 사실 외에는 알리지 않는다(§8.3). 없는 id 의 `close` 는 멱등이라 성공이므로, 남의 주체도 "not permitted" 와 성공으로 id 의 존재만은 알 수 있다 — id(`ws:{sessionId}`)는 추측할 수 없다 |
 | CLOSING 중인 워크스페이스의 `reopen` | 에러 — 닫힌 뒤에 reopen 하라. 첫 읽기 뒤 CAS 사이에 CLOSING 이 되어도 같다 |
@@ -1766,7 +1825,11 @@ exec · files 호출에 `SandboxNotFoundException` · `SharedVolumes.delete` 멱
 **저장소 계약 스위트** — `SandboxWorkspaceStoreContract`. `InMemory` 가 3단계부터 통과하고, JDBC 구현(6단계)이 같은
 스위트를 통과한다: `createIfAbsent` 경합 → 하나 · stale version, 지운 뒤의 `update` → `StaleVersionException` · 지웠다가 다시 만든
 레코드가 옛 version 을 다시 쓰지 않음(ABA) · `update` 가 `next` 의 version 을 무시하고 다른 id 를 거부함 · 돌려준 레코드와
-`find` 가 같음(밀리초 이상의 정밀도) · scan 필터와, 걸러진 레코드가 끼어 있는 페이징 · 툼스톤 보존과 삭제. 스위트가 JDBC 와 함께 늦게 생기면 `InMemory` 와 의미가 갈린다.
+`find` 가 같음(밀리초 이상의 정밀도) · scan 필터와, 걸러진 레코드가 끼어 있는 페이징 · 툼스톤 보존과 삭제 · owner/origin 필터가 페이지를 넘어 유지됨. 스위트가 JDBC 와 함께 늦게 생기면 `InMemory` 와 의미가 갈린다.
+
+**세션 옵션 저장소 계약 스위트** — `SessionOptionsStoreContract`([관리 설계](workspace-sandbox-management.md) §4.5). 만들기 전용 put 과 CAS put · 지운 뒤 다시 만든
+레코드의 version 재사용 없음 · 돌려준 레코드와 `find` 가 같음 · `byWorkspace` 와 `workspaces` 의 안정된 페이징 · 다른 필드를
+남기는 멱등 `deleteByWorkspace`.
 
 **`LocalProcessSandboxProvider`** — testkit 에만 있는 프로바이더. 임시 디렉터리 + 로컬 프로세스로 계약을
 흉내 낸다. 격리가 없으므로 운영용이 아니며, 이름과 javadoc 에 그렇게 적는다(`HARDENED_SECURITY_CONTEXT` 등을
@@ -2102,6 +2165,10 @@ docker 계층, K8s 에서만 드러나는 것은 k8s 계층 — 는 [`workspace-
   `mavenLocal()` 을 지웠다(PR #7, 단계 3 구현 설계 §10 Q8)
 - ~~**aimon-core 0.3.2-SNAPSHOT 고정**~~ *(닫았다)* — 훅 표시(`ExecutionOptions.isHook()`, 이슈 #9) 때문에 Central 의
   스냅샷 저장소에서 받던 `0.3.2-SNAPSHOT` 을 릴리스된 0.3.2 로 올리고 `build.gradle.kts` 의 저장소 블록을 지웠다
+- **요청 단위 실행 옵션** — 워크스페이스나 unattached 규칙을 실행마다(루틴 포함) 고르려면 코어의 `EnvironmentRequest` 가 요청
+  속성을 실어야 한다. 지금은 세션 단위다([관리 설계](workspace-sandbox-management.md) §12 Q1)
+- **비동기 · 멱등 `create`** — 동기 `create` 는 `provisionTimeout` 까지 막는다. HTTP 호스트에는 PROVISIONING 을 바로 돌려주는
+  경로와 응답을 잃어도 둘째 워크스페이스를 만들지 않는 멱등 키가 필요할 수 있다([관리 설계](workspace-sandbox-management.md) §12 Q3)
 - **`aimon-sandbox-testkit` 의 발행** *(3·4단계 릴리스에서 닫는다)* — 계약 스위트를 이 저장소 밖의 구현도 통과해야 하므로
   발행하기로 했다(`aimon.publishable`). 첫 릴리스 전까지는 되돌릴 수 있다(단계 3 구현 설계 §10 Q5)
 
@@ -2156,6 +2223,14 @@ docker 계층, K8s 에서만 드러나는 것은 k8s 계층 — 는 [`workspace-
 - **스테이징 경로(`/workspace/.aimon-staged/**`)를 권한 훅의 허용 목록에 넣지 말 것.** 셸이 그 경로에 쓸 수 있다(§11.1)
 - **프로파일 `env` 에 비밀을 넣지 말 것.** 자격 증명은 vault 바인딩으로, 범위를 좁혀 준다(§12.1)
 - **메트릭 라벨에 워크스페이스·슬롯·owner 를 달지 말 것.** span 속성과 이벤트로 본다(§14)
+- **관리형 워크스페이스 id 를 고르게 하거나 다시 쓰지 말 것.** `wsm:{UUID}` 를 생성한다. 세션 옵션과 정의가 이름 붙인
+  id 가 다른 워크스페이스로 바뀌면 안 된다. 같은 이유로 `MANAGED` 레코드를 `closedRetention` 으로 지우지 말 것 — `purge`
+  만 지운다(§10.5)
+- **`mustExist` 바인딩으로 레코드를 만들지 말 것.** 지운 id 가 바인딩한 호출자 소유로 되살아난다(§10.1)
+- **모델이 보는 문자열에 워크스페이스 이름을 넣지 말 것.** id 만 쓴다. 뷰에 프로바이더 sandbox id 를 넣지도 말 것(§13.3 의 이유)
+- **`sandbox.workspace` 를 쓰는 권한을 가볍게 다루지 말 것.** 그 에이전트의 모든 세션을 그 워크스페이스로 보내는 권한이다.
+  다른 주체의 세션은 공유된 워크스페이스에만 닿지만, 테넌트가 정의를 쓰는 호스트는 이것을 알아야 한다(§8.4)
+- **공유 워크스페이스를 격리 경계로 쓰지 말 것.** 붙은 모든 세션이 한 신뢰 도메인이다(§8.4)
 
 ---
 
@@ -2164,6 +2239,7 @@ docker 계층, K8s 에서만 드러나는 것은 k8s 계층 — 는 [`workspace-
 - [`workspace-sandbox-step3.md`](workspace-sandbox-step3.md) — 3단계(도메인과 로컬 경로)의 구현 설계, 결정(§10)과 구현이 벗어난 점(§12)
 - [`workspace-sandbox-step4.md`](workspace-sandbox-step4.md) — 4단계(OpenSandbox 프로바이더와 조정)의 구현 설계, 결정(§10)과 구현이 벗어난 점(§13)
 - [`workspace-sandbox-core-031.md`](workspace-sandbox-core-031.md) — aimon-core 0.3.1 을 따라간 변경(셸 취소 · 백그라운드 상한 · 런타임 바인딩)의 설계, 열린 질문(§9)과 구현이 벗어난 점(§10)
+- [`workspace-sandbox-management.md`](workspace-sandbox-management.md) — 워크스페이스 관리(만들기 · 세션 옵션 · 관리 API)의 설계와 구현이 벗어난 점(§15)
 - [`opensandbox-spike.md`](opensandbox-spike.md) — 2단계(OpenSandbox 스파이크)의 결과와 근거
 - [`sandbox.md` @ `704013c`](https://github.com/kangwoo/aimon-sandbox/blob/704013c02cb14f16ec37ebf8c07f90d7e107db73/docs/design/sandbox.md) — 이 설계가 대체한 identifier 기반 설계(삭제됨)
 - [`scope-model.md`](https://github.com/kangwoo/aimon-core/blob/main/docs/overview/scope-model.md) — 수명과 소멸 책임

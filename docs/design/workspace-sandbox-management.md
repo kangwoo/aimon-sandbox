@@ -630,3 +630,26 @@ rejection; a session option `per-session` lets it run when the floor allows.
 | N10 validator | replaced with the `max-managed-per-owner` check (§4.4) |
 | N11 name in model strings | never (§5.1) |
 | M2, M5, M9, m10, B1 partials | wording; validator; `Optional pastGrace`; global version floor; `sandboxId()` |
+
+---
+
+## 15. Implementation departures (PR 1)
+
+Where PR 1 (commits 1–5 of §10) builds something other than, or more precisely than, the text above. Each is the
+smallest change that keeps the design's intent.
+
+| # | Design | Built | Why |
+|---|--------|-------|-----|
+| P1 | `Page<T>(items, next?)` (§5.4) | `Page<T, K>`: `next()` is typed by the listing's key (`SessionId` for `byWorkspace`, `SandboxWorkspaceId` for `workspaces` and `list`) | the `after` parameters are typed (§5.2); an untyped cursor would need parsing back into one |
+| P2 | `SessionSandboxOptions.Update` unspecified | replaces both fields (an absent one is cleared) and keeps `lastWorkspaceId`; factories `attach(id)`, `rule(rule)`, `of(id, rule)` | one meaning for "set", no partial-patch ambiguity |
+| P3 | the record's `profile` is the required profile "of rows 1–2 of §6.3" (§6.1) | applied by the manager when it provisions a new `primary` slot and the binding requires none — for every binding to the record | the policy would need a second workspace-store read per bind to learn it; the manager already holds the record. Same result for rows 1–2 |
+| P4 | the policy compares and "records it silently" (§6.4) | the policy never writes: a first rule-only record landing in the delegate's workspace carries a *silent* `WorkspaceSwitch`, which the environment records at its first successful connect; announced switches are recorded once their notice is drained (as designed). A switch carries the options version it was read at, so the write is a CAS on it | one writer of `lastWorkspaceId`, one best-effort path |
+| P5 | §9.1 "session can loosen the agent within the floor"; §9.3 "a session option `per-session` lets it run when the floor allows" | tests assert §6.3 / §14 N4 instead: `strictest(floor, agent, session)` — a session cannot loosen an agent's `reject`. The E2E shows a session `reject` refusing, `per-session` running where neither floor nor agent tightens, and an agent `reject` holding against a session `per-session` | §9.1/§9.3 wording predates review 2's N4; §6.3 is the rule |
+| P6 | `ManagedWorkspaceSandboxIT` (§9.2): "listed with verdict `OK`", "admin terminate → next command re-provisions" | listed through the owner's `list`; the verdict and admin terminate move to PR 2's IT | `sandboxes()` and `SandboxAdministration.terminateSlot` are PR 2 (§10) |
+| P7 | `clearSessionOptions` deletes `workspace` and `unattached` (§6.2) | as designed, and deletes the record when nothing else is left (no `lastWorkspaceId`) | a record with no field left only costs a read per turn |
+| P8 | `purge` of a missing id unspecified | success, like `close` (WS §15) | idempotent retry after a lost response |
+| P9 | new manager entry points (§4.1) | the manager also hosts `setSessionOptions` / `clearSessionOptions` / `sessionOptions` / `describe` / `listOwned` and returns views; it takes the `SessionOwnerLookup` (`Builder.sessionOwners`) and the `SessionOptionsStore` | the use check (`checkUse`) and the gate live there; the facade stays a thin layer PR 2 can share |
+| P10 | `sessionOptions(session, caller)` right unspecified | the right over the session (its owner) — same as set/clear | otherwise a tenant-mate learns where another's session runs |
+| P11 | `SESSION_OPTIONS_*` events "may lack" workspace and owner (§4.1) | they carry the session's owner as `owner` and the attached (or, on clear, previously attached) workspace when there is one | more audit context at no cost; `workspaceId()`/`owner()` are `Optional` for every type |
+| P12 | commit order (§10) | `UnattachedRule` lands in commit 1 (the options record holds one), `ManagedIds` in commit 3 (`setSessionOptions` validates with it), `WorkspaceSandbox.Builder.sessionOptionsStore` in commit 2 (the janitor sweep reads it) | each type arrives with its first user |
+| P13 | §9.1 race "notice flip vs re-attach" | a turn bound before a re-attach announces the target it was bound to and loses the `lastWorkspaceId` CAS; the next turn announces the new target once | the running turn keeps its binding (§6.2) |
