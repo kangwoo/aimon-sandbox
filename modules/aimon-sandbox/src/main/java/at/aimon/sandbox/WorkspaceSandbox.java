@@ -70,6 +70,7 @@ public final class WorkspaceSandbox implements AutoCloseable {
     private final SandboxProfileRegistry profiles;
     private final SandboxConnectionCache connections;
     private final SandboxWorkspaceManager manager;
+    private final SandboxWorkspaces workspaces;
     private final SandboxJanitor janitor;
     private final SandboxExecutionEnvironmentProvider environmentProvider;
 
@@ -101,7 +102,9 @@ public final class WorkspaceSandbox implements AutoCloseable {
                             : new DefaultSandboxAdmission(store, settings.maxRunningPerTenant());
             this.manager = SandboxWorkspaceManager.builder().settings(settings).profiles(profiles).provider(provider)
                     .store(store).sessionOptions(sessionOptions).connections(connections).admission(admission)
-                    .events(builder.eventListener).callers(callers).clock(clock).scheduler(scheduler).build();
+                    .events(builder.eventListener).callers(callers).sessionOwners(builder.sessionOwnerLookup)
+                    .clock(clock).scheduler(scheduler).build();
+            this.workspaces = new SandboxWorkspaces(manager);
             this.janitor = new SandboxJanitor(manager, janitorScheduler);
             final SandboxBindingPolicy policy = builder.bindingPolicy != null
                     ? builder.bindingPolicy
@@ -131,6 +134,11 @@ public final class WorkspaceSandbox implements AutoCloseable {
     /** @return the manager ({@code close} and {@code reopen} for the application) */
     public SandboxWorkspaceManager manager() {
         return manager;
+    }
+
+    /** @return the owner-facing management of workspaces: create, attach sessions, close, reopen, purge */
+    public SandboxWorkspaces workspaces() {
+        return workspaces;
     }
 
     /** @return the janitor; call {@link SandboxJanitor#start()} to run it */

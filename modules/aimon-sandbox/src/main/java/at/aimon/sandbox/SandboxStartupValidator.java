@@ -104,6 +104,11 @@ final class SandboxStartupValidator {
         if (settings.maxRunningPerTenant() < 1 && settings.maxRunningPerTenant() != SandboxSettings.UNLIMITED) {
             violations.add("admission.max-running-per-tenant must be at least 1, or 'unlimited' set explicitly");
         }
+        // Session options without a SessionOwnerLookup are refused when they are set, not here: a deployment that
+        // never sets them needs no lookup (management design §6.2).
+        if (settings.maxManagedPerOwner() < 1 && settings.maxManagedPerOwner() != SandboxSettings.UNLIMITED) {
+            violations.add("max-managed-per-owner must be at least 1, or 'unlimited' set explicitly");
+        }
         if (!violations.isEmpty()) {
             throw new SandboxConfigurationException(violations);
         }

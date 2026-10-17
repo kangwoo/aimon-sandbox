@@ -8,6 +8,7 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 
+import at.aimon.sandbox.binding.UnattachedRule;
 import at.aimon.sandbox.profile.SandboxProfile;
 import at.aimon.sandbox.workspace.WorkspaceQuota;
 
@@ -22,7 +23,10 @@ import at.aimon.sandbox.workspace.WorkspaceQuota;
  */
 public final class SandboxSettings {
 
-    /** {@link #maxRunningPerTenant()} value that turns admission off; it has to be set explicitly (§12.2). */
+    /**
+     * {@link #maxRunningPerTenant()} and {@link #maxManagedPerOwner()} value that turns the limit off; it has to be set
+     * explicitly (§12.2).
+     */
     public static final int UNLIMITED = -1;
 
     /** Who may use a workspace besides its owner (§8.3). */
@@ -55,6 +59,9 @@ public final class SandboxSettings {
     private final List<SandboxProfile> profiles;
     private final Duration closeAfter;
     private final WorkspaceQuota quota;
+    private final UnattachedRule unattached;
+    private final boolean allowSharedWorkspaces;
+    private final int maxManagedPerOwner;
     private final String nodeId;
 
     private SandboxSettings(Builder builder) {
@@ -80,6 +87,9 @@ public final class SandboxSettings {
         this.profiles = List.copyOf(builder.profiles);
         this.closeAfter = Objects.requireNonNull(builder.closeAfter, "closeAfter");
         this.quota = Objects.requireNonNull(builder.quota, "quota");
+        this.unattached = Objects.requireNonNull(builder.unattached, "unattached");
+        this.allowSharedWorkspaces = builder.allowSharedWorkspaces;
+        this.maxManagedPerOwner = builder.maxManagedPerOwner;
         this.nodeId = builder.nodeId != null ? builder.nodeId : defaultNodeId();
     }
 
@@ -97,7 +107,9 @@ public final class SandboxSettings {
                 .closeResumeAfter(closeResumeAfter).closedRetention(closedRetention).execShellIdle(execShellIdle)
                 .shellLockWait(shellLockWait).janitorInterval(janitorInterval).orphanGrace(orphanGrace)
                 .lostConfirmAfter(lostConfirmAfter).maxRunningPerTenant(maxRunningPerTenant)
-                .defaultProfile(defaultProfile).profiles(profiles).closeAfter(closeAfter).quota(quota).nodeId(nodeId);
+                .defaultProfile(defaultProfile).profiles(profiles).closeAfter(closeAfter).quota(quota)
+                .unattached(unattached).allowSharedWorkspaces(allowSharedWorkspaces)
+                .maxManagedPerOwner(maxManagedPerOwner).nodeId(nodeId);
     }
 
     /**
@@ -230,6 +242,29 @@ public final class SandboxSettings {
         return quota;
     }
 
+    /**
+     * @return {@code unattached} ({@code per-session}): the floor of the unattached rule — a definition's
+     *         {@code sandbox.unattached} and a session's own option can only tighten it
+     *         (docs/design/workspace-sandbox-management.md §6.3)
+     */
+    public UnattachedRule unattached() {
+        return unattached;
+    }
+
+    /**
+     * @return {@code allow-shared-workspaces} (false): whether a managed workspace may be created with
+     *         {@code access: tenant} under {@code workspace-access: principal} — sharing one across principals makes
+     *         them one trust domain (management design §6.5)
+     */
+    public boolean allowSharedWorkspaces() {
+        return allowSharedWorkspaces;
+    }
+
+    /** @return {@code max-managed-per-owner} (20), or {@link #UNLIMITED}: managed workspaces one owner may hold */
+    public int maxManagedPerOwner() {
+        return maxManagedPerOwner;
+    }
+
     /** @return this node's id, {@code {hostname}-{uuid}} unless set */
     public String nodeId() {
         return nodeId;
@@ -259,6 +294,9 @@ public final class SandboxSettings {
         private List<SandboxProfile> profiles = List.of();
         private Duration closeAfter = Duration.ofHours(24);
         private WorkspaceQuota quota = WorkspaceQuota.defaults();
+        private UnattachedRule unattached = UnattachedRule.PER_SESSION;
+        private boolean allowSharedWorkspaces;
+        private int maxManagedPerOwner = 20;
         private String nodeId;
 
         private Builder() {
@@ -371,6 +409,21 @@ public final class SandboxSettings {
 
         public Builder quota(WorkspaceQuota quota) {
             this.quota = quota;
+            return this;
+        }
+
+        public Builder unattached(UnattachedRule unattached) {
+            this.unattached = unattached;
+            return this;
+        }
+
+        public Builder allowSharedWorkspaces(boolean allowSharedWorkspaces) {
+            this.allowSharedWorkspaces = allowSharedWorkspaces;
+            return this;
+        }
+
+        public Builder maxManagedPerOwner(int maxManagedPerOwner) {
+            this.maxManagedPerOwner = maxManagedPerOwner;
             return this;
         }
 

@@ -11,6 +11,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.OptionalLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Predicate;
 import java.util.function.UnaryOperator;
@@ -18,10 +19,15 @@ import java.util.function.UnaryOperator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import at.aimon.core.agent.session.SessionId;
 import at.aimon.core.base.Principal;
+import at.aimon.sandbox.SandboxConfigurationException;
 import at.aimon.sandbox.SandboxSettings;
+import at.aimon.sandbox.binding.BindingRejectedException;
 import at.aimon.sandbox.binding.CallerResolver;
+import at.aimon.sandbox.binding.ManagedIds;
 import at.aimon.sandbox.binding.SandboxBinding;
+import at.aimon.sandbox.binding.SessionOwnerLookup;
 import at.aimon.sandbox.profile.SandboxProfile;
 import at.aimon.sandbox.profile.SandboxProfileRegistry;
 import at.aimon.sandbox.provider.CreateSpec;
@@ -96,6 +102,7 @@ public final class SandboxWorkspaceManager {
     private final SandboxAdmission admission;
     private final SandboxEventListener events;
     private final CallerResolver callers;
+    private final SessionOwnerLookup sessionOwners;
     private final Clock clock;
     private final SandboxScheduler scheduler;
     private final SandboxSeeder seeder;
@@ -110,6 +117,7 @@ public final class SandboxWorkspaceManager {
         this.admission = Objects.requireNonNull(builder.admission, "admission must not be null");
         this.events = Objects.requireNonNull(builder.events, "events must not be null");
         this.callers = Objects.requireNonNull(builder.callers, "callers must not be null");
+        this.sessionOwners = builder.sessionOwners;
         this.clock = Objects.requireNonNull(builder.clock, "clock must not be null");
         this.scheduler = Objects.requireNonNull(builder.scheduler, "scheduler must not be null");
         this.seeder = new SandboxSeeder(settings.provisionTimeout(), provider.capabilities().controlPlaneEndpoints());
@@ -149,6 +157,10 @@ public final class SandboxWorkspaceManager {
      *             fails, and carrying the notices this call gathered (a reset the model must hear of)
      */
     public ConnectedSlot connect(SandboxBinding binding) {
+        return connect(Target.of(binding));
+    }
+
+    private ConnectedSlot connect(Target binding) {
         final Connect attempt = new Connect(binding);
         try {
             while (true) {
@@ -172,9 +184,67 @@ public final class SandboxWorkspaceManager {
         }
     }
 
+    /**
+     * What {@link Connect} reads of a binding. {@link #provisionSlot} has no binding — it runs no command, so it has no
+     * shell key — and builds one of these directly.
+     */
+    private static final class Target {
+        private final SandboxWorkspaceId workspaceId;
+        private final WorkspaceOwner owner;
+        private final WorkspaceOwner caller;
+        private final String slot;
+        private final Optional<String> requiredProfile;
+        private final String root;
+        private final boolean mustExist;
+
+        private Target(SandboxWorkspaceId workspaceId, WorkspaceOwner owner, WorkspaceOwner caller, String slot,
+                Optional<String> requiredProfile, String root, boolean mustExist) {
+            this.workspaceId = workspaceId;
+            this.owner = owner;
+            this.caller = caller;
+            this.slot = slot;
+            this.requiredProfile = requiredProfile;
+            this.root = root;
+            this.mustExist = mustExist;
+        }
+
+        private static Target of(SandboxBinding binding) {
+            return new Target(binding.workspaceId(), binding.owner(), binding.caller(), binding.slot(),
+                    binding.requiredProfile(), binding.root(), binding.mustExist());
+        }
+
+        private SandboxWorkspaceId workspaceId() {
+            return workspaceId;
+        }
+
+        private WorkspaceOwner owner() {
+            return owner;
+        }
+
+        private WorkspaceOwner caller() {
+            return caller;
+        }
+
+        private String slot() {
+            return slot;
+        }
+
+        private Optional<String> requiredProfile() {
+            return requiredProfile;
+        }
+
+        private String root() {
+            return root;
+        }
+
+        private boolean mustExist() {
+            return mustExist;
+        }
+    }
+
     /** One {@link #connect} call's state across its loop iterations. */
     private final class Connect {
-        private final SandboxBinding binding;
+        private final Target binding;
         private final Instant started;
         private final long startedNanos = System.nanoTime();
         private final List<String> notices = new ArrayList<>();
@@ -183,7 +253,7 @@ public final class SandboxWorkspaceManager {
         private int provisionings;
         private Duration pollDelay = FIRST_POLL;
 
-        private Connect(SandboxBinding binding) {
+        private Connect(Target binding) {
             this.binding = binding;
             this.started = clock.instant();
         }
@@ -216,7 +286,7 @@ public final class SandboxWorkspaceManager {
                         + "it before it can be used again");
             }
             final SandboxSlot slot = workspace.slot(binding.slot()).orElse(null);
-            final SandboxProfile profile = profileFor(binding, slot);
+            final SandboxProfile profile = profileFor(binding, workspace, slot);
             if (slot == null || slot.state() == SlotState.TERMINATED || retryable(slot, profile)) {
                 provisionNew(workspace, slot, profile);
                 return null;
@@ -316,7 +386,7 @@ public final class SandboxWorkspaceManager {
         }
     }
 
-    private SandboxWorkspace loadOrCreate(SandboxBinding binding) {
+    private SandboxWorkspace loadOrCreate(Target binding) {
         final Optional<SandboxWorkspace> found = store.find(binding.workspaceId());
         if (found.isPresent()) {
             return found.get();
@@ -331,7 +401,12 @@ public final class SandboxWorkspaceManager {
                 .createdAt(now).lastActivityAt(now).build());
     }
 
-    private SandboxProfile profileFor(SandboxBinding binding, SandboxSlot slot) {
+    /**
+     * The slot's profile, which a required one must equal; for a new slot the required profile, else the one a managed
+     * workspace was created with, else the default — so a lazy bind after a refused first provisioning builds what
+     * {@code create} asked for (management design §6.1).
+     */
+    private SandboxProfile profileFor(Target binding, SandboxWorkspace workspace, SandboxSlot slot) {
         if (slot != null) {
             final Optional<String> required = binding.requiredProfile();
             if (required.isPresent() && !required.get().equals(slot.profile())) {
@@ -343,7 +418,9 @@ public final class SandboxWorkspaceManager {
                     () -> new SandboxUnavailableException("slot '" + slot.name() + "' was created with profile '"
                             + slot.profile() + "', which is no longer " + "configured"));
         }
-        final String name = binding.requiredProfile().orElse(profiles.defaultProfileName());
+        final String name = binding.requiredProfile()
+                .or(() -> SandboxBinding.PRIMARY.equals(binding.slot()) ? workspace.profile() : Optional.empty())
+                .orElse(profiles.defaultProfileName());
         return profiles.find(name)
                 .orElseThrow(() -> new SandboxUnavailableException("sandbox profile '" + name + "' is not configured"));
     }
@@ -766,6 +843,412 @@ public final class SandboxWorkspaceManager {
     }
 
     // ---------------------------------------------------------------------------------------------------------------
+    // managed workspaces and session options (docs/design/workspace-sandbox-management.md §6.1, §6.2, §6.6)
+    // ---------------------------------------------------------------------------------------------------------------
+
+    /**
+     * Creates a managed workspace and provisions its {@code primary} slot before returning (management design §6.1):
+     * the principal gate on {@code owner}, the request's checks, {@code max-managed-per-owner}, then a record under a
+     * new {@code wsm:} id and the {@link #connect} state machine from step 2 on. Repeating a call creates a second
+     * workspace.
+     *
+     * <p>
+     * <b>Internal.</b> Public only for use across this library's packages: not supported API, and it may change in
+     * any release. Use {@code SandboxWorkspaces.create}.
+     *
+     * @param request
+     *            name, profile and access
+     * @param owner
+     *            the principal that will own it
+     * @param actor
+     *            who asks, recorded in the event
+     * @return the workspace, {@code primary} RUNNING
+     * @throws IllegalArgumentException
+     *             for a profile that is not configured
+     * @throws at.aimon.sandbox.SandboxConfigurationException
+     *             for {@code access: tenant} without {@code allow-shared-workspaces} in a {@code principal}
+     *             deployment
+     * @throws WorkspaceProvisioningException
+     *             when the record was created but provisioning failed; it carries the id to retry or purge
+     * @throws SandboxUnavailableException
+     *             when the owner already holds {@code max-managed-per-owner} managed workspaces; nothing is written
+     * @throws at.aimon.sandbox.binding.BindingRejectedException
+     *             when the principal gate refuses the owner
+     */
+    public WorkspaceView createManaged(CreateWorkspace request, Principal owner, Principal actor) {
+        Objects.requireNonNull(request, "request must not be null");
+        final WorkspaceOwner who = callers.callerOf(Optional.ofNullable(owner));
+        final String profile = request.profile().orElse(profiles.defaultProfileName());
+        if (profiles.find(profile).isEmpty()) {
+            throw new IllegalArgumentException("sandbox profile '" + profile + "' is not configured");
+        }
+        if (request.access().orElse(null) == SandboxSettings.WorkspaceAccess.TENANT
+                && settings.workspaceAccess() == SandboxSettings.WorkspaceAccess.PRINCIPAL
+                && !settings.allowSharedWorkspaces()) {
+            throw new SandboxConfigurationException(List.of("a workspace shared with the tenant (access: tenant) needs "
+                    + "allow-shared-workspaces: everyone attached to it shares one trust domain"));
+        }
+        final int limit = settings.maxManagedPerOwner();
+        if (limit != SandboxSettings.UNLIMITED && countManaged(who) >= limit) {
+            throw new SandboxUnavailableException("this owner already has " + limit + " managed sandbox workspaces "
+                    + "(max-managed-per-owner); purge one before creating another");
+        }
+        final Instant now = clock.instant();
+        final SandboxWorkspace created = store.createIfAbsent(SandboxWorkspace.builder().id(ManagedIds.generate())
+                .owner(who).origin(WorkspaceOrigin.MANAGED).name(request.name()).profile(profile)
+                .access(request.access().orElse(null)).state(WorkspaceState.OPEN).incarnation(newIncarnation())
+                .stateSince(now).quota(settings.quota()).createdAt(now).lastActivityAt(now).build());
+        emit(SandboxEvent.Type.WORKSPACE_CREATED, created, null, "created", actorOf(actor, who), null);
+        return provision(created.id(), who);
+    }
+
+    /** Best effort, like admission: two concurrent creates may both pass. */
+    private int countManaged(WorkspaceOwner owner) {
+        int count = 0;
+        WorkspaceScan scan = WorkspaceScan.builder().owner(owner).origin(WorkspaceOrigin.MANAGED).build();
+        while (true) {
+            final List<SandboxWorkspace> page = store.scan(scan);
+            count += page.size();
+            if (page.size() < scan.limit()) {
+                return count;
+            }
+            scan = scan.next(page.get(page.size() - 1).id());
+        }
+    }
+
+    /**
+     * Provisions the workspace's {@code primary} slot — a retry after a failed {@link #createManaged}, respecting the
+     * recorded failure's backoff, or the step after {@link #reopen}. Needs the use right.
+     *
+     * <p>
+     * <b>Internal.</b> Public only for use across this library's packages: not supported API, and it may change in
+     * any release.
+     *
+     * @param id
+     *            the workspace
+     * @param caller
+     *            the principal asking
+     * @return the workspace, {@code primary} RUNNING
+     * @throws WorkspaceProvisioningException
+     *             when provisioning failed
+     * @throws SandboxUnavailableException
+     *             when the workspace does not exist or the caller may not use it
+     */
+    public WorkspaceView provision(SandboxWorkspaceId id, Principal caller) {
+        return provision(id, callers.callerOf(Optional.ofNullable(caller)));
+    }
+
+    private WorkspaceView provision(SandboxWorkspaceId id, WorkspaceOwner who) {
+        final SandboxWorkspace found = store.find(id).orElseThrow(() -> doesNotExist(id));
+        checkUse(found, who);
+        try {
+            provisionSlot(id, SandboxBinding.PRIMARY, found.profile().orElse(null), who);
+        } catch (SandboxUnavailableException e) {
+            throw new WorkspaceProvisioningException(id, e);
+        }
+        return view(store.find(id).orElseThrow(() -> doesNotExist(id)));
+    }
+
+    /**
+     * The {@link #connect} loop for a slot, with no command to run: admission, quota, create, verify, seed. The record
+     * must exist ({@code mustExist}); the profile, when given, is the required one.
+     */
+    private void provisionSlot(SandboxWorkspaceId id, String slot, String profile, WorkspaceOwner caller) {
+        connect(new Target(id, caller, caller, slot, Optional.ofNullable(profile), SandboxBinding.DEFAULT_ROOT, true));
+    }
+
+    /**
+     * Deletes a CLOSED managed workspace for good (management design §6.6): the manage right, then the record (a CAS on
+     * the version read — a concurrent reopen makes it fail and nothing else happens), a {@code WORKSPACE_PURGED} event,
+     * then every session's attachment to it. When that last step fails the janitor's sweep finishes it. An id with no
+     * record is success, as for {@link #close}.
+     *
+     * <p>
+     * <b>Internal.</b> Public only for use across this library's packages: not supported API, and it may change in
+     * any release.
+     *
+     * @param id
+     *            the workspace
+     * @param caller
+     *            the principal asking; must have the manage right
+     * @throws SandboxUnavailableException
+     *             when the caller may not manage it, it is not managed, not CLOSED, or changed during the purge
+     */
+    public void purge(SandboxWorkspaceId id, Principal caller) {
+        final WorkspaceOwner who = callers.callerOf(Optional.ofNullable(caller));
+        final Optional<SandboxWorkspace> found = store.find(id);
+        if (found.isEmpty()) {
+            return;
+        }
+        final SandboxWorkspace workspace = found.get();
+        checkManage(workspace, who);
+        if (workspace.origin() != WorkspaceOrigin.MANAGED) {
+            // Deleting a derived tombstone would let the session's next turn silently re-create ws:{sid}.
+            throw new SandboxUnavailableException("only a managed sandbox workspace can be purged; a derived one's "
+                    + "closed record expires after closed-retention");
+        }
+        if (workspace.state() != WorkspaceState.CLOSED) {
+            throw new SandboxUnavailableException(
+                    "the sandbox workspace is " + workspace.state() + "; close it before purging it");
+        }
+        try {
+            store.delete(id, workspace.version());
+        } catch (StaleVersionException e) {
+            throw new SandboxUnavailableException("the sandbox workspace changed while it was being purged (it may "
+                    + "have been reopened); it was kept", e);
+        }
+        emit(SandboxEvent.Type.WORKSPACE_PURGED, workspace, null, "purged", who.toString(), null);
+        try {
+            sessionOptions.deleteByWorkspace(id);
+        } catch (RuntimeException e) {
+            log.warn("Clearing the session options of purged workspace {} failed; the janitor's sweep finishes it: {}",
+                    id, e.getMessage());
+        }
+    }
+
+    /**
+     * A workspace as {@code caller} may see it: empty when it does not exist or the caller may not use it — the two
+     * answer alike (WS §15).
+     *
+     * <p>
+     * <b>Internal.</b> Public only for use across this library's packages: not supported API, and it may change in
+     * any release.
+     *
+     * @param id
+     *            the workspace
+     * @param caller
+     *            the principal asking
+     * @return its view
+     */
+    public Optional<WorkspaceView> describe(SandboxWorkspaceId id, Principal caller) {
+        final WorkspaceOwner who = callers.callerOf(Optional.ofNullable(caller));
+        return store.find(id).filter(workspace -> mayUse(workspace, who)).map(this::view);
+    }
+
+    /**
+     * The workspaces {@code caller} owns — tenant and principal — filtered and paged by id.
+     *
+     * <p>
+     * <b>Internal.</b> Public only for use across this library's packages: not supported API, and it may change in
+     * any release.
+     *
+     * @param caller
+     *            the principal asking
+     * @param query
+     *            filters and page
+     * @return one page
+     */
+    public Page<WorkspaceView, SandboxWorkspaceId> listOwned(Principal caller, WorkspaceQuery query) {
+        final WorkspaceOwner who = callers.callerOf(Optional.ofNullable(caller));
+        final List<WorkspaceView> items = new ArrayList<>();
+        WorkspaceScan scan = WorkspaceScan.builder().owner(who).origin(query.origin().orElse(null))
+                .states(query.states()).afterId(query.after().orElse(null)).limit(query.limit()).build();
+        // The name prefix is not a store filter: scan on until the page is full or the store is exhausted.
+        while (true) {
+            final List<SandboxWorkspace> page = store.scan(scan);
+            for (SandboxWorkspace workspace : page) {
+                if (query.namePrefix().map(prefix -> workspace.name().orElse("").startsWith(prefix)).orElse(true)) {
+                    items.add(view(workspace));
+                    if (items.size() == query.limit()) {
+                        return Page.of(items, workspace.id());
+                    }
+                }
+            }
+            if (page.size() < scan.limit()) {
+                return Page.of(items, null);
+            }
+            scan = scan.next(page.get(page.size() - 1).id());
+        }
+    }
+
+    /**
+     * Sets a session's sandbox options (management design §6.2): only the session's owner — tenant and principal,
+     * whatever any access mode says — and, for an attachment, to a managed workspace that is OPEN or idle-closed and
+     * that both the caller and the session's owner may use. Each turn is still checked at {@code connect} against the
+     * <i>executing</i> principal: in a multi-participant session a non-owner's turn into the attached workspace passes
+     * only if that participant may use it. Touches no sandbox.
+     *
+     * <p>
+     * <b>Internal.</b> Public only for use across this library's packages: not supported API, and it may change in
+     * any release.
+     *
+     * @param session
+     *            the session
+     * @param update
+     *            the attachment and rule; both replace what is there
+     * @param caller
+     *            the principal asking
+     * @throws at.aimon.sandbox.binding.BindingRejectedException
+     *             without a {@code SessionOwnerLookup}, for an unknown session, a caller that is not its owner, a
+     *             malformed id, or a workspace the session's owner may not use
+     * @throws SandboxUnavailableException
+     *             when the workspace does not exist, is closing, or was closed explicitly
+     */
+    public void setSessionOptions(SessionId session, SessionSandboxOptions.Update update, Principal caller) {
+        Objects.requireNonNull(update, "update must not be null");
+        final WorkspaceOwner who = callers.callerOf(Optional.ofNullable(caller));
+        final WorkspaceOwner sessionOwner = requireSessionOwner(session, who);
+        final Optional<SandboxWorkspaceId> target = update.workspace()
+                .map(id -> ManagedIds.require(id.value(), "the session option's workspace"));
+        if (target.isPresent()) {
+            final SandboxWorkspace workspace = store.find(target.get()).orElseThrow(() -> doesNotExist(target.get()));
+            if (workspace.state() == WorkspaceState.CLOSING || workspace.state() == WorkspaceState.CLOSED
+                    && workspace.closeCause().orElse(CloseCause.EXPLICIT) != CloseCause.IDLE) {
+                throw new SandboxUnavailableException("sandbox workspace " + workspace.id() + " is " + workspace.state()
+                        + "; it has to be reopened before a session can be attached to it");
+            }
+            if (!mayUse(workspace, who) || !mayUse(workspace, sessionOwner)) {
+                throw new BindingRejectedException("the owner of session " + session.value()
+                        + " is not permitted to use sandbox workspace " + workspace.id());
+            }
+        }
+        writeOptions(session,
+                current -> (current != null ? current.toBuilder() : SessionSandboxOptions.builder().session(session))
+                        .setBy(who).workspace(target.orElse(null)).unattached(update.unattached().orElse(null))
+                        .updatedAt(clock.instant()).build());
+        emitSession(SandboxEvent.Type.SESSION_OPTIONS_SET, session, target.orElse(null), sessionOwner, who,
+                "set: workspace=" + target.map(SandboxWorkspaceId::value).orElse("none") + ", unattached="
+                        + update.unattached().map(rule -> rule.name().toLowerCase(Locale.ROOT)).orElse("none"));
+    }
+
+    /**
+     * Clears a session's attachment and rule, keeping its {@code lastWorkspaceId} so its next turn hears that it moved
+     * (§6.4); a record with nothing left is deleted. The same rights as {@link #setSessionOptions}.
+     *
+     * <p>
+     * <b>Internal.</b> Public only for use across this library's packages: not supported API, and it may change in
+     * any release.
+     *
+     * @param session
+     *            the session
+     * @param caller
+     *            the principal asking
+     * @throws at.aimon.sandbox.binding.BindingRejectedException
+     *             as for {@link #setSessionOptions}
+     */
+    public void clearSessionOptions(SessionId session, Principal caller) {
+        final WorkspaceOwner who = callers.callerOf(Optional.ofNullable(caller));
+        final WorkspaceOwner sessionOwner = requireSessionOwner(session, who);
+        for (int attempt = 0; attempt <= settings.casRetries(); attempt++) {
+            final Optional<SessionSandboxOptions> current = sessionOptions.find(session);
+            if (current.isEmpty()) {
+                return;
+            }
+            try {
+                if (current.get().lastWorkspaceId().isEmpty()) {
+                    sessionOptions.delete(session, current.get().version());
+                } else {
+                    sessionOptions.put(current.get().toBuilder().setBy(who).workspace(null).unattached(null)
+                            .updatedAt(clock.instant()).build(), OptionalLong.of(current.get().version()));
+                }
+                emitSession(SandboxEvent.Type.SESSION_OPTIONS_CLEARED, session, current.get().workspace().orElse(null),
+                        sessionOwner, who, "cleared");
+                return;
+            } catch (StaleVersionException e) {
+                log.debug("CAS conflict on the options of session {} (attempt {}); re-reading", session.value(),
+                        attempt + 1);
+            }
+        }
+        throw optionsBusy();
+    }
+
+    /**
+     * <b>Internal.</b> Public only for use across this library's packages: not supported API, and it may change in
+     * any release.
+     *
+     * @param session
+     *            the session
+     * @param caller
+     *            the principal asking; the same rights as {@link #setSessionOptions}
+     * @return the session's options
+     */
+    public Optional<SessionOptionsView> sessionOptions(SessionId session, Principal caller) {
+        requireSessionOwner(session, callers.callerOf(Optional.ofNullable(caller)));
+        return sessionOptions.find(session).map(SessionOptionsView::of);
+    }
+
+    /**
+     * Records where a session last connected (§6.4), best effort: a lost CAS or a store error is logged, and the worst
+     * case is the switch notice repeating once.
+     *
+     * <p>
+     * <b>Internal.</b> Public only for use across this library's packages: not supported API, and it may change in
+     * any release.
+     *
+     * @param session
+     *            the session
+     * @param expectedVersion
+     *            the version the binding policy read
+     * @param workspace
+     *            where it connected
+     */
+    public void recordLastWorkspace(SessionId session, long expectedVersion, SandboxWorkspaceId workspace) {
+        try {
+            sessionOptions.find(session).filter(current -> current.version() == expectedVersion)
+                    .ifPresent(current -> sessionOptions.put(current.toBuilder().lastWorkspaceId(workspace).build(),
+                            OptionalLong.of(expectedVersion)));
+        } catch (RuntimeException e) {
+            log.debug("Recording the last workspace of session {} failed; the switch notice may repeat once: {}",
+                    session.value(), e.getMessage());
+        }
+    }
+
+    /** The session's owner, which {@code who} must be: the right over a session is its owner's (§6.2). */
+    private WorkspaceOwner requireSessionOwner(SessionId session, WorkspaceOwner who) {
+        Objects.requireNonNull(session, "session must not be null");
+        if (sessionOwners == null) {
+            throw new BindingRejectedException("session options need a session owner lookup (SessionOwnerLookup)");
+        }
+        final WorkspaceOwner owner = sessionOwners.ownerOf(session).map(callers::ownerOf)
+                .orElseThrow(() -> new BindingRejectedException("unknown session " + session.value()));
+        if (!owner.equals(who)) {
+            throw new BindingRejectedException(
+                    "only the owner of session " + session.value() + " may change its sandbox options");
+        }
+        return owner;
+    }
+
+    /** Read → apply → CAS on the session's options, re-read and re-applied on conflict. */
+    private SessionSandboxOptions writeOptions(SessionId session, UnaryOperator<SessionSandboxOptions> change) {
+        for (int attempt = 0; attempt <= settings.casRetries(); attempt++) {
+            final Optional<SessionSandboxOptions> current = sessionOptions.find(session);
+            try {
+                return sessionOptions.put(change.apply(current.orElse(null)),
+                        current.map(c -> OptionalLong.of(c.version())).orElse(OptionalLong.empty()));
+            } catch (StaleVersionException e) {
+                log.debug("CAS conflict on the options of session {} (attempt {}); re-reading", session.value(),
+                        attempt + 1);
+            }
+        }
+        throw optionsBusy();
+    }
+
+    private SandboxUnavailableException optionsBusy() {
+        return new SandboxUnavailableException("the session's sandbox options are busy (" + settings.casRetries()
+                + " concurrent updates in a row); retry the call");
+    }
+
+    private static SandboxUnavailableException doesNotExist(SandboxWorkspaceId id) {
+        return new SandboxUnavailableException("sandbox workspace " + id + " does not exist");
+    }
+
+    /** The actor of an event: the resolved principal, or its {@code TYPE:id} when no tenant is known for it. */
+    private String actorOf(Principal actor, WorkspaceOwner fallback) {
+        if (actor == null) {
+            return fallback.toString();
+        }
+        try {
+            return callers.ownerOf(actor).toString();
+        } catch (RuntimeException e) {
+            return actor.getType().name() + ":" + actor.getId();
+        }
+    }
+
+    private WorkspaceView view(SandboxWorkspace workspace) {
+        return WorkspaceView.of(workspace, settings.workspaceAccess());
+    }
+
+    // ---------------------------------------------------------------------------------------------------------------
     // reconciliation (§10.4 item 2) — every write guarded on generation, providerRef and state
     // ---------------------------------------------------------------------------------------------------------------
 
@@ -932,11 +1415,26 @@ public final class SandboxWorkspaceManager {
     }
 
     void emit(SandboxEvent.Type type, SandboxWorkspace workspace, SandboxSlot slot, String cause) {
+        emit(type, workspace, slot, cause, null, null);
+    }
+
+    private void emit(SandboxEvent.Type type, SandboxWorkspace workspace, SandboxSlot slot, String cause, String actor,
+            SessionId session) {
         final SandboxEvent.Builder event = SandboxEvent.builder().type(type).workspaceId(workspace.id())
-                .owner(workspace.owner()).cause(cause).at(clock.instant());
+                .owner(workspace.owner()).cause(cause).actor(actor).session(session).at(clock.instant());
         if (slot != null) {
             event.slot(slot);
         }
+        publish(type, event);
+    }
+
+    private void emitSession(SandboxEvent.Type type, SessionId session, SandboxWorkspaceId workspace,
+            WorkspaceOwner sessionOwner, WorkspaceOwner actor, String cause) {
+        publish(type, SandboxEvent.builder().type(type).session(session).workspaceId(workspace).owner(sessionOwner)
+                .actor(actor.toString()).cause(cause).at(clock.instant()));
+    }
+
+    private void publish(SandboxEvent.Type type, SandboxEvent.Builder event) {
         try {
             events.onEvent(event.build());
         } catch (RuntimeException e) {
@@ -973,7 +1471,7 @@ public final class SandboxWorkspaceManager {
         return store;
     }
 
-    SessionOptionsStore sessionOptions() {
+    SessionOptionsStore sessionOptionsStore() {
         return sessionOptions;
     }
 
@@ -1081,6 +1579,7 @@ public final class SandboxWorkspaceManager {
         private SandboxAdmission admission;
         private SandboxEventListener events = SandboxEventListener.NOOP;
         private CallerResolver callers;
+        private SessionOwnerLookup sessionOwners;
         private Clock clock = Clock.systemUTC();
         private SandboxScheduler scheduler;
 
@@ -1130,6 +1629,12 @@ public final class SandboxWorkspaceManager {
 
         public Builder callers(CallerResolver callers) {
             this.callers = callers;
+            return this;
+        }
+
+        /** Default: none — session options are then refused (management design §6.2). */
+        public Builder sessionOwners(SessionOwnerLookup sessionOwners) {
+            this.sessionOwners = sessionOwners;
             return this;
         }
 

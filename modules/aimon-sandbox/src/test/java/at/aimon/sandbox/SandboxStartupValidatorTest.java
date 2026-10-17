@@ -203,6 +203,17 @@ class SandboxStartupValidatorTest {
     }
 
     @Test
+    void maxManagedPerOwnerIsAtLeastOneOrUnlimited() {
+        assertThat(violations(SandboxTestProfiles.settings(local().build()).maxManagedPerOwner(0).build(), LOCAL, false,
+                false)).anyMatch(v -> v.contains("max-managed-per-owner"));
+        assertThat(violations(
+                SandboxTestProfiles.settings(local().build()).maxManagedPerOwner(SandboxSettings.UNLIMITED).build(),
+                LOCAL, false, false)).isEmpty();
+        assertThat(violations(SandboxTestProfiles.settings(local().build()).maxManagedPerOwner(1).build(), LOCAL, false,
+                false)).isEmpty();
+    }
+
+    @Test
     void timingsMustBePositiveAndProfilesUnique() {
         assertThat(violations(SandboxTestProfiles.settings(local().build(), local().build())
                 .shellLockWait(Duration.ZERO).casRetries(-1).build(), LOCAL, false, false))

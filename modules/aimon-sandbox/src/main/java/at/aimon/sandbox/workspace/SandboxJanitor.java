@@ -199,7 +199,7 @@ public final class SandboxJanitor implements AutoCloseable {
      * are never reused, so a missing record is a purged one and nothing can re-create it in between.
      */
     private void sweepSessionOptions() {
-        final SessionOptionsStore options = manager.sessionOptions();
+        final SessionOptionsStore options = manager.sessionOptionsStore();
         Optional<SandboxWorkspaceId> after = Optional.empty();
         try {
             while (true) {
