@@ -571,7 +571,11 @@ an agent's `reject`.
 ## 12. Open questions
 
 - **Q1 — per-request option.** A per-execution workspace or rule (including routines) needs core to carry request
-  attributes in `EnvironmentRequest`. Propose to aimon-core if session-level options prove too coarse.
+  attributes in `EnvironmentRequest` — proposed as kangwoo/aimon-core#252 (forward `SubmitOptions`' execution
+  attributes). Two more core proposals came out of this work: a session owner and a deletion event
+  (kangwoo/aimon-core#253 — would replace `SessionOwnerLookup` and the host's `deleteSessionOptions` call) and a notice
+  channel for every tool result (kangwoo/aimon-core#254 — would let the switch notice of §6.4 reach a file-tools-only
+  turn).
 - **Q2 — persistence.** Users who create a workspace first will expect files to outlive idle termination. That is
   shared volumes (WS §18-5); until then README warns.
 - **Q3 — asynchronous / idempotent create.** Synchronous create blocks up to `provisionTimeout`; an HTTP host may want
