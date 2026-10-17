@@ -44,12 +44,17 @@ Maven Central and still works; its design document was deleted with it and survi
 The dependency runs one way: this repository compiles against a released `at.aimon.core:aimon-core` from
 Maven Central (one line in [`gradle/libs.versions.toml`](gradle/libs.versions.toml)), and aimon-core has no
 reference to anything here. The workspace sandbox implements aimon-core's execution-environment SPI
-(design §7), which aimon-core has since 0.3.1. `main` needs 0.3.2 for `ExecutionOptions.isHook()` (core PR #211).
+(design §7), which aimon-core has since 0.3.1. `main` needs 0.3.3 — pinned as `0.3.3-SNAPSHOT` until it is released —
+for per-request attributes (kangwoo/aimon-core#252), the recorded session owner and the session deletion event
+(kangwoo/aimon-core#253) and environment notices on every tool result (kangwoo/aimon-core#254)
+([`docs/design/workspace-sandbox-core-033.md`](docs/design/workspace-sandbox-core-033.md)).
 
 ## Wiring
 
 ```java
-WorkspaceSandbox sandbox = WorkspaceSandbox.builder().settings(settings).provider(provider).build();
+WorkspaceSandbox sandbox = WorkspaceSandbox.builder().settings(settings).provider(provider)
+        .sessionRecords(() -> stack.sessionRecordStore())    // the session owner core recorded
+        .build();
 sandbox.janitor().start();
 
 // a hand-built runtime
@@ -57,7 +62,26 @@ runtimeBuilder.executionEnvironmentProvider(sandbox.environmentProvider());
 
 // through aimon-bootstrap
 ExecutionEnvironmentSpec.shared(sandbox.environmentProvider());
+SessionSpec.builder().lifecycleListener(sandbox.sessionLifecycleListener());   // or SessionRouterBuilder, or a bean
 ```
+
+- **Session owners come from core.** With `sessionRecords(...)`, the owner core recorded for a session — set by
+  `SubmitRequest.owner(...)` on the submit that creates it — owns its `ws:{sessionId}` workspace and its options. A
+  host whose older sessions were created without an owner keeps its `SessionOwnerLookup` too; it is asked only for
+  those. With `require-principal` on, a session no source knows the owner of gets no sandbox: there is no fallback to
+  "whoever calls first". Each main-turn bind loads the session's record once.
+- **Register the session lifecycle listener.** When core's session router deletes a session, it removes the
+  session's sandbox options and closes and deletes its `ws:{sessionId}` workspace (a managed workspace it was attached
+  to is shared and stays). Only the deleting node hears of it, which is enough: everything it removes is in the
+  shared stores. A session deleted outside the router is cleaned up by `SandboxAdministration.deleteSessionOptions`,
+  or by the janitor once `closed-retention` has passed (with `sessionRecords` wired). Re-creating a session under the
+  same id right after deleting it gets "being removed; retry shortly" from its tools until the old sandbox is gone
+  (up to `close-wait`). The shell state such a session left in a managed workspace
+  (`/workspace/.aimon-shell/session-{id}`) is not removed: a new session with the same id in the same workspace starts
+  from its cwd and exports.
+- **Notices reach every tool result.** A reset, a re-created sandbox or a workspace move is told to the model at the
+  head of the next tool result of any kind — a `Read` too — once, as an `[environment]` line. `ShellCommandResult
+  .notices()` now carries only what is true of that command (it was killed; its working directory was gone).
 
 - **Use `shared(...)`, not `provider(Supplier)`.** The host owns the `WorkspaceSandbox` and closes it; the stack
   must not. `ExecutionEnvironmentSpec.factory` no longer exists in aimon-core 0.3.1.
@@ -100,9 +124,28 @@ workspaces.purge(ws.id(), alice);                                               
 - **Ids are generated, never chosen** (`wsm:{uuid}`); the `name` is for people and never reaches the model. A
   failed first provisioning keeps the workspace and throws `WorkspaceProvisioningException` with its id: retry with
   `provision(id)` or `purge` it. One owner holds at most `max-managed-per-owner` (20) managed workspaces.
-- **Session options need a `SessionOwnerLookup`**: only a session's owner sets them, to a workspace that owner may
-  use. `clearSessionOptions` detaches a session but keeps a small record of where it last ran; when you delete the
-  session, call `deleteSessionOptions` (while your lookup still knows it), or that record stays.
+- **Session options need an owner source** — `sessionRecords(...)`, a `SessionOwnerLookup`, or both: only a
+  session's owner sets them, to a workspace that owner may use. With `sessionRecords(...)` alone, a session's record
+  exists only from its first submit, so options cannot be set before it: place that first turn with a request
+  attribute instead, provision the record with `SessionRecordStore.provision(id, agentRef, owner)`, or keep a lookup.
+  `clearSessionOptions` detaches a session but keeps a small record of where it last ran; the lifecycle listener
+  removes it with the session.
+- **One turn or one routine run can be placed by its host**, with request attributes:
+
+  ```java
+  live.submit(prompt, SubmitOptions.builder()
+          .executionAttributes(SandboxRequestAttributes.workspace(ws.id())).build());
+  schedulingSpec.withRoutineExecutionAttributes((task, executionId) ->
+          placementOf(task.getId()).map(SandboxRequestAttributes::workspace).orElse(Map.of()));
+  ```
+
+  `environment.sandbox.workspace` binds that execution only — it writes no session option — and the principal it
+  runs as must be allowed to use the workspace (a routine runs as its task's owner). `environment.sandbox.unattached:
+  reject` refuses that execution when nothing else attaches it; it can only tighten. Forks inherit their parent's
+  workspace and never see request attributes. Any other `environment.sandbox.*` key is refused. **Never fill them
+  from model output.** Which workspace a root execution gets — the first that applies: the request attribute, the
+  session option, the agent default, then the unattached rule (`ws:{sessionId}` or refused), whose layers —
+  deployment setting, agent, session, request — can each only tighten the one before.
 - **An agent default**: a definition's `attributes: { sandbox: { workspace: wsm:…, unattached: reject } }` binds every
   session of that agent that is not attached elsewhere, and `reject` refuses unattached sessions a sandbox. The
   `unattached` setting is the floor; a definition and a session's own option can only tighten it. Writing
@@ -134,8 +177,9 @@ admin.terminateSlot(workspaceId, "primary", operator);   // the next use provisi
 - **It checks no owner or tenant.** It is not a security boundary inside the JVM but a separate API surface: build
   it only behind your own operator authorization, and never hand it to ordinary callers.
 - **Every write records the actor** on its `SandboxEvent` (`actor()`), so the audit log tells operator actions apart.
-- An operator can attach a session only to a workspace the session's owner may use, and needs the `SessionOwnerLookup`
-  for it too.
+- An operator can attach a session only to a workspace the session's owner may use, and needs an owner source
+  (`sessionRecords(...)` or a `SessionOwnerLookup`) for it too. Deleting a session's options needs one wired, but not
+  that it still knows the session.
 
 ## Build
 

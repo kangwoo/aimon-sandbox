@@ -5,7 +5,72 @@ All notable aimon-sandbox changes are recorded here. The format is loosely based
 
 ## [Unreleased]
 
-Requires aimon-core **0.3.2**.
+Requires aimon-core **0.3.3**. Until core releases it, `main` pins `0.3.3-SNAPSHOT` from Central's snapshot repository,
+which `scripts/release.sh` refuses to release
+([`docs/design/workspace-sandbox-core-033.md`](docs/design/workspace-sandbox-core-033.md)).
+
+### Added: per-execution workspace and rule (kangwoo/aimon-core#252)
+
+- **Request attributes place one execution.** A host sets `environment.sandbox.workspace` on a turn
+  (`SubmitOptions.executionAttributes`) or on a routine run (a `RoutineExecutionAttributes` resolver); core forwards
+  it, and the turn or run binds to that managed workspace ahead of the session's options and the agent default. It
+  redirects that execution only and writes no session option, so the executing principal's use right is the whole
+  right it needs (a routine runs as its task's owner). `environment.sandbox.unattached` joins the unattached rule,
+  which is now `strictest(unattached, sandbox.unattached, session option, request)`. Any other
+  `environment.sandbox.*` key is refused. Forks inherit their parent's workspace and never see request attributes.
+  `SandboxRequestAttributes` holds the keys and builds the maps. Never fill them from model output.
+- `BindingContext.requestAttributes()` for custom binding policies.
+- A session redirected by a request attribute hears so once, and once more when a later turn runs elsewhere again.
+  A session that had no options record gets one holding only where it last ran; it grants nothing and is not listed as
+  an attachment.
+
+### Added: session owner from core and a deletion listener (kangwoo/aimon-core#253)
+
+- **`WorkspaceSandbox.Builder.sessionRecords(SessionRecordStore)`** (or a `Supplier`): the owner core recorded for a
+  session — set by `SubmitRequest.owner(...)` on the submit that creates it — is the session's owner for its
+  `ws:{sessionId}` workspace and its options, with a `SessionOwnerLookup`, when also wired, asked only for sessions
+  recorded without one. `SessionOwnerLookup.recorded(...)` and `orElse(...)` compose the same by hand. It satisfies
+  `require-principal` on its own. Under `require-principal`, a session no source knows the owner of gets no sandbox.
+- **`WorkspaceSandbox.sessionLifecycleListener()`** (`SandboxSessionCleanup`): register it with core's session
+  router (`SessionRouterBuilder.lifecycleListener`, `SessionSpec.Builder.lifecycleListener`, or a Spring bean). On a
+  delete it removes the session's options and closes and deletes its `ws:{sessionId}` workspace, without
+  `closed-retention`: the record is marked at once, under the session's lease, and the sandboxes are destroyed in the
+  background. A session re-created with the same id meanwhile gets "being removed; retry shortly", never the deleted
+  session's sandbox. A managed workspace the session was attached to is left alone.
+- **`CloseCause.SESSION_DELETED`**, the cause of such a close. The janitor finishes a deletion that was interrupted
+  and deletes a `CLOSED(SESSION_DELETED)` record on its first pass.
+- **Janitor sweep of deleted sessions** (with `sessionRecords` wired): options of a session core no longer has are
+  deleted once older than `closed-retention` — a lost event, or a session deleted outside the router.
+- **`WorkspaceSandbox.Builder.backgroundExecutor(Executor)`**: where that background work and the `lastWorkspaceId`
+  write run. Default: two daemon threads with a queue of 1 000, owned and shut down by the assembly (it waits five
+  seconds, then interrupts; the janitor finishes what was cut short), apart from the heartbeat and janitor threads.
+- **`SessionOptionsStore.sessions(after, limit)`**, every record by session id, with a contract test.
+
+### Changed: environment notices reach every tool result (kangwoo/aimon-core#254)
+
+- **`SandboxExecutionEnvironment.drainNotices()`**. What `connect` reports — an idle reset, a re-created or lost
+  sandbox, a slow provisioning, a workspace switch — is delivered by core at the head of the next tool result of any
+  kind, a `Read` or a hook's tool call included, once, as an `[environment]` line. Before, it waited for the next
+  `Bash` result, and a turn of file tools only never heard it. The switch is recorded as the session's
+  `lastWorkspaceId` when it is delivered.
+- **`ShellCommandResult.notices()` and the shell exceptions carry only per-command facts**: the command was killed,
+  or its working directory was gone.
+- **A re-creation made by a fork is told to its parent**: each environment remembers the sandbox generation it last
+  used and says so when a later call of its own finds a newer one it did not re-create itself.
+
+### Behaviour changes for 0.1.0 hosts and for this cycle's API
+
+- **`SandboxWorkspaces.deleteSessionOptions` is removed** (it was added in this cycle, never released). Register the
+  lifecycle listener instead; for sessions deleted outside the router, use `SandboxAdministration.deleteSessionOptions`
+  — which no longer needs the owner source to still know the session — or rely on the janitor's sweep.
+- **`CloseCause` has a third constant**: an exhaustive `switch` over it needs a branch for `SESSION_DELETED`. A store
+  that persists the enum by name needs nothing.
+- **A custom `SessionOptionsStore` must implement `sessions(...)`**; run the updated contract.
+- **Code that reads `ShellCommandResult.notices()`** no longer finds environment notices there; they reach the model
+  through core.
+- **Non-String `environment.*` execution attributes** set for other purposes now make that turn's environment
+  unavailable: core 0.3.3 reserves the prefix.
+- `WorkspaceSwitch.optionsVersion()` is an `OptionalLong` (no options record yet).
 
 ### Added: managed workspaces, session options and an agent default
 
@@ -15,16 +80,16 @@ Management design [`docs/design/workspace-sandbox-management.md`](docs/design/wo
   provision its `primary` slot before returning; `provision` (retry after a `WorkspaceProvisioningException`),
   `describe`, `list` the caller's own, `close`, `reopen` (which provisions) and `purge` (CLOSED managed workspaces
   only; the id is never reused). Views carry no provider sandbox id.
-- **Session options**: `setSessionOptions` / `clearSessionOptions` / `deleteSessionOptions` / `sessionOptions` attach
-  a session to a managed workspace, set its own unattached rule, and remove the record when the host deletes the
-  session. Only the session's owner may, which needs a `SessionOwnerLookup`. They
+- **Session options**: `setSessionOptions` / `clearSessionOptions` / `sessionOptions` attach a session to a managed
+  workspace and set its own unattached rule; the lifecycle listener (above) removes them with the session. Only the
+  session's owner may, which needs an owner source (`sessionRecords(...)` or a `SessionOwnerLookup`). They
   live in the new `SessionOptionsStore` SPI (`InMemorySessionOptionsStore` by default, single node only;
   `WorkspaceSandbox.Builder.sessionOptionsStore`) with a `SessionOptionsStoreContract` in the testkit.
 - **Binding**: the configured policy is wrapped in `SessionOptionsBindingPolicy` — session options, then the
   definition's `sandbox.workspace`, then the effective unattached rule
   `strictest(unattached, sandbox.unattached, session option)`. A binding to a workspace it did not derive is
   `mustExist` and never re-creates a missing record. A session that moved hears so once ("now runs in sandbox
-  workspace …") with its next command's result — never with a hook's.
+  workspace …") with its next tool result.
 - **Rights**: a record's own `access` decides who may use it; close, reopen and purge of a managed workspace are its
   owner's alone.
 - **Settings**: `unattached` (`per-session`), `allow-shared-workspaces` (false), `max-managed-per-owner` (20, or
@@ -70,7 +135,8 @@ Management design [`docs/design/workspace-sandbox-management.md`](docs/design/wo
 
 ### Changed
 
-- **aimon-core 0.3.2.** Core removed `UserLocale` (EE-60); nothing in this library's main code used it.
+- **aimon-core 0.3.3** (through 0.3.2, which removed `UserLocale` (EE-60); nothing in this library's main code used
+  it).
 - **`scripts/release.sh` refuses while `gradle/libs.versions.toml` pins a SNAPSHOT** (any uncommented line, inline
   `version = "…"` entries included; a dry run refuses too), so a pre-release dependency cannot be released by accident.
 

@@ -3,6 +3,9 @@
 > Status: **APPROVED r3** — revised after reviews 1 and 2 (§13 and §14 map every finding to its resolution). Once approved, the
 > architecture document [`workspace-sandbox.md`](workspace-sandbox.md) (below: **WS**) absorbs the departures of §8 in
 > the implementing branches, as it did for steps 3 and 4.
+>
+> Since aimon-core 0.3.3, three workarounds below are replaced by core seams; §17 lists what changed and points to
+> [`workspace-sandbox-core-033.md`](workspace-sandbox-core-033.md). The body is left as approved.
 
 > Scope: a management layer on top of the step-3/4 domain — explicit workspace creation with immediate provisioning,
 > per-session sandbox options (attachment and the unattached rule), an agent-definition default workspace, and an
@@ -686,4 +689,22 @@ PR 1 built (§15).
 | A8 | `SandboxView.verdict`; `pastGrace` for `ORPHAN` and `STALE` (§6.8) | `classify`'s verdict before grace: an `IN_FLIGHT` sandbox ahead of its record, which the janitor escalates to `ORPHAN` after `orphan-grace`, still reads `IN_FLIGHT`. `pastGrace` is given where the janitor waits for the grace — `ORPHAN`, `DUPLICATE` and that `IN_FLIGHT` — not for `STALE`, which goes without grace (§6.8 corrected) | the facade cannot see the reconciler's node-local `firstSeen`; the pure verdict is the reproducible one |
 | A10 | the administration's session writes | also `deleteSessionOptions(session, actor)`, the operator's cleanup for a host that deleted sessions without removing their options (P7) | otherwise only `clear` remains, which keeps a `lastWorkspaceId` record |
 | A9 | admin entry points | live on the manager as `admin*` (Internal), following P9; the facade is thin | the use and manage checks, the CAS loops and `emit` are there |
+
+---
+
+## 17. Departures after aimon-core 0.3.3
+
+aimon-core 0.3.3 shipped the three things this design worked around (kangwoo/aimon-core#252, #253, #254). The change
+that adopts them is [`workspace-sandbox-core-033.md`](workspace-sandbox-core-033.md) (**C33**); the sections above keep
+their approved text, and this table says where they no longer describe the code.
+
+| Where | Was | Now | C33 |
+|---|---|---|---|
+| §1, §12 Q1 — "execution option" | per session only: the host writes session options before a turn, routines get nothing | a turn or a routine run can name its workspace and tighten its unattached rule through request attributes (`environment.sandbox.workspace`, `environment.sandbox.unattached`); the session option stays as the session-level default. §12 Q1 is resolved | §2.3, §5.1, §6.1 |
+| §6.3 — resolution order | rows 1–3 | row 0, the request attribute, comes first and binds only its own execution; the use right is the whole right it needs. The rule is `strictest(setting, agent, session, request)` | §5.1, §6.1 |
+| §6.2, §4.4 — owner source | a host `SessionOwnerLookup`, required for session options | the owner core records (`WorkspaceSandbox.Builder.sessionRecords`), with the host lookup as the fallback for sessions recorded without one | §5.2, §6.2 |
+| §6.2, P7 — "hosts delete options with their sessions" | the host calls `SandboxWorkspaces.deleteSessionOptions` on every delete | `WorkspaceSandbox.sessionLifecycleListener()` does, and also closes and deletes `ws:{sessionId}`; the owner-facing `deleteSessionOptions` is removed. A10's operator `deleteSessionOptions` stays for sessions deleted outside the router, and a janitor sweep removes what a lost event leaves | §2.3, §6.3 |
+| §6.4, P4 — notice channel | the switch notice rides the next `Bash` result; recorded once a command result carried it | every environment-level notice is delivered by core's `drainNotices()` on the next tool result of any kind, and the switch is recorded when it is drained (asynchronously). A row-0 redirect is announced too, and recorded in a record the recorder creates if needed | §6.4 |
+| P16 — hooks take no notice | a hook's command result takes none | gone: shell results carry only per-command notices, and core drains on the tool the hook ran for | §6.5 |
+| P7 — `clearSessionOptions` fallback to the attached workspace | needed because a file-only turn never recorded `lastWorkspaceId` | kept, for a different case: a drained switch whose asynchronous record write loses its CAS to the clear | §6.4 |
 
