@@ -80,9 +80,9 @@ SessionSpec.builder().lifecycleListener(sandbox.sessionLifecycleListener());   /
   or by the janitor once `closed-retention` has passed (with `sessionRecords` wired). Re-creating a session under the
   same id right after deleting it gets "being removed; retry shortly" from its tools until the old sandbox is gone:
   normally up to `close-wait`, but when that background close is dropped (its executor refused it, `close()` cut it
-  short, the node died) the janitor finishes it after `close-resume-after` plus one janitor period. The shell state such a session left in a managed workspace
-  (`/workspace/.aimon-shell/session-{id}`) is not removed: a new session with the same id in the same workspace starts
-  from its cwd and exports.
+  short, the node died) the janitor finishes it after `close-resume-after` plus one janitor period. The shell state
+  such a session left in a managed workspace (`/workspace/.aimon-shell/session-{id}`) is not removed: a new session
+  with the same id in the same workspace starts from its cwd and exports.
 - **Notices reach every tool result.** A reset, a re-created sandbox or a workspace move is told to the model at the
   head of the next tool result of any kind — a `Read` too — once, as an `[environment]` line. `ShellCommandResult
   .notices()` now carries only what is true of that command (it was killed; its working directory was gone).
