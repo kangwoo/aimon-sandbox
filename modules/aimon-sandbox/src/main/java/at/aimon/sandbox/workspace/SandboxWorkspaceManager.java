@@ -91,6 +91,7 @@ public final class SandboxWorkspaceManager {
     private final SandboxProfileRegistry profiles;
     private final SandboxProvider provider;
     private final SandboxWorkspaceStore store;
+    private final SessionOptionsStore sessionOptions;
     private final SandboxConnectionCache connections;
     private final SandboxAdmission admission;
     private final SandboxEventListener events;
@@ -104,6 +105,7 @@ public final class SandboxWorkspaceManager {
         this.profiles = Objects.requireNonNull(builder.profiles, "profiles must not be null");
         this.provider = Objects.requireNonNull(builder.provider, "provider must not be null");
         this.store = Objects.requireNonNull(builder.store, "store must not be null");
+        this.sessionOptions = Objects.requireNonNull(builder.sessionOptions, "sessionOptions must not be null");
         this.connections = Objects.requireNonNull(builder.connections, "connections must not be null");
         this.admission = Objects.requireNonNull(builder.admission, "admission must not be null");
         this.events = Objects.requireNonNull(builder.events, "events must not be null");
@@ -201,7 +203,7 @@ public final class SandboxWorkspaceManager {
         /** @return the connected slot, or {@code null} to go round again */
         private ConnectedSlot step() {
             SandboxWorkspace workspace = loadOrCreate(binding);
-            checkOwner(workspace, binding.caller());
+            checkUse(workspace, binding.caller());
             if (workspace.state() == WorkspaceState.CLOSED
                     && workspace.closeCause().orElse(CloseCause.EXPLICIT) == CloseCause.IDLE) {
                 workspace = store.update(workspace.id(), workspace.version(), reopened(workspace, clock.instant()));
@@ -318,6 +320,10 @@ public final class SandboxWorkspaceManager {
         final Optional<SandboxWorkspace> found = store.find(binding.workspaceId());
         if (found.isPresent()) {
             return found.get();
+        }
+        if (binding.mustExist()) {
+            // A purged managed id must not come back owned by whoever binds to it next (management design §5.3).
+            throw new SandboxUnavailableException("sandbox workspace " + binding.workspaceId() + " does not exist");
         }
         final Instant now = clock.instant();
         return store.createIfAbsent(SandboxWorkspace.builder().id(binding.workspaceId()).owner(binding.owner())
@@ -520,7 +526,7 @@ public final class SandboxWorkspaceManager {
      * @param id
      *            the workspace
      * @param caller
-     *            the principal asking; must pass the owner check
+     *            the principal asking; must have the manage right ({@link #checkManage})
      * @throws SandboxUnavailableException
      *             when the caller may not close it
      * @throws at.aimon.sandbox.binding.BindingRejectedException
@@ -533,7 +539,7 @@ public final class SandboxWorkspaceManager {
         if (found.isEmpty()) {
             return;
         }
-        checkOwner(found.get(), who);
+        checkManage(found.get(), who);
         closeProcedure(id, CloseCause.EXPLICIT, current -> true);
     }
 
@@ -544,7 +550,7 @@ public final class SandboxWorkspaceManager {
      * @param id
      *            the workspace
      * @param caller
-     *            the principal asking; must pass the owner check
+     *            the principal asking; must have the manage right ({@link #checkManage})
      * @throws SandboxUnavailableException
      *             when the caller may not reopen it, it does not exist, or it is still closing — also when it became
      *             CLOSING after this call first read it
@@ -556,7 +562,7 @@ public final class SandboxWorkspaceManager {
         final WorkspaceOwner who = callers.callerOf(Optional.ofNullable(caller));
         final SandboxWorkspace found = store.find(id)
                 .orElseThrow(() -> new SandboxUnavailableException("no such sandbox workspace"));
-        checkOwner(found, who);
+        checkManage(found, who);
         // Decided on the freshly read record inside the CAS: a close that started since the first read is refused,
         // not silently ignored.
         mutate(id, current -> {
@@ -826,17 +832,48 @@ public final class SandboxWorkspaceManager {
     // ---------------------------------------------------------------------------------------------------------------
 
     /**
-     * The owner check (§8.3): the tenant always, the principal too under {@code workspace-access: principal}. The
-     * message says nothing about the workspace beyond "not permitted" (§15).
+     * The use right (§8.3; management design §6.5): the tenant always, the principal too unless the workspace's access
+     * — its own, else {@code workspace-access} — is {@code tenant}. Checked by {@code connect}, {@code provision},
+     * {@code describe} and for the target of session options. The message says nothing about the workspace beyond "not
+     * permitted" (§15).
+     *
+     * @throws SandboxUnavailableException
+     *             when {@code caller} may not use it
      */
-    private void checkOwner(SandboxWorkspace workspace, WorkspaceOwner caller) {
-        final WorkspaceOwner owner = workspace.owner();
-        final boolean permitted = owner.tenant().equals(caller.tenant())
-                && (settings.workspaceAccess() == SandboxSettings.WorkspaceAccess.TENANT
-                        || owner.principal().equals(caller.principal()));
-        if (!permitted) {
-            throw new SandboxUnavailableException("this principal is not permitted to use the sandbox workspace");
+    void checkUse(SandboxWorkspace workspace, WorkspaceOwner caller) {
+        if (!mayUse(workspace, caller)) {
+            throw notPermitted();
         }
+    }
+
+    /**
+     * @return whether {@code caller} has the use right on {@code workspace}
+     */
+    boolean mayUse(SandboxWorkspace workspace, WorkspaceOwner caller) {
+        final WorkspaceOwner owner = workspace.owner();
+        return owner.tenant().equals(caller.tenant())
+                && (workspace.access().orElse(settings.workspaceAccess()) == SandboxSettings.WorkspaceAccess.TENANT
+                        || owner.principal().equals(caller.principal()));
+    }
+
+    /**
+     * The manage right (management design §6.5) of {@code close}, {@code reopen} and {@code purge}: on a
+     * {@code MANAGED} record the owner's tenant and principal, whatever its access mode — sharing a workspace lets
+     * others use it, not end it; on a {@code DERIVED} record the use right, as before.
+     *
+     * @throws SandboxUnavailableException
+     *             when {@code caller} may not manage it
+     */
+    void checkManage(SandboxWorkspace workspace, WorkspaceOwner caller) {
+        if (workspace.origin() == WorkspaceOrigin.DERIVED) {
+            checkUse(workspace, caller);
+        } else if (!workspace.owner().equals(caller)) {
+            throw new SandboxUnavailableException("this principal is not permitted to manage the sandbox workspace");
+        }
+    }
+
+    private static SandboxUnavailableException notPermitted() {
+        return new SandboxUnavailableException("this principal is not permitted to use the sandbox workspace");
     }
 
     /**
@@ -934,6 +971,10 @@ public final class SandboxWorkspaceManager {
 
     SandboxWorkspaceStore store() {
         return store;
+    }
+
+    SessionOptionsStore sessionOptions() {
+        return sessionOptions;
     }
 
     Clock clock() {
@@ -1035,6 +1076,7 @@ public final class SandboxWorkspaceManager {
         private SandboxProfileRegistry profiles;
         private SandboxProvider provider;
         private SandboxWorkspaceStore store;
+        private SessionOptionsStore sessionOptions = new InMemorySessionOptionsStore();
         private SandboxConnectionCache connections;
         private SandboxAdmission admission;
         private SandboxEventListener events = SandboxEventListener.NOOP;
@@ -1062,6 +1104,12 @@ public final class SandboxWorkspaceManager {
 
         public Builder store(SandboxWorkspaceStore store) {
             this.store = store;
+            return this;
+        }
+
+        /** Default: a new {@link InMemorySessionOptionsStore}. */
+        public Builder sessionOptions(SessionOptionsStore sessionOptions) {
+            this.sessionOptions = sessionOptions;
             return this;
         }
 

@@ -395,4 +395,36 @@ class SandboxEnvironmentProviderTest {
         return DefaultAgent.builder().name("agent").systemPrompt("p").model(LlmModel.builder().name("m").build())
                 .attributes(attributes).build();
     }
+
+    private static SandboxHarness attachedTo(String workspace) {
+        return SandboxHarness.builder().bindingPolicy(context -> SandboxBinding.builder()
+                .workspaceId(at.aimon.sandbox.workspace.SandboxWorkspaceId.of(workspace))
+                .owner(at.aimon.sandbox.workspace.WorkspaceOwner.anonymous(at.aimon.sandbox.workspace.TenantId.DEFAULT))
+                .caller(at.aimon.sandbox.workspace.WorkspaceOwner
+                        .anonymous(at.aimon.sandbox.workspace.TenantId.DEFAULT))
+                .shellKey(at.aimon.sandbox.binding.ShellKey.session(context.sessionId().orElseThrow())).mustExist(true)
+                .build()).build();
+    }
+
+    @Test
+    @DisplayName("management §5.3: bindRoot's rebuild through toBuilder keeps mustExist")
+    void bindRootKeepsMustExist() {
+        try (SandboxHarness custom = attachedTo("wsm:attached")) {
+            assertThat(binding(custom.mainTurn(SessionId.generate(), ALICE)).mustExist()).isTrue();
+        }
+    }
+
+    @Test
+    @DisplayName("management §5.3: a fork of an attached session inherits mustExist")
+    void forkOfAttachedSessionKeepsMustExist() {
+        try (SandboxHarness custom = attachedTo("wsm:attached")) {
+            final ExecutionEnvironment parent = custom.mainTurn(SessionId.generate(), ALICE);
+            final SandboxBinding fork = binding(custom.fork(parent, ALICE));
+
+            assertThat(fork.mustExist()).isTrue();
+            assertThat(fork.workspaceId().value()).isEqualTo("wsm:attached");
+            assertThat(binding(harness.mainTurn(SessionId.generate(), ALICE)).mustExist())
+                    .as("a derived binding may create").isFalse();
+        }
+    }
 }

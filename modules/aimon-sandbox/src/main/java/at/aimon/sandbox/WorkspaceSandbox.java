@@ -17,12 +17,14 @@ import at.aimon.sandbox.provider.SandboxConnectionCache;
 import at.aimon.sandbox.provider.SandboxProvider;
 import at.aimon.sandbox.workspace.DefaultSandboxAdmission;
 import at.aimon.sandbox.workspace.InMemorySandboxWorkspaceStore;
+import at.aimon.sandbox.workspace.InMemorySessionOptionsStore;
 import at.aimon.sandbox.workspace.SandboxAdmission;
 import at.aimon.sandbox.workspace.SandboxEventListener;
 import at.aimon.sandbox.workspace.SandboxJanitor;
 import at.aimon.sandbox.workspace.SandboxScheduler;
 import at.aimon.sandbox.workspace.SandboxWorkspaceManager;
 import at.aimon.sandbox.workspace.SandboxWorkspaceStore;
+import at.aimon.sandbox.workspace.SessionOptionsStore;
 
 /**
  * The assembly: builds, validates and closes the application-scoped singletons of docs/design/workspace-sandbox.md
@@ -64,6 +66,7 @@ public final class WorkspaceSandbox implements AutoCloseable {
     private final SandboxScheduler janitorScheduler;
     private final boolean ownScheduler;
     private final SandboxWorkspaceStore store;
+    private final SessionOptionsStore sessionOptions;
     private final SandboxProfileRegistry profiles;
     private final SandboxConnectionCache connections;
     private final SandboxWorkspaceManager manager;
@@ -83,6 +86,9 @@ public final class WorkspaceSandbox implements AutoCloseable {
         this.janitorScheduler = ownScheduler ? SandboxScheduler.daemon("aimon-sandbox-janitor", 1) : builder.scheduler;
         try {
             this.store = builder.store != null ? builder.store : new InMemorySandboxWorkspaceStore();
+            this.sessionOptions = builder.sessionOptionsStore != null
+                    ? builder.sessionOptionsStore
+                    : new InMemorySessionOptionsStore();
             this.profiles = new SandboxProfileRegistry(settings.profiles(), settings.defaultProfile());
             final Clock clock = builder.clock;
             this.connections = new SandboxConnectionCache(provider, clock);
@@ -94,8 +100,8 @@ public final class WorkspaceSandbox implements AutoCloseable {
                             ? SandboxAdmission.UNLIMITED
                             : new DefaultSandboxAdmission(store, settings.maxRunningPerTenant());
             this.manager = SandboxWorkspaceManager.builder().settings(settings).profiles(profiles).provider(provider)
-                    .store(store).connections(connections).admission(admission).events(builder.eventListener)
-                    .callers(callers).clock(clock).scheduler(scheduler).build();
+                    .store(store).sessionOptions(sessionOptions).connections(connections).admission(admission)
+                    .events(builder.eventListener).callers(callers).clock(clock).scheduler(scheduler).build();
             this.janitor = new SandboxJanitor(manager, janitorScheduler);
             final SandboxBindingPolicy policy = builder.bindingPolicy != null
                     ? builder.bindingPolicy
@@ -135,6 +141,11 @@ public final class WorkspaceSandbox implements AutoCloseable {
     /** @return the workspace store */
     public SandboxWorkspaceStore store() {
         return store;
+    }
+
+    /** @return the session options store */
+    public SessionOptionsStore sessionOptionsStore() {
+        return sessionOptions;
     }
 
     /** @return the configured profiles */
@@ -189,6 +200,7 @@ public final class WorkspaceSandbox implements AutoCloseable {
         private SandboxProvider provider;
         private boolean ownProvider;
         private SandboxWorkspaceStore store;
+        private SessionOptionsStore sessionOptionsStore;
         private SandboxTenantResolver tenantResolver;
         private SessionOwnerLookup sessionOwnerLookup;
         private SandboxAdmission admission;
@@ -224,6 +236,15 @@ public final class WorkspaceSandbox implements AutoCloseable {
          */
         public Builder store(SandboxWorkspaceStore store) {
             this.store = store;
+            return this;
+        }
+
+        /**
+         * Default: a new {@link InMemorySessionOptionsStore} — <b>single node only</b>, like the in-memory workspace
+         * store (docs/design/workspace-sandbox-management.md §12 Q4).
+         */
+        public Builder sessionOptionsStore(SessionOptionsStore sessionOptionsStore) {
+            this.sessionOptionsStore = sessionOptionsStore;
             return this;
         }
 

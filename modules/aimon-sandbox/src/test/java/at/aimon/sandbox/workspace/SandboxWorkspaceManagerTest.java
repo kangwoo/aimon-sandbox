@@ -425,4 +425,19 @@ class SandboxWorkspaceManagerTest {
                         .state(SlotState.PROVISIONING).generation(1).provisioning(claim).lastActivityAt(now).build()))
                 .build();
     }
+
+    @Test
+    @DisplayName("management §5.3: a mustExist binding on a missing record answers 'does not exist' and writes nothing")
+    void connectWithMustExistOnMissingRecordCreatesNothing() {
+        final SandboxWorkspaceId id = SandboxWorkspaceId.of("wsm:purged");
+        final WorkspaceOwner alice = WorkspaceOwner.of(TenantId.DEFAULT, ALICE);
+        final at.aimon.sandbox.binding.SandboxBinding binding = at.aimon.sandbox.binding.SandboxBinding.builder()
+                .workspaceId(id).owner(alice).caller(alice)
+                .shellKey(at.aimon.sandbox.binding.ShellKey.session(SessionId.generate())).mustExist(true).build();
+
+        assertThatThrownBy(() -> manager().connect(binding)).isInstanceOf(SandboxUnavailableException.class)
+                .hasMessageContaining("sandbox workspace wsm:purged does not exist");
+        assertThat(harness.store.scan(WorkspaceScan.builder().build())).isEmpty();
+        assertThat(harness.faults.calls(Operation.CREATE)).isZero();
+    }
 }
