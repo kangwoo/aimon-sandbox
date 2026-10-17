@@ -625,13 +625,16 @@ public final class SandboxWorkspaceManager {
      *             {@code ExecutionEnvironmentUnavailableException}
      */
     public void close(SandboxWorkspaceId id, Principal caller) {
-        final WorkspaceOwner who = callers.callerOf(Optional.ofNullable(caller));
+        close(id, Acting.as(callers.callerOf(Optional.ofNullable(caller))));
+    }
+
+    private void close(SandboxWorkspaceId id, Acting acting) {
         final Optional<SandboxWorkspace> found = store.find(id);
         if (found.isEmpty()) {
             return;
         }
-        checkManage(found.get(), who);
-        closeProcedure(id, CloseCause.EXPLICIT, current -> true);
+        acting.checkManage(this, found.get());
+        closeProcedure(id, CloseCause.EXPLICIT, current -> true, acting.actor());
     }
 
     /**
@@ -650,10 +653,13 @@ public final class SandboxWorkspaceManager {
      *             {@code ExecutionEnvironmentUnavailableException}
      */
     public void reopen(SandboxWorkspaceId id, Principal caller) {
-        final WorkspaceOwner who = callers.callerOf(Optional.ofNullable(caller));
+        reopen(id, Acting.as(callers.callerOf(Optional.ofNullable(caller))));
+    }
+
+    private void reopen(SandboxWorkspaceId id, Acting acting) {
         final SandboxWorkspace found = store.find(id)
                 .orElseThrow(() -> new SandboxUnavailableException("no such sandbox workspace"));
-        checkManage(found, who);
+        acting.checkManage(this, found);
         // Decided on the freshly read record inside the CAS: a close that started since the first read is refused,
         // not silently ignored.
         mutate(id, current -> {
@@ -664,7 +670,9 @@ public final class SandboxWorkspaceManager {
             return current.state() == WorkspaceState.CLOSED ? reopened(current, clock.instant()) : null;
         }).ifPresent(reopened -> {
             if (!reopened.incarnation().equals(found.incarnation())) {
-                emit(SandboxEvent.Type.WORKSPACE_REOPENED, reopened, null, "reopened by the application");
+                emit(SandboxEvent.Type.WORKSPACE_REOPENED, reopened, null,
+                        acting.isAdministrator() ? "reopened by an administrator" : "reopened by the application",
+                        acting.actor(), null);
             }
         });
     }
@@ -681,6 +689,15 @@ public final class SandboxWorkspaceManager {
      * @return whether the workspace reached CLOSED
      */
     boolean closeProcedure(SandboxWorkspaceId id, CloseCause cause, Predicate<SandboxWorkspace> guard) {
+        return closeProcedure(id, cause, guard, null);
+    }
+
+    /**
+     * @param actor
+     *            who asked for the close, recorded on its events; {@code null} for the janitor's
+     */
+    private boolean closeProcedure(SandboxWorkspaceId id, CloseCause cause, Predicate<SandboxWorkspace> guard,
+            String actor) {
         final boolean[] tombstoned = new boolean[1];
         final Optional<SandboxWorkspace> closing = mutate(id, current -> {
             tombstoned[0] = false;
@@ -718,7 +735,7 @@ public final class SandboxWorkspaceManager {
         final Predicate<SandboxWorkspace> stillClosing = current -> current.state() == WorkspaceState.CLOSING
                 && current.incarnation().equals(incarnation);
         for (String slotName : List.copyOf(closing.get().slots().keySet())) {
-            terminateSlot(id, slotName, "workspace close", stillClosing, slot -> true);
+            terminateSlot(id, slotName, "workspace close", stillClosing, slot -> true, actor);
         }
         // A close resumed after a crash finds slots already TERMINATED whose destroy never ran: destroy is
         // idempotent, so every recorded sandbox is destroyed again rather than trusting that it was.
@@ -730,7 +747,7 @@ public final class SandboxWorkspaceManager {
                         ? current.toBuilder().state(WorkspaceState.CLOSED).stateSince(clock.instant()).build()
                         : null);
         closed.ifPresent(w -> emit(SandboxEvent.Type.WORKSPACE_CLOSED, w, null,
-                w.closeCause().orElse(cause).name().toLowerCase(Locale.ROOT) + " close"));
+                w.closeCause().orElse(cause).name().toLowerCase(Locale.ROOT) + " close", actor, null));
         return closed.isPresent();
     }
 
@@ -742,11 +759,11 @@ public final class SandboxWorkspaceManager {
      * @return whether this call terminated it
      */
     boolean terminateSlot(SandboxWorkspaceId id, String slotName, String cause, Predicate<SandboxSlot> guard) {
-        return terminateSlot(id, slotName, cause, workspace -> true, guard);
+        return terminateSlot(id, slotName, cause, workspace -> true, guard, null);
     }
 
     private boolean terminateSlot(SandboxWorkspaceId id, String slotName, String cause,
-            Predicate<SandboxWorkspace> workspaceGuard, Predicate<SandboxSlot> guard) {
+            Predicate<SandboxWorkspace> workspaceGuard, Predicate<SandboxSlot> guard, String actor) {
         final SandboxSlot[] before = new SandboxSlot[1];
         final Optional<SandboxWorkspace> terminated = mutate(id, current -> !workspaceGuard.test(current)
                 ? null
@@ -758,7 +775,7 @@ public final class SandboxWorkspaceManager {
             return false;
         }
         before[0].providerRef().ifPresent(this::destroyQuietly);
-        emit(SandboxEvent.Type.TERMINATED, terminated.get(), before[0], cause);
+        emit(SandboxEvent.Type.TERMINATED, terminated.get(), before[0], cause, actor, null);
         return true;
     }
 
@@ -995,13 +1012,16 @@ public final class SandboxWorkspaceManager {
      *             when the caller may not manage it, it is not managed, not CLOSED, or changed during the purge
      */
     public void purge(SandboxWorkspaceId id, Principal caller) {
-        final WorkspaceOwner who = callers.callerOf(Optional.ofNullable(caller));
+        purge(id, Acting.as(callers.callerOf(Optional.ofNullable(caller))));
+    }
+
+    private void purge(SandboxWorkspaceId id, Acting acting) {
         final Optional<SandboxWorkspace> found = store.find(id);
         if (found.isEmpty()) {
             return;
         }
         final SandboxWorkspace workspace = found.get();
-        checkManage(workspace, who);
+        acting.checkManage(this, workspace);
         if (workspace.origin() != WorkspaceOrigin.MANAGED) {
             // Deleting a derived tombstone would let the session's next turn silently re-create ws:{sid}.
             throw new SandboxUnavailableException("only a managed sandbox workspace can be purged; a derived one's "
@@ -1017,7 +1037,7 @@ public final class SandboxWorkspaceManager {
             throw new SandboxUnavailableException("the sandbox workspace changed while it was being purged (it may "
                     + "have been reopened); it was kept", e);
         }
-        emit(SandboxEvent.Type.WORKSPACE_PURGED, workspace, null, "purged", who.toString(), null);
+        emit(SandboxEvent.Type.WORKSPACE_PURGED, workspace, null, "purged", acting.actor(), null);
         try {
             sessionOptions.deleteByWorkspace(id);
         } catch (RuntimeException e) {
@@ -1060,18 +1080,25 @@ public final class SandboxWorkspaceManager {
      */
     public Page<WorkspaceView, SandboxWorkspaceId> listOwned(Principal caller, WorkspaceQuery query) {
         final WorkspaceOwner who = callers.callerOf(Optional.ofNullable(caller));
+        return listing(WorkspaceScan.builder().owner(who).origin(query.origin().orElse(null)).states(query.states())
+                .afterId(query.after().orElse(null)).limit(query.limit()).build(), query.namePrefix());
+    }
+
+    /**
+     * One page of {@code scan}, by id. The name prefix is not a store filter: scan on until the page is full or the
+     * store is exhausted. Every record is checked against the scan again, so a store that ignores a filter (one written
+     * before the owner and origin filters existed) cannot show a workspace the listing excludes.
+     */
+    private Page<WorkspaceView, SandboxWorkspaceId> listing(WorkspaceScan first, Optional<String> namePrefix) {
         final List<WorkspaceView> items = new ArrayList<>();
-        WorkspaceScan scan = WorkspaceScan.builder().owner(who).origin(query.origin().orElse(null))
-                .states(query.states()).afterId(query.after().orElse(null)).limit(query.limit()).build();
-        // The name prefix is not a store filter: scan on until the page is full or the store is exhausted. Every
-        // record is checked against the scan again, so a store that ignores a filter cannot show another's workspace.
+        WorkspaceScan scan = first;
         while (true) {
             final List<SandboxWorkspace> page = store.scan(scan);
             for (SandboxWorkspace workspace : page) {
-                if (scan.matches(workspace) && query.namePrefix()
-                        .map(prefix -> workspace.name().orElse("").startsWith(prefix)).orElse(true)) {
+                if (scan.matches(workspace)
+                        && namePrefix.map(prefix -> workspace.name().orElse("").startsWith(prefix)).orElse(true)) {
                     items.add(view(workspace));
-                    if (items.size() == query.limit()) {
+                    if (items.size() == first.limit()) {
                         return Page.of(items, workspace.id());
                     }
                 }
@@ -1107,14 +1134,18 @@ public final class SandboxWorkspaceManager {
      *             when the workspace does not exist, is closing, or was closed explicitly
      */
     public void setSessionOptions(SessionId session, SessionSandboxOptions.Update update, Principal caller) {
+        setSessionOptions(session, update, Acting.as(callers.callerOf(Optional.ofNullable(caller))));
+    }
+
+    private void setSessionOptions(SessionId session, SessionSandboxOptions.Update update, Acting acting) {
         Objects.requireNonNull(update, "update must not be null");
         if (update.workspace().isEmpty() && update.unattached().isEmpty()) {
             // Nothing to set is a clear: no record is kept that holds nothing.
-            clearSessionOptions(session, caller);
+            clearSessionOptions(session, acting);
             return;
         }
-        final WorkspaceOwner who = callers.callerOf(Optional.ofNullable(caller));
-        final WorkspaceOwner sessionOwner = requireSessionOwner(session, who);
+        final WorkspaceOwner sessionOwner = requireSessionOwner(session, acting);
+        final WorkspaceOwner who = acting.recordedAs(sessionOwner.tenant());
         final Optional<SandboxWorkspaceId> target = update.workspace()
                 .map(id -> ManagedIds.require(id.value(), "the session option's workspace"));
         if (target.isPresent()) {
@@ -1124,7 +1155,9 @@ public final class SandboxWorkspaceManager {
                 throw new SandboxUnavailableException("sandbox workspace " + workspace.id() + " is " + workspace.state()
                         + "; it has to be reopened before a session can be attached to it");
             }
-            if (!mayUse(workspace, who) || !mayUse(workspace, sessionOwner)) {
+            // The consistency check, on the administrator's path too: no session is attached where its owner's turns
+            // would all be refused (§5.5).
+            if (!acting.mayUse(this, workspace) || !mayUse(workspace, sessionOwner)) {
                 throw new BindingRejectedException("the owner of session " + session.value()
                         + " is not permitted to use sandbox workspace " + workspace.id());
             }
@@ -1133,7 +1166,7 @@ public final class SandboxWorkspaceManager {
                 current -> (current != null ? current.toBuilder() : SessionSandboxOptions.builder().session(session))
                         .setBy(who).workspace(target.orElse(null)).unattached(update.unattached().orElse(null))
                         .updatedAt(clock.instant()).build());
-        emitSession(SandboxEvent.Type.SESSION_OPTIONS_SET, session, target.orElse(null), sessionOwner, who,
+        emitSession(SandboxEvent.Type.SESSION_OPTIONS_SET, session, target.orElse(null), sessionOwner, acting.actor(),
                 "set: workspace=" + target.map(SandboxWorkspaceId::value).orElse("none") + ", unattached="
                         + update.unattached().map(rule -> rule.name().toLowerCase(Locale.ROOT)).orElse("none"));
     }
@@ -1154,8 +1187,12 @@ public final class SandboxWorkspaceManager {
      *             as for {@link #setSessionOptions}
      */
     public void clearSessionOptions(SessionId session, Principal caller) {
-        final WorkspaceOwner who = callers.callerOf(Optional.ofNullable(caller));
-        final WorkspaceOwner sessionOwner = requireSessionOwner(session, who);
+        clearSessionOptions(session, Acting.as(callers.callerOf(Optional.ofNullable(caller))));
+    }
+
+    private void clearSessionOptions(SessionId session, Acting acting) {
+        final WorkspaceOwner sessionOwner = requireSessionOwner(session, acting);
+        final WorkspaceOwner who = acting.recordedAs(sessionOwner.tenant());
         for (int attempt = 0; attempt <= settings.casRetries(); attempt++) {
             final Optional<SessionSandboxOptions> current = sessionOptions.find(session);
             if (current.isEmpty()) {
@@ -1174,7 +1211,7 @@ public final class SandboxWorkspaceManager {
                             OptionalLong.of(record.version()));
                 }
                 emitSession(SandboxEvent.Type.SESSION_OPTIONS_CLEARED, session, record.workspace().orElse(null),
-                        sessionOwner, who, "cleared");
+                        sessionOwner, acting.actor(), "cleared");
                 return;
             } catch (StaleVersionException e) {
                 log.debug("CAS conflict on the options of session {} (attempt {}); re-reading", session.value(),
@@ -1199,8 +1236,8 @@ public final class SandboxWorkspaceManager {
      *            the principal asking
      */
     public void deleteSessionOptions(SessionId session, Principal caller) {
-        final WorkspaceOwner who = callers.callerOf(Optional.ofNullable(caller));
-        final WorkspaceOwner sessionOwner = requireSessionOwner(session, who);
+        final Acting acting = Acting.as(callers.callerOf(Optional.ofNullable(caller)));
+        final WorkspaceOwner sessionOwner = requireSessionOwner(session, acting);
         for (int attempt = 0; attempt <= settings.casRetries(); attempt++) {
             final Optional<SessionSandboxOptions> current = sessionOptions.find(session);
             if (current.isEmpty()) {
@@ -1209,7 +1246,7 @@ public final class SandboxWorkspaceManager {
             try {
                 sessionOptions.delete(session, current.get().version());
                 emitSession(SandboxEvent.Type.SESSION_OPTIONS_CLEARED, session, current.get().workspace().orElse(null),
-                        sessionOwner, who, "deleted");
+                        sessionOwner, acting.actor(), "deleted");
                 return;
             } catch (StaleVersionException e) {
                 log.debug("CAS conflict on the options of session {} (attempt {}); re-reading", session.value(),
@@ -1230,7 +1267,7 @@ public final class SandboxWorkspaceManager {
      * @return the session's options
      */
     public Optional<SessionOptionsView> sessionOptions(SessionId session, Principal caller) {
-        requireSessionOwner(session, callers.callerOf(Optional.ofNullable(caller)));
+        requireSessionOwner(session, Acting.as(callers.callerOf(Optional.ofNullable(caller))));
         return sessionOptions.find(session).map(SessionOptionsView::of);
     }
 
@@ -1260,15 +1297,18 @@ public final class SandboxWorkspaceManager {
         }
     }
 
-    /** The session's owner, which {@code who} must be: the right over a session is its owner's (§6.2). */
-    private WorkspaceOwner requireSessionOwner(SessionId session, WorkspaceOwner who) {
+    /**
+     * The session's owner, which the caller must be — the right over a session is its owner's (§6.2) — unless an
+     * administrator acts (§5.5): the lookup is still required and must know the session.
+     */
+    private WorkspaceOwner requireSessionOwner(SessionId session, Acting acting) {
         Objects.requireNonNull(session, "session must not be null");
         if (sessionOwners == null) {
             throw new BindingRejectedException("session options need a session owner lookup (SessionOwnerLookup)");
         }
         final WorkspaceOwner owner = sessionOwners.ownerOf(session).map(callers::ownerOf)
                 .orElseThrow(() -> new BindingRejectedException("unknown session " + session.value()));
-        if (!owner.equals(who)) {
+        if (!acting.isAdministrator() && !owner.equals(acting.recordedAs(owner.tenant()))) {
             throw new BindingRejectedException(
                     "only the owner of session " + session.value() + " may change its sandbox options");
         }
@@ -1302,7 +1342,7 @@ public final class SandboxWorkspaceManager {
     /** The actor of an event: the resolved principal, or its {@code TYPE:id} when no tenant is known for it. */
     private String actorOf(Principal actor, WorkspaceOwner fallback) {
         if (actor == null) {
-            return fallback.toString();
+            return String.valueOf(fallback);
         }
         try {
             return callers.ownerOf(actor).toString();
@@ -1313,6 +1353,217 @@ public final class SandboxWorkspaceManager {
 
     private WorkspaceView view(SandboxWorkspace workspace) {
         return WorkspaceView.of(workspace, settings.workspaceAccess());
+    }
+
+    // ---------------------------------------------------------------------------------------------------------------
+    // administration (docs/design/workspace-sandbox-management.md §5.5, §6.7, §6.8) — no owner check on the actor
+    // ---------------------------------------------------------------------------------------------------------------
+
+    /**
+     * Who a management call acts as: a principal holding the owner's rights, or an administrator, who passes no owner
+     * or tenant check and is only recorded (§5.5).
+     */
+    private static final class Acting {
+        private final WorkspaceOwner who;
+        private final Principal administrator;
+        private final String actor;
+
+        private Acting(WorkspaceOwner who, Principal administrator, String actor) {
+            this.who = who;
+            this.administrator = administrator;
+            this.actor = actor;
+        }
+
+        static Acting as(WorkspaceOwner who) {
+            return new Acting(who, null, who.toString());
+        }
+
+        static Acting administrator(Principal actor, String recorded) {
+            return new Acting(null, actor, recorded);
+        }
+
+        boolean isAdministrator() {
+            return who == null;
+        }
+
+        /** @return the event's actor */
+        String actor() {
+            return actor;
+        }
+
+        /**
+         * @param fallbackTenant
+         *            the tenant an administrator is recorded in when the resolver knows none for it
+         * @return who to record as having set a session's options
+         */
+        WorkspaceOwner recordedAs(TenantId fallbackTenant) {
+            return who != null ? who : WorkspaceOwner.of(fallbackTenant, administrator);
+        }
+
+        void checkManage(SandboxWorkspaceManager manager, SandboxWorkspace workspace) {
+            if (who != null) {
+                manager.checkManage(workspace, who);
+            }
+        }
+
+        boolean mayUse(SandboxWorkspaceManager manager, SandboxWorkspace workspace) {
+            return who == null || manager.mayUse(workspace, who);
+        }
+    }
+
+    private Acting administrator(Principal actor) {
+        Objects.requireNonNull(actor, "actor must not be null");
+        return Acting.administrator(actor, actorOf(actor, null));
+    }
+
+    /**
+     * Every workspace that matches, paged by id; each scanned record is checked against the query again.
+     *
+     * <p>
+     * <b>Internal.</b> Public only for use across this library's packages: not supported API, and it may change in
+     * any release. Use {@code SandboxAdministration}.
+     *
+     * @param query
+     *            filters and page
+     * @return one page
+     */
+    public Page<WorkspaceView, SandboxWorkspaceId> adminWorkspaces(AdminWorkspaceQuery query) {
+        Objects.requireNonNull(query, "query must not be null");
+        return listing(WorkspaceScan.builder().states(query.states()).origin(query.origin().orElse(null))
+                .tenant(query.tenant().orElse(null)).owner(query.owner().orElse(null))
+                .afterId(query.after().orElse(null)).limit(query.limit()).build(), query.namePrefix());
+    }
+
+    /**
+     * <b>Internal.</b> Public only for use across this library's packages: not supported API, and it may change in
+     * any release. Use {@code SandboxAdministration}.
+     *
+     * @param id
+     *            the workspace
+     * @return its view, whoever owns it
+     */
+    public Optional<WorkspaceView> adminDescribe(SandboxWorkspaceId id) {
+        return store.find(id).map(this::view);
+    }
+
+    /**
+     * <b>Internal.</b> Public only for use across this library's packages: not supported API, and it may change in
+     * any release. Use {@code SandboxAdministration}.
+     *
+     * @param id
+     *            the workspace
+     * @param after
+     *            the page starts after this session
+     * @param limit
+     *            the page size
+     * @return the sessions attached to it, by session id
+     */
+    public Page<SessionOptionsView, SessionId> adminSessions(SandboxWorkspaceId id, Optional<SessionId> after,
+            int limit) {
+        final Page<SessionSandboxOptions, SessionId> page = sessionOptions.byWorkspace(id, after, limit);
+        return Page.of(page.items().stream().map(SessionOptionsView::of).toList(), page.next().orElse(null));
+    }
+
+    /**
+     * <b>Internal.</b> Public only for use across this library's packages: not supported API, and it may change in
+     * any release. Use {@code SandboxAdministration}.
+     *
+     * @param session
+     *            the session
+     * @param update
+     *            the attachment and rule
+     * @param actor
+     *            the operator, recorded
+     */
+    public void adminSetSessionOptions(SessionId session, SessionSandboxOptions.Update update, Principal actor) {
+        setSessionOptions(session, update, administrator(actor));
+    }
+
+    /**
+     * <b>Internal.</b> Public only for use across this library's packages: not supported API, and it may change in
+     * any release. Use {@code SandboxAdministration}.
+     *
+     * @param session
+     *            the session
+     * @param actor
+     *            the operator, recorded
+     */
+    public void adminClearSessionOptions(SessionId session, Principal actor) {
+        clearSessionOptions(session, administrator(actor));
+    }
+
+    /**
+     * Terminates one slot (§6.7): CAS to TERMINATED, then destroy, with cause "terminated by administrator". The
+     * workspace stays OPEN and the next use provisions a new generation; a command running in it fails as "lost". A
+     * slot that is absent or already TERMINATED is left alone.
+     *
+     * <p>
+     * <b>Internal.</b> Public only for use across this library's packages: not supported API, and it may change in
+     * any release. Use {@code SandboxAdministration}.
+     *
+     * @param id
+     *            the workspace
+     * @param slot
+     *            the slot
+     * @param actor
+     *            the operator, recorded
+     * @return whether this call terminated it
+     * @throws SandboxUnavailableException
+     *             when the workspace does not exist
+     */
+    public boolean adminTerminateSlot(SandboxWorkspaceId id, String slot, Principal actor) {
+        final Acting acting = administrator(actor);
+        if (store.find(id).isEmpty()) {
+            throw doesNotExist(id);
+        }
+        return terminateSlot(id, slot, "terminated by administrator", workspace -> true, current -> true,
+                acting.actor());
+    }
+
+    /**
+     * <b>Internal.</b> Public only for use across this library's packages: not supported API, and it may change in
+     * any release. Use {@code SandboxAdministration}.
+     *
+     * @param id
+     *            the workspace
+     * @param actor
+     *            the operator, recorded
+     */
+    public void adminClose(SandboxWorkspaceId id, Principal actor) {
+        close(id, administrator(actor));
+    }
+
+    /**
+     * Reopens and provisions, as the owner-facing path does, with no owner check.
+     *
+     * <p>
+     * <b>Internal.</b> Public only for use across this library's packages: not supported API, and it may change in
+     * any release. Use {@code SandboxAdministration}.
+     *
+     * @param id
+     *            the workspace
+     * @param actor
+     *            the operator, recorded
+     * @return the workspace, {@code primary} RUNNING
+     */
+    public WorkspaceView adminReopen(SandboxWorkspaceId id, Principal actor) {
+        reopen(id, administrator(actor));
+        final SandboxWorkspace found = store.find(id).orElseThrow(() -> doesNotExist(id));
+        // As its owner: the use check inside connect then always passes, as an operator's call must.
+        return provision(id, found.owner());
+    }
+
+    /**
+     * <b>Internal.</b> Public only for use across this library's packages: not supported API, and it may change in
+     * any release. Use {@code SandboxAdministration}.
+     *
+     * @param id
+     *            the workspace
+     * @param actor
+     *            the operator, recorded
+     */
+    public void adminPurge(SandboxWorkspaceId id, Principal actor) {
+        purge(id, administrator(actor));
     }
 
     // ---------------------------------------------------------------------------------------------------------------
@@ -1496,9 +1747,9 @@ public final class SandboxWorkspaceManager {
     }
 
     private void emitSession(SandboxEvent.Type type, SessionId session, SandboxWorkspaceId workspace,
-            WorkspaceOwner sessionOwner, WorkspaceOwner actor, String cause) {
+            WorkspaceOwner sessionOwner, String actor, String cause) {
         publish(type, SandboxEvent.builder().type(type).session(session).workspaceId(workspace).owner(sessionOwner)
-                .actor(actor.toString()).cause(cause).at(clock.instant()));
+                .actor(actor).cause(cause).at(clock.instant()));
     }
 
     private void publish(SandboxEvent.Type type, SandboxEvent.Builder event) {
