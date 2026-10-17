@@ -450,7 +450,8 @@ provisions a new generation (WS §5.2). A running command fails with "sandbox lo
 `sandboxes()` reads the store first (`scan`, all states, paged to the end), then
 `provider.list({managed: true, deployment: settings.deployment()})` — the reconciler's order (WS §10.4). Each provider
 sandbox is matched to its record by the `aimon.at/workspace` label (`h(id)`) and given
-`SandboxReconciler.classify(record, sandbox)`'s `Verdict` (no record → `ORPHAN`). For `ORPHAN` and `STALE` the view adds
+`SandboxReconciler.classify(record, sandbox)`'s `Verdict` (no record → `ORPHAN`). For what the janitor destroys only
+after `orphan-grace` — `ORPHAN`, `DUPLICATE`, and an `IN_FLIGHT` sandbox ahead of its record's generation — the view adds
 `Optional<Boolean> pastGrace` — present only when the provider reports `createdAt` (the reconciler's own `firstSeen` is
 node-local and not visible to the facade). The listing is informational; only the
 janitor destroys. A `provider.list` failure fails the call (no partial view that hides sandboxes). Cost is
@@ -570,7 +571,11 @@ an agent's `reject`.
 ## 12. Open questions
 
 - **Q1 — per-request option.** A per-execution workspace or rule (including routines) needs core to carry request
-  attributes in `EnvironmentRequest`. Propose to aimon-core if session-level options prove too coarse.
+  attributes in `EnvironmentRequest` — proposed as kangwoo/aimon-core#252 (forward `SubmitOptions`' execution
+  attributes). Two more core proposals came out of this work: a session owner and a deletion event
+  (kangwoo/aimon-core#253 — would replace `SessionOwnerLookup` and the host's `deleteSessionOptions` call) and a notice
+  channel for every tool result (kangwoo/aimon-core#254 — would let the switch notice of §6.4 reach a file-tools-only
+  turn).
 - **Q2 — persistence.** Users who create a workspace first will expect files to outlive idle termination. That is
   shared volumes (WS §18-5); until then README warns.
 - **Q3 — asynchronous / idempotent create.** Synchronous create blocks up to `provisionTimeout`; an HTTP host may want
@@ -649,7 +654,7 @@ smallest change that keeps the design's intent.
 | P3 | the record's `profile` is the required profile "of rows 1–2 of §6.3" (§6.1) | applied by the manager when it provisions a new `primary` slot and the binding requires none — for every binding to the record. The descriptor declares it too while no slot exists, and `provision(id)` requires it only for a slot yet to exist (a slot a definition's `sandbox.profile` built first is accepted) | the policy would need a second workspace-store read per bind to learn it; the manager already holds the record. Same result for rows 1–2 |
 | P4 | the policy compares and "records it silently" (§6.4) | the policy never writes: a record that never attached the session (no `lastWorkspaceId`, no `workspace`) carries a *silent* `WorkspaceSwitch` whatever row bound it, which the environment records at its first successful connect; announced switches are recorded once their notice is drained (as designed). A switch carries the options version it was read at, so the write is a CAS on it | one writer of `lastWorkspaceId`, one best-effort path |
 | P5 | §9.1 "session can loosen the agent within the floor"; §9.3 "a session option `per-session` lets it run when the floor allows" (both texts now corrected) | tests assert §6.3 / §14 N4 instead: `strictest(floor, agent, session)` — a session cannot loosen an agent's `reject`. The E2E shows a session `reject` refusing, `per-session` running where neither floor nor agent tightens, and an agent `reject` holding against a session `per-session` | §9.1/§9.3 wording predates review 2's N4; §6.3 is the rule |
-| P6 | `ManagedWorkspaceSandboxIT` (§9.2): "listed with verdict `OK`", "admin terminate → next command re-provisions" | listed through the owner's `list`; the verdict and admin terminate move to PR 2's IT | `sandboxes()` and `SandboxAdministration.terminateSlot` are PR 2 (§10) |
+| P6 | `ManagedWorkspaceSandboxIT` (§9.2): "listed with verdict `OK`", "admin terminate → next command re-provisions" | listed through the owner's `list`; the verdict and admin terminate move to PR 2's IT (done there) | `sandboxes()` and `SandboxAdministration.terminateSlot` are PR 2 (§10) |
 | P7 | `clearSessionOptions` deletes `workspace` and `unattached` (§6.2) | as designed; `lastWorkspaceId` falls back to the workspace being detached from, and only a record with nothing left (a rule-only one) is deleted. An empty `Update` is a clear. A new `deleteSessionOptions(session, caller)` removes the record outright — what a host calls when it deletes the session | a record with no field left only costs a read per turn; a detached session must still hear it moved; hosts need a way to remove the rest |
 | P8 | `purge` of a missing id unspecified | success, like `close` (WS §15) | idempotent retry after a lost response |
 | P9 | new manager entry points (§4.1) | the manager also hosts `setSessionOptions` / `clearSessionOptions` / `sessionOptions` / `describe` / `listOwned` and returns views; it takes the `SessionOwnerLookup` (`Builder.sessionOwners`) and the `SessionOptionsStore` | the use check (`checkUse`) and the gate live there; the facade stays a thin layer PR 2 can share |
@@ -661,3 +666,24 @@ smallest change that keeps the design's intent.
 | P16 | a hook's command result | takes no pending notice (a reset or the switch waits for the model's next command) | whether core shows a hook's output to the model depends on the hook (review m2) |
 | P17 | `WorkspaceSandbox` getter for the options store (PR 1 r1) | removed; the store is reached through `workspaces()` (the builder still takes one) | a public store bypasses the right over a session (review m11) |
 | P13 | §9.1 race "notice flip vs re-attach" | a turn bound before a re-attach announces the target it was bound to and loses the `lastWorkspaceId` CAS; the next turn announces the new target once | the running turn keeps its binding (§6.2) |
+
+---
+
+## 16. Implementation departures (PR 2)
+
+Where PR 2 (commits 6–8 of §10) builds something other than, or more precisely than, the text above, following what
+PR 1 built (§15).
+
+| # | Design | Built | Why |
+|---|--------|-------|-----|
+| A1 | `AdminWorkspaceQuery = WorkspaceQuery + (tenant?, owner?)` (§5.4) | a class of its own with all seven fields; same `limit ≤ 500` | composing two builders buys nothing; the store scan takes them flat |
+| A2 | `WorkspaceDetail(workspace, sessions)` | `sessions` is the first page, `SandboxAdministration.DETAIL_SESSIONS` (100); `sessions(id, after, limit)` pages on | the page size has to be chosen somewhere |
+| A3 | the administrator's `setSessionOptions` (§6.2) | `setBy` records the actor as resolved by the tenant resolver, and — when it knows no tenant for the actor — the actor in the session owner's tenant; the event's `actor` is the same resolved form, else the bare `TYPE:id` | `setBy` is a `WorkspaceOwner`, which needs a tenant |
+| A4 | admin `reopen` | runs the record's owner through today's principal gate first (refused: nothing changes), reopens, then provisions as the owner — the use check inside `connect` passes, and admission and quota apply to the owner | the operator has no use right of its own to check; provisioning is charged to whom the workspace belongs to, and a principal the deployment now refuses gets no sandbox, as for create on behalf of |
+| A5 | `actor` on events "of every mutating call" of the administration (§3.1, §5.5) | also on an owner's own close, reopen and purge (the owner) and on the `TERMINATED` events a close causes; the janitor's carry none | one code path serves both callers; the audit log can tell every requested transition from the system's own |
+| A6 | `terminateSlot` (§6.7) | a missing workspace answers "does not exist", an absent slot "has no slot", a PROVISIONING slot is refused (also when it starts provisioning before the CAS); an already TERMINATED slot is a no-op. Terminating a FAILED slot clears its failure and backoff | a terminated claim would leave its claimer's sandbox an orphan and provision again at once; a typo must not succeed |
+| A7 | `classify` and `Verdict` "reachable by the admin facade" (§4.1) | `SandboxReconciler` stays package-private; the manager maps its `Verdict` to a new public `SandboxVerdict` for `SandboxView` | the admin API must not expose an internal type a later verdict (DRIFT, step 7) would break |
+| A8 | `SandboxView.verdict`; `pastGrace` for `ORPHAN` and `STALE` (§6.8) | `classify`'s verdict before grace: an `IN_FLIGHT` sandbox ahead of its record, which the janitor escalates to `ORPHAN` after `orphan-grace`, still reads `IN_FLIGHT`. `pastGrace` is given where the janitor waits for the grace — `ORPHAN`, `DUPLICATE` and that `IN_FLIGHT` — not for `STALE`, which goes without grace (§6.8 corrected) | the facade cannot see the reconciler's node-local `firstSeen`; the pure verdict is the reproducible one |
+| A10 | the administration's session writes | also `deleteSessionOptions(session, actor)`, the operator's cleanup for a host that deleted sessions without removing their options (P7) | otherwise only `clear` remains, which keeps a `lastWorkspaceId` record |
+| A9 | admin entry points | live on the manager as `admin*` (Internal), following P9; the facade is thin | the use and manage checks, the CAS loops and `emit` are there |
+

@@ -219,7 +219,7 @@ final class SandboxReconciler {
     }
 
     /** IN-FLIGHT because its generation is ahead of the record's (not a PROVISIONING claim): escalates after grace. */
-    private static boolean inFlightByGeneration(SandboxWorkspace record, ProviderSandbox sandbox) {
+    static boolean inFlightByGeneration(SandboxWorkspace record, ProviderSandbox sandbox) {
         return record != null && record.slot(sandbox.labels().get(SandboxLabels.SLOT))
                 .map(slot -> parseGeneration(sandbox) > slot.generation()).orElse(false);
     }
@@ -257,7 +257,7 @@ final class SandboxReconciler {
                 || !sandbox.labels().containsKey(SandboxLabels.INCARNATION);
     }
 
-    private static long parseGeneration(ProviderSandbox sandbox) {
+    static long parseGeneration(ProviderSandbox sandbox) {
         try {
             final long generation = Long.parseLong(sandbox.labels().getOrDefault(SandboxLabels.GENERATION, ""));
             return generation < 1 ? -1 : generation;

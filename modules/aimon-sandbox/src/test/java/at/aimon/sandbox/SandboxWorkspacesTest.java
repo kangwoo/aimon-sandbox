@@ -5,12 +5,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.catchThrowableOfType;
 
-import java.lang.reflect.Field;
-import java.lang.reflect.Modifier;
 import java.time.Duration;
 import java.util.ArrayList;
-import java.util.Collection;
-import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -345,50 +341,8 @@ class SandboxWorkspacesTest {
         final String sandboxId = record(view.id()).slot("primary").orElseThrow().providerRef().orElseThrow()
                 .sandboxId();
 
-        assertThat(strings(view)).isNotEmpty().noneMatch(s -> s.contains(sandboxId));
+        assertThat(ViewStrings.of(view)).isNotEmpty().noneMatch(s -> s.contains(sandboxId));
         assertThat(view.toString()).doesNotContain(sandboxId);
-    }
-
-    /** Every string reachable from {@code root} through its fields, as a serializer would see them. */
-    private static List<String> strings(Object root) {
-        final List<String> out = new ArrayList<>();
-        walk(root, out, new IdentityHashMap<>());
-        return out;
-    }
-
-    private static void walk(Object value, List<String> out, IdentityHashMap<Object, Boolean> seen) {
-        if (value == null || seen.put(value, true) != null) {
-            return;
-        }
-        if (value instanceof Enum<?> || value.getClass().getName().startsWith("java.")
-                && !(value instanceof Collection<?>) && !(value instanceof Map<?, ?>)) {
-            out.add(value.toString());
-            return;
-        }
-        if (value instanceof Collection<?> collection) {
-            collection.forEach(item -> walk(item, out, seen));
-            return;
-        }
-        if (value instanceof Map<?, ?> map) {
-            map.forEach((k, v) -> {
-                walk(k, out, seen);
-                walk(v, out, seen);
-            });
-            return;
-        }
-        for (Class<?> type = value.getClass(); type != null && type != Object.class; type = type.getSuperclass()) {
-            for (Field field : type.getDeclaredFields()) {
-                if (Modifier.isStatic(field.getModifiers())) {
-                    continue;
-                }
-                field.setAccessible(true);
-                try {
-                    walk(field.get(value), out, seen);
-                } catch (IllegalAccessException e) {
-                    throw new IllegalStateException(e);
-                }
-            }
-        }
     }
 
     // ----------------------------------------------------------------------------------------------------------------
@@ -672,7 +626,7 @@ class SandboxWorkspacesTest {
 
         assertThat(view.slot("primary").orElseThrow().failure().orElseThrow().message()).contains("is not ready")
                 .doesNotContain(created[0]);
-        assertThat(strings(view)).noneMatch(s -> s.contains(created[0]));
+        assertThat(ViewStrings.of(view)).noneMatch(s -> s.contains(created[0]));
         assertThat(failed.getMessage()).doesNotContain(created[0]);
     }
 

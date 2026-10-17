@@ -567,9 +567,10 @@ SDK 의 `SandboxPool`(warm pool)은 SPI 에 올리지 않는다. 풀은 `create`
 `execution-environment-implementation.md` §10, 남은 항목은 `docs/backlog/execution-environment-open-items.md`
 (EE-*)에 있다. 이 모듈이 쓰는 코어 기능은 모두 들어가 있다 — 경로 규칙 래퍼의 공개 팩토리
 `VirtualFileSystems.withPathRules`(§11.1), notice 를 싣는 백그라운드 `Bash`, 포크 요청의 `EnvironmentRequest.fork()`
-(`ForkDefinition` — 서브에이전트 이름과 속성)와 `definitionAttributes()`. 이 모듈이 기대는 열린 항목은 둘이다 —
-EE-42(워크플로 스크립트의 인라인 서브에이전트가 속성을 싣지 못한다, §18-5 의 선행 조건)와 EE-30(부모 환경 없는
-워크플로 러너, 이 모듈이 사용 불가로 답하는 것으로 충분하다 — §8.2). 요지는 다음과 같다.
+(`ForkDefinition` — 서브에이전트 이름과 속성)와 `definitionAttributes()`, 워크플로 단계가 싣는 정의 속성(EE-42, 코어
+0.3.1 — 스크립트의 `agent({..., attributes})` 와 `agentType` 으로 등록된 정의의 속성. 등록된 정의가 정한 키는 스크립트가
+덮지 못한다). 이 모듈이 기대는 열린 항목은 EE-30(부모 환경 없는 워크플로 러너, 이 모듈이 사용 불가로 답하는 것으로
+충분하다 — §8.2) 하나다. 요지는 다음과 같다.
 
 - 코어의 파일 도구와 `Bash` 는 생성자로 파일 시스템·셸을 받지 않고, 실행마다
   `ToolContextKeys.EXECUTION_ENVIRONMENT` 에서 `ExecutionEnvironment` 를 꺼낸다
@@ -711,7 +712,7 @@ workspaceId 를 결정론적으로 만들기 때문에 별도의 세션→워크
   낮추고, 그 공유를 자기 정책(여러 세션에 걸치는 워크스페이스 id)으로 표현한다
 
 **owner 는 먼저 부른 쪽이 정하지 않는다.** 기본 정책은 메인 턴의 owner 를 세션의 소유자에서 가져온다. 코어의 세션
-저장소(`SessionRecord`)에는 소유 주체가 없으므로, 소유자는 애플리케이션이 `SessionOwnerLookup.ownerOf(SessionId)` 로
+저장소(`SessionRecord`)에는 소유 주체가 없으므로(코어에 제안: kangwoo/aimon-core#253), 소유자는 애플리케이션이 `SessionOwnerLookup.ownerOf(SessionId)` 로
 알려 준다 — 세션을 만든 사용자는 애플리케이션의 데이터다. `require-principal: true` 이면 이 빈이 필수이고 없으면 기동을
 거부한다(§13.2). 그러면 레코드가 없을 때(`InMemory` 재시작, 툼스톤 만료 뒤) 세션 id 를 아는 다른 주체가 먼저 불러도
 owner 는 세션 소유자로 정해지고, 그 주체는 검사에서 막힌다. 단일 테넌트 배포에서 빈이 없으면 요청 주체를 owner 로
@@ -728,6 +729,12 @@ owner 는 세션 소유자로 정해지고, 그 주체는 검사에서 막힌다
 `allow-shared-workspaces: true` 가 있어야 만들 수 있다(`principal` 로 좁히는 것은 언제나 된다). 세션 옵션을 바꾸는 것은
 워크스페이스가 아니라 **세션에 대한 권한**이다 — `SessionOwnerLookup` 이 답한 세션 소유자만 바꾸고, 그 빈이 없으면 거부한다.
 옵션으로 붙인 세션의 턴도 `connect` 에서 **실행하는** 주체로 다시 검사한다.
+
+**운영자 경로는 owner 검사를 하지 않는다**([관리 설계](workspace-sandbox-management.md) §5.5). `SandboxAdministration.of(WorkspaceSandbox)` 는 모든 워크스페이스와
+붙은 세션을 보이고, 대신 만들기 · 세션 옵션 · 슬롯 terminate · close · reopen · purge 를 owner 와 테넌트를 보지 않고 한다.
+JVM 안의 보안 경계가 아니라 **따로 만드는 API 면**이다 — `WorkspaceSandbox` 가 건네지 않으므로, 호스트가 자기 운영자 인가
+뒤에만 둔다. 쓰기는 모두 행위자(`actor`)를 이벤트에 남긴다. 대신 만들 때의 owner 는 주체 검사와 상한을 그대로 받고, 운영자가
+세션을 붙일 때도 세션 소유자가 그 워크스페이스를 쓸 수 있어야 한다.
 
 **주체가 없거나 시스템 주체인 실행.** 코어에서 `Principal` 은 선택값이고, Spring 스타터의 기본 진입점은 요청을
 `Principal.system()` 으로 제출한다. 그래서 `require-principal: true` 는 "주체가 있다"가 아니라 **"`USER` 또는 `GROUP`
@@ -799,8 +806,8 @@ disk · pids)이 호출자 이하여야 한다. 모델이 고르는 경로(`Sand
 `SandboxRestart` 는 두지 않는다 — `terminate` 후 다음 사용이 generation 을 올려 새로 만든다. `SandboxFork`
 는 `SNAPSHOT` capability 가 갖춰지면 추가한다(§18).
 
-다른 에이전트를 새 슬롯에 붙이는 방법은 에이전트 정의의 `sandbox.slot` 과 워크플로 스크립트의 슬롯 지정(EE-42
-이후)이다. 모델이 `Task` 인자로 임의 슬롯을 넘기는 경로는 열어 두지 않았다(§20).
+다른 에이전트를 새 슬롯에 붙이는 방법은 에이전트 정의의 `sandbox.slot` 과 워크플로 단계의 정의 속성(코어 0.3.1 의
+EE-42 — 등록된 정의의 `sandbox.slot` 은 스크립트가 바꾸지 못하고, 정의가 정하지 않은 키만 스크립트가 더한다)이다. 모델이 `Task` 인자로 임의 슬롯을 넘기는 경로는 열어 두지 않았다(§20).
 
 ---
 
@@ -1147,6 +1154,11 @@ generation · `providerRef` · 상태가 판정 때와 같을 때만 다시 쓴�
 
 `orphanGrace` 는 `provisionTimeout` 보다 길어야 한다. 짧으면 레코드 쓰기가 늦은 정상 프로비저닝을 고아로
 오인한다. 이 조건은 기동 시 검사한다(§13.2).
+
+운영자의 샌드박스 목록(`SandboxAdministration.sandboxes()`, [관리 설계](workspace-sandbox-management.md) §6.8)은 같은 순서(scan 을 끝까지 → `list`)와 같은
+판정(`SandboxReconciler.classify`, 유예 전)을 쓰되 아무것도 지우지 않는다. 샌드박스는 `h(sandboxId)` 로만 보이고, `list` 가
+실패하면 일부만 보여 주지 않고 호출이 실패한다. 유예가 지났는지는 프로바이더가 `createdAt` 을 줄 때만 보인다 — 조정기의
+`firstSeen` 은 노드 로컬이다.
 
 모든 노드에서 janitor 가 돌아도 된다. 모든 조치가 CAS 와 destroy 직전의 재확인으로 보호되고 프로바이더 호출은
 멱등이기 때문이다. 리더 선출은 두지 않는다 — 선출 저장소가 하나 더 생기는 비용이 중복 `list` 호출보다 크다. 단
@@ -1754,7 +1766,8 @@ span 속성: `aimon.sandbox.workspace` · `aimon.sandbox.slot` · `aimon.sandbox
 orphan-destroyed · duplicate-destroyed · volume-deleted · workspace-closed · workspace-reopened · workspace-created ·
 workspace-purged · session-options-set · session-options-cleared)는
 `SandboxEventListener` 로 내보낸다. 애플리케이션은 그것을 자기 감사 로그로 보낸다. 이벤트는 `workspaceId` · `slot` ·
-`generation` · `owner` · `profile` · 원인을 담고, 주체가 요청한 것에는 `actor`(`tenant/TYPE:id`)를, 세션 옵션 이벤트에는
+`generation` · `owner` · `profile` · 원인을 담고, 주체가 요청한 것 — owner 의 close · reopen · purge 와 운영자의 모든 쓰기,
+그 close 가 낸 terminated 까지 — 에는 `actor`(`tenant/TYPE:id`, 테넌트를 모르면 `TYPE:id`)를, 세션 옵션 이벤트에는
 `session` 을 담는다. `owner` 는 모든 이벤트에 있다(세션 옵션 이벤트는 세션의 소유자). 워크스페이스가 없을 수 있는 것은 세션
 옵션 이벤트뿐이고, 그것은 `workspace()` 로 읽는다(`workspaceId()` 는 0.1.0 의 형태 그대로다). 테넌트별 감사는 `owner` 로 가른다.
 
@@ -2017,9 +2030,9 @@ docker 계층, K8s 에서만 드러나는 것은 k8s 계층 — 는 [`workspace-
    `InMemory` 저장소의 재시작 뒤 고아를 치우는 유일한 장치이므로 여기서 들어간다. **3단계와 한 릴리스로 낸다** — 옛 백엔드는 이미 없고 `LocalProcessSandboxProvider`
    는 운영용이 아니므로, 3단계만 내면 운영에 쓸 프로바이더가 없다
 5. **멀티 슬롯.** 슬롯별 프로파일과 프로파일 고정 검사 · 공유 볼륨과 `sharedAccess` · 볼륨 조정과 보존 · bare 저장소 seed ·
-   오케스트레이터 도구 · 워크스페이스 쿼터 · 정의의 `sandbox.slot`/`sandbox.profile` · 정책의 `forkSlot`. **선행 조건:
-   EE-42**(워크플로 스크립트의 인라인 서브에이전트가 속성을 싣는다) — 그 전에는 워크플로 단계를 슬롯에 나눌 수 없다.
-   에이전트 정의와 포크의 슬롯은 EE-42 없이도 동작하므로, EE-42 가 늦으면 워크플로 부분만 뒤로 미룬다
+   오케스트레이터 도구 · 워크스페이스 쿼터 · 정의의 `sandbox.slot`/`sandbox.profile` · 정책의 `forkSlot`. 선행 조건이던
+   EE-42(워크플로 스크립트의 인라인 서브에이전트가 속성을 싣는다)는 코어 0.3.1 에 들어왔다 — 워크플로 단계도 정의 속성으로
+   슬롯에 나눌 수 있다
 6. **영속 저장소 — 멀티 노드.** `aimon-sandbox-store-jdbc` 가 저장소 계약 스위트를 통과한다. 이 단계가 끝나야 §1.2 의
    "멀티 노드" 목표가 성립하고, 4단계에서 시뮬레이션으로 돈 멀티 노드 시나리오를 실제 프로세스 여럿으로 다시 돈다(§16). 스키마를 굳히기 전에 §20 의 "워크스페이스 단위 seed
    매개변수" 를 닫는다 — 레코드 스키마를 바꾸는 결정이다
@@ -2088,7 +2101,8 @@ docker 계층, K8s 에서만 드러나는 것은 k8s 계층 — 는 [`workspace-
   매개변수를 두고 바인딩 정책이 채우거나, 프로파일의 `seed` 를 템플릿으로 두고 워크스페이스가 값만 채운다. 어느
   쪽이든 모델이 원격이나 자격 증명을 고르는 경로는 열지 않는다
 - **동적 슬롯 배정** — 오케스트레이터가 실행 중에 `exp-a/b/c` 를 만들고 서브에이전트를 각 슬롯에 붙이는
-  경로. 워크플로 스크립트(`agent(prompt, { sandbox: 'exp-a' })`, EE-42)는 설계 가능하지만, `Task` 도구 인자로 여는
+  경로. 워크플로 스크립트의 `agent({..., attributes: { sandbox: { slot: 'exp-a' } }})`(EE-42, 코어 0.3.1)는 이미 쓸 수 있지만
+  — 등록된 정의가 슬롯을 정했으면 스크립트가 바꾸지 못한다 — `Task` 도구 인자로 여는
   것은 모델에게 슬롯 선택권을 주는 일이다. 허용 목록으로 좁혀 열지, 워크플로에만 둘지 정해야 한다
 - ~~**스킬 선언 훅을 샌드박스에서 돌리기**~~ *(코어 0.3.1 이 닫았다)* — 코어의 훅 실행기가 실행 환경을 받는다(코어 EE-12).
   스킬이 선언한 셸 훅은 그 실행의 샌드박스 셸에서 돌고, 거부는 선택이 되었다(§12.1). 남은 것은 다음 항목이다
@@ -2232,6 +2246,9 @@ docker 계층, K8s 에서만 드러나는 것은 k8s 계층 — 는 [`workspace-
 - **`sandbox.workspace` 를 쓰는 권한을 가볍게 다루지 말 것.** 그 에이전트의 모든 세션을 그 워크스페이스로 보내는 권한이다.
   다른 주체의 세션은 공유된 워크스페이스에만 닿지만, 테넌트가 정의를 쓰는 호스트는 이것을 알아야 한다(§8.4)
 - **공유 워크스페이스를 격리 경계로 쓰지 말 것.** 붙은 모든 세션이 한 신뢰 도메인이다(§8.4)
+- **`SandboxAdministration` 을 `WorkspaceSandbox` 의 getter 로 만들지 말고, 일반 사용자 경로에 두지 말 것.** owner 검사가 없는
+  운영자 면이다. 호스트의 운영자 인가 뒤에만 둔다(§8.3)
+- **운영자 목록에 프로바이더 sandbox id 를 싣지 말 것.** `h(sandboxId)` 로 식별한다(§10.4)
 
 ---
 

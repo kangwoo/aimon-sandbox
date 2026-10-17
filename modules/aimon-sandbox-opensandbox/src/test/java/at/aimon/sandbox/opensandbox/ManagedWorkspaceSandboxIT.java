@@ -25,6 +25,7 @@ import at.aimon.core.environment.ExecutionEnvironment;
 import at.aimon.core.environment.ExecutionEnvironments;
 import at.aimon.core.shell.ExecutionOptions;
 import at.aimon.core.shell.ShellCommandResult;
+import at.aimon.sandbox.SandboxAdministration;
 import at.aimon.sandbox.SandboxSettings;
 import at.aimon.sandbox.SandboxWorkspaces;
 import at.aimon.sandbox.WorkspaceSandbox;
@@ -32,11 +33,14 @@ import at.aimon.sandbox.binding.ShellKey;
 import at.aimon.sandbox.profile.SandboxProfile;
 import at.aimon.sandbox.provider.Capability;
 import at.aimon.sandbox.provider.ProviderSandboxRef;
+import at.aimon.sandbox.provider.SandboxLabels;
 import at.aimon.sandbox.testkit.ManualClock;
 import at.aimon.sandbox.testkit.ManualScheduler;
 import at.aimon.sandbox.workspace.CreateWorkspace;
 import at.aimon.sandbox.workspace.InMemorySandboxWorkspaceStore;
 import at.aimon.sandbox.workspace.InMemorySessionOptionsStore;
+import at.aimon.sandbox.workspace.SandboxVerdict;
+import at.aimon.sandbox.workspace.SandboxView;
 import at.aimon.sandbox.workspace.SandboxWorkspaceId;
 import at.aimon.sandbox.workspace.SessionOptionsStore;
 import at.aimon.sandbox.workspace.SessionSandboxOptions;
@@ -48,7 +52,8 @@ import at.aimon.sandbox.workspace.WorkspaceView;
 
 /**
  * Managed workspaces on a real OpenSandbox server (Docker runtime) — the docker tier of
- * docs/design/workspace-sandbox-management.md §9.2 that PR 1 can run: create provisions a real sandbox and lists it,
+ * docs/design/workspace-sandbox-management.md §9.2: create provisions a real sandbox, the owner and the administration
+ * list it (verdict {@code OK}), an admin terminate is followed by a new generation,
  * two sessions of one owner share its files but not their cwd, an explicit close answers "closed" and a purge "does
  * not exist" — and, as documented behaviour of a shared workspace (§6.5), one session can read another's shell state.
  */
@@ -168,5 +173,41 @@ class ManagedWorkspaceSandboxIT {
                 java.util.OptionalLong.of(sessionOptions.find(session).orElseThrow().version()));
         assertThatThrownBy(() -> bash(mainTurn(session), "true")).hasMessageContaining("does not exist");
         assertThat(assembly.store().find(id)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("§9.2: the administration lists the created sandbox with verdict OK, and nothing raw")
+    void theAdministrationListsTheSandboxAsOk() {
+        final WorkspaceView created = workspaces().create(CreateWorkspace.named("listed"), ALICE);
+        final ProviderSandboxRef ref = assembly.store().find(created.id()).orElseThrow().slot("primary").orElseThrow()
+                .providerRef().orElseThrow();
+
+        final List<SandboxView> sandboxes = SandboxAdministration.of(assembly).sandboxes();
+
+        assertThat(sandboxes).filteredOn(view -> view.refHash().equals(SandboxLabels.h(ref.sandboxId())))
+                .singleElement().satisfies(view -> {
+                    assertThat(view.verdict()).isEqualTo(SandboxVerdict.OK);
+                    assertThat(view.workspaceId()).contains(created.id());
+                    assertThat(view.generation()).contains(1L);
+                });
+        assertThat(sandboxes.toString()).doesNotContain(ref.sandboxId());
+    }
+
+    @Test
+    @DisplayName("§9.2: an admin terminate ends the real sandbox; the next command re-provisions a new generation")
+    void anAdminTerminateIsFollowedByANewGeneration() throws Exception {
+        final SandboxWorkspaceId id = workspaces().create(CreateWorkspace.named("terminated"), ALICE).id();
+        final SessionId session = attached(id);
+        bash(mainTurn(session), "echo before > /workspace/repo/f");
+        final ProviderSandboxRef first = assembly.store().find(id).orElseThrow().slot("primary").orElseThrow()
+                .providerRef().orElseThrow();
+
+        SandboxAdministration.of(assembly).terminateSlot(id, "primary", Principal.user("operator"));
+
+        assertThat(provider.status(first)).isEmpty();
+        final ShellCommandResult after = bash(mainTurn(session), "ls /workspace/repo");
+        assertThat(after.stdout()).doesNotContain("f");
+        assertThat(after.notices()).anyMatch(notice -> notice.contains("recreated (generation 2)"));
+        assertThat(assembly.store().find(id).orElseThrow().slot("primary").orElseThrow().generation()).isEqualTo(2);
     }
 }
