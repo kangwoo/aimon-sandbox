@@ -15,6 +15,7 @@ import org.junit.jupiter.api.Test;
 
 import at.aimon.core.agent.session.SessionId;
 import at.aimon.core.base.Principal;
+import at.aimon.core.environment.ExecutionEnvironment;
 import at.aimon.sandbox.binding.BindingRejectedException;
 import at.aimon.sandbox.binding.SandboxTenantResolver;
 import at.aimon.sandbox.binding.UnattachedRule;
@@ -226,8 +227,9 @@ class SandboxAdministrationTest {
             assertThat(e.cause()).isEqualTo("terminated by administrator");
             assertThat(e.actor()).contains("SERVICE:ops-console");
         });
-        assertThat(bash(harness.mainTurn(session, ALICE), "ls /workspace/repo").notices())
-                .anyMatch(notice -> notice.contains("recreated (generation 2)"));
+        final ExecutionEnvironment next = harness.mainTurn(session, ALICE);
+        bash(next, "ls /workspace/repo");
+        assertThat(next.drainNotices()).anyMatch(notice -> notice.contains("recreated (generation 2)"));
         assertThatThrownBy(() -> admin().terminateSlot(SandboxWorkspaceId.of("wsm:none"), "primary", OPERATOR))
                 .isInstanceOf(SandboxUnavailableException.class).hasMessageContaining("does not exist");
     }

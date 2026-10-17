@@ -17,6 +17,7 @@ import at.aimon.core.agent.AgentRuntimeId;
 import at.aimon.core.agent.DefaultAgent;
 import at.aimon.core.agent.ExecutionId;
 import at.aimon.core.agent.session.SessionId;
+import at.aimon.core.base.Principal;
 import at.aimon.core.environment.EnvironmentDescriptor;
 import at.aimon.core.environment.EnvironmentRequest;
 import at.aimon.core.environment.ExecutionEnvironment;
@@ -24,11 +25,16 @@ import at.aimon.core.environment.ForkDefinition;
 import at.aimon.core.environment.RuntimeBinding;
 import at.aimon.core.environment.UnavailableExecutionEnvironment;
 import at.aimon.core.llm.LlmModel;
+import at.aimon.sandbox.SandboxAdministration;
 import at.aimon.sandbox.SandboxHarness;
+import at.aimon.sandbox.binding.BindingContext;
 import at.aimon.sandbox.binding.SandboxBinding;
+import at.aimon.sandbox.binding.SlotChoice;
 import at.aimon.sandbox.profile.SandboxProfile;
 import at.aimon.sandbox.testkit.FaultInjectingSandboxProvider.Operation;
 import at.aimon.sandbox.testkit.SandboxTestProfiles;
+import at.aimon.sandbox.workspace.CreateWorkspace;
+import at.aimon.sandbox.workspace.SandboxWorkspaceId;
 import at.aimon.sandbox.workspace.WorkspaceScan;
 
 /** {@link SandboxExecutionEnvironmentProvider}: forks (§16 rows 6–8), the declared descriptor, the step-3 guards. */
@@ -426,5 +432,62 @@ class SandboxEnvironmentProviderTest {
             assertThat(binding(harness.mainTurn(SessionId.generate(), ALICE)).mustExist())
                     .as("a derived binding may create").isFalse();
         }
+    }
+
+    // ----------------------------------------------------------------------------------------------------------------
+    // core 0.3.3 seams (docs/design/workspace-sandbox-core-033.md §6.1, §6.5)
+    // ----------------------------------------------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("core-033 §6.1: a fork never reads request attributes — it stays in its row-0 parent's workspace")
+    void aForkIgnoresRequestAttributesAndInheritsARowZeroParent() throws Exception {
+        final SandboxWorkspaceId a = harness.sandbox.workspaces().create(CreateWorkspace.named("a"), ALICE).id();
+        final SandboxWorkspaceId b = harness.sandbox.workspaces().create(CreateWorkspace.named("b"), ALICE).id();
+        final ExecutionEnvironment parent = harness.mainTurn(SessionId.generate(), ALICE,
+                Map.of(SlotChoice.WORKSPACE_ATTRIBUTE, a.value()));
+        // Core never forwards request attributes to a fork; a hand-built fork request that carries some anyway.
+        final ExecutionEnvironment fork = harness.resolve(
+                EnvironmentRequest.builder().agentRuntimeId(SandboxHarness.RUNTIME).executionId(ExecutionId.generate())
+                        .principal(ALICE).parent(parent).fork(ForkDefinition.builder().name("helper").build())
+                        .requestAttributes(Map.of(SlotChoice.WORKSPACE_ATTRIBUTE, b.value())).build());
+
+        assertThat(binding(parent).workspaceId()).isEqualTo(a);
+        assertThat(binding(fork).workspaceId()).isEqualTo(a);
+        assertThat(binding(fork).workspaceSwitch()).as("the parent announces and records its switch").isEmpty();
+        bash(parent, "echo parent > /workspace/repo/f");
+        assertThat(bash(fork, "cat /workspace/repo/f").stdout()).isEqualTo("parent\n");
+    }
+
+    @Test
+    void theBindingContextCarriesTheRequestAttributes() {
+        final BindingContext context = BindingContext.from(
+                EnvironmentRequest.builder().agentRuntimeId(SandboxHarness.RUNTIME).sessionId(SessionId.generate())
+                        .requestAttributes(Map.of("sandbox.workspace", "wsm:x", "other", "y")).build());
+
+        assertThat(context.requestAttributes()).containsOnly(Map.entry("sandbox.workspace", "wsm:x"),
+                Map.entry("other", "y"));
+        assertThat(context.attributes()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("core-033 §6.5: a fork's re-creation reaches its own queue now and its parent's at the next connect")
+    void aForksRecreationIsToldToTheParentByGeneration() throws Exception {
+        final SessionId session = SessionId.generate();
+        final ExecutionEnvironment parent = harness.mainTurn(session, ALICE);
+        bash(parent, "true");
+        assertThat(parent.drainNotices()).isEmpty();
+        final ExecutionEnvironment fork = harness.fork(parent, ALICE);
+        SandboxAdministration.of(harness.sandbox).terminateSlot(binding(parent).workspaceId(), "primary",
+                Principal.user("ops"));
+
+        bash(fork, "true");
+
+        assertThat(fork.drainNotices()).singleElement().asString().contains("recreated (generation 2)");
+        assertThat(parent.drainNotices()).as("one queue per instance, never shared (EE-107)").isEmpty();
+        parent.fileSystem().exists("/workspace/repo");
+        assertThat(parent.drainNotices()).singleElement().asString()
+                .contains("re-created since this execution last used it (generation 2)");
+        parent.fileSystem().exists("/workspace/repo");
+        assertThat(parent.drainNotices()).as("once").isEmpty();
     }
 }

@@ -23,7 +23,9 @@
 - `WorkspaceSandbox` — 위를 조립하고 기동 시 설정을 검사하는 어셈블리
 - `SandboxWorkspaces` — `WorkspaceSandbox.workspaces()`: 관리형 워크스페이스를 먼저 만들고(바로 프로비저닝), 세션을 붙이고
   (`SessionOptionsStore`, 기본 `InMemorySessionOptionsStore` — 단일 노드 전용), close · reopen · purge 한다.
-  `SessionOptionsBindingPolicy` 가 설정된 정책을 감싸 세션 옵션 → 정의의 `sandbox.workspace` → unattached 규칙 순으로 정한다.
+  `SessionOptionsBindingPolicy` 가 설정된 정책을 감싸 요청 속성(그 실행만) → 세션 옵션 → 정의의 `sandbox.workspace` →
+  unattached 규칙 순으로 정한다. 세션이 지워지면 `SandboxSessionCleanup`(`sessionLifecycleListener()`)이 옵션과 `ws:{sessionId}` 를
+  치운다.
   공유 워크스페이스는 하나의 신뢰 도메인이다 — 붙은 모든 세션이 서로의 파일과 셸 상태를 읽는다.
   설계는 [`workspace-sandbox-management.md`](../../docs/design/workspace-sandbox-management.md)
 - `SandboxAdministration` — `SandboxAdministration.of(WorkspaceSandbox)`: 운영자 면. 모든 워크스페이스와 붙은 세션, 조정기의
@@ -34,6 +36,9 @@
 저장소(6단계), pause/resume · worktree 격리(7단계). 그런 설정은 조용히 무시하지 않고 기동 시 거부한다. 구현 설계와 설계에서
 벗어난 점은 [`workspace-sandbox-step3.md`](../../docs/design/workspace-sandbox-step3.md) 에 있다.
 
-aimon-core `0.3.2` 가 필요하다(훅 표시 `ExecutionOptions.isHook()`).
+aimon-core `0.3.3` 이 필요하다(릴리스 전까지는 `0.3.3-SNAPSHOT`) — 훅 표시 `ExecutionOptions.isHook()`(0.3.2)에 더해, 실행 하나를
+옮기는 요청 속성(`SandboxRequestAttributes`), 코어가 기록한 세션 소유자(`WorkspaceSandbox.Builder.sessionRecords`)와 세션 삭제
+리스너(`WorkspaceSandbox.sessionLifecycleListener()`), 모든 도구 결과에 실리는 환경 notice(`drainNotices()`)를 쓴다
+([`workspace-sandbox-core-033.md`](../../docs/design/workspace-sandbox-core-033.md)).
 
 옛 구현이 필요하면 `at.aimon.core:aimon-sandbox{,-docker,-kubernetes}:0.2.4` 가 Maven Central 에 그대로 있다.

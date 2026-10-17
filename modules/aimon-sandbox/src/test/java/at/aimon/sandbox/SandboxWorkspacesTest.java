@@ -360,8 +360,9 @@ class SandboxWorkspacesTest {
         assertThat(set.unattached()).isEmpty();
         assertThat(set.setBy()).isEqualTo(WorkspaceOwner.of(TenantId.DEFAULT, ALICE));
 
-        harness.sandbox.manager().recordLastWorkspace(session,
-                harness.sessionOptions.find(session).orElseThrow().version(), view.id());
+        harness.sandbox.manager().recordLastWorkspaceLater(session,
+                OptionalLong.of(harness.sessionOptions.find(session).orElseThrow().version()), view.id(),
+                WorkspaceOwner.of(TenantId.DEFAULT, ALICE));
         workspaces().clearSessionOptions(session, ALICE);
         final SessionSandboxOptions cleared = harness.sessionOptions.find(session).orElseThrow();
         assertThat(cleared.workspace()).isEmpty();
@@ -557,19 +558,21 @@ class SandboxWorkspacesTest {
     }
 
     @Test
-    @DisplayName("review m4: deleteSessionOptions removes the record, lastWorkspaceId and all")
-    void deleteSessionOptionsRemovesTheRecord() {
+    @DisplayName("core-033 §6.3: the session lifecycle listener removes the record, lastWorkspaceId and all")
+    void theLifecycleListenerRemovesTheRecord() {
         final WorkspaceView view = workspaces().create(CreateWorkspace.named("forget"), ALICE);
         workspaces().setSessionOptions(session, SessionSandboxOptions.Update.attach(view.id()), ALICE);
         workspaces().clearSessionOptions(session, ALICE);
         assertThat(harness.sessionOptions.find(session)).isPresent();
 
-        assertThatThrownBy(() -> workspaces().deleteSessionOptions(session, BOB))
-                .hasMessageContaining("only the owner");
-        workspaces().deleteSessionOptions(session, ALICE);
-        workspaces().deleteSessionOptions(session, ALICE);
+        harness.sessionDeleted(session, ALICE);
+        harness.sessionDeleted(session, ALICE);
 
         assertThat(harness.sessionOptions.find(session)).isEmpty();
+        assertThat(harness.events).filteredOn(e -> e.type() == SandboxEvent.Type.SESSION_OPTIONS_CLEARED)
+                .extracting(SandboxEvent::cause).containsExactly("cleared", "session deleted");
+        assertThat(workspaces().describe(view.id(), ALICE)).as("the attached managed workspace is shared: kept")
+                .isPresent();
     }
 
     @Test

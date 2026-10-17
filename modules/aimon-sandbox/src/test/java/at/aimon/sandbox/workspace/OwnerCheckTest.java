@@ -13,6 +13,7 @@ import org.junit.jupiter.api.Test;
 
 import at.aimon.core.agent.session.SessionId;
 import at.aimon.core.base.Principal;
+import at.aimon.core.environment.ExecutionEnvironment;
 import at.aimon.sandbox.SandboxHarness;
 import at.aimon.sandbox.SandboxSettings;
 import at.aimon.sandbox.binding.SandboxTenantResolver;
@@ -108,7 +109,9 @@ class OwnerCheckTest {
 
         assertThatThrownBy(() -> bash(h.mainTurn(session, BOB), "true")).hasMessageContaining("not permitted");
         assertThat(h.record(session).state()).isEqualTo(WorkspaceState.CLOSED);
-        assertThat(bash(h.mainTurn(session, ALICE), "true").notices()).contains(SandboxWorkspaceManager.RESET_NOTICE);
+        final ExecutionEnvironment owners = h.mainTurn(session, ALICE);
+        bash(owners, "true");
+        assertThat(owners.drainNotices()).contains(SandboxWorkspaceManager.RESET_NOTICE);
     }
 
     @Test

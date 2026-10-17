@@ -148,11 +148,14 @@ public final class SandboxAdministration {
     }
 
     /**
-     * Deletes any session's options record outright — the cleanup for a host that deleted sessions without
-     * {@code SandboxWorkspaces.deleteSessionOptions}.
+     * Deletes any session's options record outright — the cleanup for a session deleted outside core's session router
+     * (a raw {@code SessionRecordStore.delete}, a host that never registered
+     * {@code WorkspaceSandbox.sessionLifecycleListener()}), which no listener hears of. The session need not be known
+     * to any owner source any more. With {@code sessionRecords(...)} wired, the janitor's sweep also deletes such a
+     * record once {@code closed-retention} has passed.
      *
      * @param session
-     *            the session, known to the {@code SessionOwnerLookup}
+     *            the session
      * @param actor
      *            the operator, recorded
      */

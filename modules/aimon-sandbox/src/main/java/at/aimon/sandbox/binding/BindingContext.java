@@ -13,8 +13,8 @@ import at.aimon.core.environment.EnvironmentRequest;
 
 /**
  * What a {@link SandboxBindingPolicy} sees of core's {@link EnvironmentRequest} (docs/design/workspace-sandbox.md
- * §8.1): the agent, the runtime, the session or execution id, the invoking session, the principal and the
- * definition's flattened attributes.
+ * §8.1): the agent, the runtime, the session or execution id, the invoking session, the principal, the
+ * definition's flattened attributes and the request's own attributes.
  */
 public final class BindingContext {
 
@@ -25,6 +25,7 @@ public final class BindingContext {
     private final SessionId invokingSessionId;
     private final Principal principal;
     private final Map<String, String> attributes;
+    private final Map<String, String> requestAttributes;
 
     private BindingContext(EnvironmentRequest request) {
         this.agent = request.agent().orElse(null);
@@ -34,6 +35,7 @@ public final class BindingContext {
         this.invokingSessionId = request.invokingSessionId().orElse(null);
         this.principal = request.principal().orElse(null);
         this.attributes = Map.copyOf(request.definitionAttributes());
+        this.requestAttributes = Map.copyOf(request.requestAttributes());
     }
 
     /**
@@ -78,5 +80,17 @@ public final class BindingContext {
     /** @return the definition's attributes ({@code sandbox.slot}, {@code sandbox.profile}) */
     public Map<String, String> attributes() {
         return attributes;
+    }
+
+    /**
+     * The request's own placement input (kangwoo/aimon-core#252): a main turn's {@code environment.*} execution
+     * attributes, or a routine's from the host's {@code RoutineExecutionAttributes}, the {@code environment.} prefix
+     * already removed by core — so a key reads {@code sandbox.workspace}, as in {@link #attributes()}. Host-supplied by
+     * core's contract, never model output. Forks never have any: the provider binds a fork without a context.
+     *
+     * @return the request attributes, empty when there are none
+     */
+    public Map<String, String> requestAttributes() {
+        return requestAttributes;
     }
 }

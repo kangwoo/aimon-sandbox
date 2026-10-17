@@ -23,12 +23,19 @@ public final class SlotChoice {
      * right to redirect every session of the agent; another principal's session only lands there if the workspace is
      * shared. A routine running as a SYSTEM principal passes the gate only through {@code allowed-system-principals},
      * and then needs the workspace owned by that principal or shared ({@code access: tenant}) with its tenant.
+     *
+     * <p>
+     * Also read, under the same key, from the request's attributes ({@link BindingContext#requestAttributes()}), where
+     * a
+     * host sets it as {@code environment.sandbox.workspace} ({@link SandboxRequestAttributes#WORKSPACE}) for one
+     * execution only.
      */
     public static final String WORKSPACE_ATTRIBUTE = "sandbox.workspace";
 
     /**
      * The definition attribute tightening the unattached rule for the agent's requests: {@code per-session} or
-     * {@code reject}. It can tighten the {@code unattached} setting, never loosen it.
+     * {@code reject}. It can tighten the {@code unattached} setting, never loosen it. Also read from the request's
+     * attributes ({@link SandboxRequestAttributes#UNATTACHED}), where it can only tighten too.
      */
     public static final String UNATTACHED_ATTRIBUTE = "sandbox.unattached";
 

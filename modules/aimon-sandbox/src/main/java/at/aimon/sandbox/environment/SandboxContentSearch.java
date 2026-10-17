@@ -65,7 +65,7 @@ final class SandboxContentSearch implements ContentSearch {
             throw new UnsupportedOperationException("multiline queries are answered by the filesystem walk");
         }
         final ConnectedSlot slot = manager.connect(binding);
-        pending.addAll(slot.notices());
+        pending.addAll(slot);
         slot.activity().record(false);
         final List<String> args = new ArrayList<>(
                 List.of("rg", "--json", "--no-ignore", "--hidden", "-a", "--no-config", "--no-messages"));

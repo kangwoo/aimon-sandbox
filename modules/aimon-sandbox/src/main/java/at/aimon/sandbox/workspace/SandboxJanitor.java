@@ -11,6 +11,8 @@ import java.util.function.Consumer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import at.aimon.core.agent.session.SessionId;
+import at.aimon.core.agent.session.store.SessionRecordStore;
 import at.aimon.sandbox.SandboxSettings;
 import at.aimon.sandbox.profile.SandboxProfile;
 
@@ -27,10 +29,14 @@ import at.aimon.sandbox.profile.SandboxProfile;
  * <li><b>idle close</b> — every OPEN workspace with no live slot for {@code closeAfter}, counted from the latest of
  * its creation, its last reopen and its slots' {@code lastActiveAt};</li>
  * <li><b>resume</b> — every close stuck in CLOSING for {@code closeResumeAfter}, from the top;</li>
- * <li><b>tombstones</b> — every {@code DERIVED} CLOSED record older than {@code closedRetention} is deleted; a
- * {@code MANAGED} one is kept until {@code purge} (management design §6.6);</li>
+ * <li><b>tombstones</b> — every {@code DERIVED} CLOSED record older than {@code closedRetention} is deleted, and one
+ * closed because its session was deleted ({@link CloseCause#SESSION_DELETED}) on the first pass; a {@code MANAGED}
+ * one is kept until {@code purge} (management design §6.6);</li>
  * <li><b>options sweep</b> — session options still attached to a workspace whose record is gone (a {@code purge}
  * whose own {@code deleteByWorkspace} failed) are cleared;</li>
+ * <li><b>deleted sessions</b> — when core's session store is wired, the options of a session that no longer exists
+ * are deleted once they are older than {@code closedRetention}: the deletion event was lost, or the session was
+ * deleted outside the router (docs/design/workspace-sandbox-core-033.md §6.3);</li>
  * <li>node-local: {@code exec:} shell directories unused for {@code execShellIdle};</li>
  * <li><b>reconcile</b> — the deployment's sandboxes against the records: orphans, stale generations, failed leftovers
  * and duplicates are destroyed, missing sandboxes confirmed LOST ({@link SandboxReconciler}).</li>
@@ -87,6 +93,7 @@ public final class SandboxJanitor implements AutoCloseable {
         forEach(Set.of(WorkspaceState.CLOSING), workspace -> resumeClose(workspace, now));
         forEach(Set.of(WorkspaceState.CLOSED), workspace -> deleteTombstone(workspace, now));
         sweepSessionOptions();
+        sweepDeletedSessions(now);
         try {
             manager.connections().sweepExecShells(settings.execShellIdle());
         } catch (RuntimeException e) {
@@ -184,6 +191,11 @@ public final class SandboxJanitor implements AutoCloseable {
             // Its id may be named by session options and agent definitions; only purge ends it (§6.6).
             return;
         }
+        if (workspace.closeCause().orElse(null) == CloseCause.SESSION_DELETED) {
+            // No later turn of a deleted session needs the tombstone, and a new session with the same id waits for it.
+            manager.finishSessionDeletion(workspace.id(), workspace.incarnation());
+            return;
+        }
         if (workspace.stateSince().map(since -> idleFor(since, now, settings.closedRetention())).orElse(true)) {
             try {
                 manager.store().delete(workspace.id(), workspace.version());
@@ -218,6 +230,45 @@ public final class SandboxJanitor implements AutoCloseable {
         } catch (RuntimeException e) {
             log.warn("Sweeping the session options of purged workspaces failed; the next cycle retries: {}",
                     e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Deletes the options of sessions core's store no longer has. The grace of {@code closedRetention} keeps a record
+     * written before its session's first submit, which a host lookup can allow. Nothing to do without the store.
+     */
+    private void sweepDeletedSessions(Instant now) {
+        final Optional<SessionRecordStore> records = manager.sessionRecords();
+        if (records.isEmpty()) {
+            return;
+        }
+        final SessionOptionsStore options = manager.sessionOptionsStore();
+        Optional<SessionId> after = Optional.empty();
+        try {
+            while (true) {
+                final Page<SessionSandboxOptions, SessionId> page = options.sessions(after, SWEEP_PAGE);
+                for (SessionSandboxOptions record : page.items()) {
+                    if (idleFor(record.updatedAt(), now, settings.closedRetention())
+                            && !records.get().exists(record.session())) {
+                        deleteOptions(options, record);
+                    }
+                }
+                if (page.next().isEmpty()) {
+                    return;
+                }
+                after = page.next();
+            }
+        } catch (RuntimeException e) {
+            log.warn("Sweeping the options of deleted sessions failed; the next cycle retries: {}", e.getMessage(), e);
+        }
+    }
+
+    private static void deleteOptions(SessionOptionsStore options, SessionSandboxOptions record) {
+        try {
+            options.delete(record.session(), record.version());
+            log.info("Deleted the sandbox options of session {}, which no longer exists", record.session().value());
+        } catch (StaleVersionException e) {
+            log.debug("The options of session {} changed since the scan; they are kept", record.session().value());
         }
     }
 

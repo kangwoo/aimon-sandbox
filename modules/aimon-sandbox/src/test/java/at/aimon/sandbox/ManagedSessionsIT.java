@@ -4,6 +4,7 @@ import static at.aimon.sandbox.SandboxHarness.bash;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
@@ -32,6 +33,7 @@ import at.aimon.sandbox.workspace.InMemorySessionOptionsStore;
 import at.aimon.sandbox.workspace.SandboxWorkspaceId;
 import at.aimon.sandbox.workspace.SessionSandboxOptions;
 import at.aimon.sandbox.workspace.TenantId;
+import at.aimon.sandbox.workspace.WorkspaceOwner;
 import at.aimon.sandbox.workspace.WorkspaceScan;
 import at.aimon.sandbox.workspace.WorkspaceState;
 
@@ -73,6 +75,12 @@ class ManagedSessionsIT {
         workspaces().setSessionOptions(session, SessionSandboxOptions.Update.attach(id), ALICE);
     }
 
+    /** One tool call as core makes it: the command, then the drain core runs after every model-facing call. */
+    private static List<String> drained(ExecutionEnvironment environment, String command) throws Exception {
+        bash(environment, command);
+        return environment.drainNotices();
+    }
+
     private static String cause(ExecutionEnvironment environment) {
         assertThat(environment).isInstanceOf(UnavailableExecutionEnvironment.class);
         return ((UnavailableExecutionEnvironment) environment).message();
@@ -99,42 +107,46 @@ class ManagedSessionsIT {
     @DisplayName("§6.4: attach → one notice, repeated turns → none, clear → a notice on the fallback")
     void theSwitchNoticeIsGivenOncePerMove() throws Exception {
         final SandboxWorkspaceId id = create("noticed");
-        assertThat(bash(harness.mainTurn(session, ALICE), "true").notices()).as("no options: never redirected")
-                .isEmpty();
+        assertThat(drained(harness.mainTurn(session, ALICE), "true")).as("no options: never redirected").isEmpty();
 
         attach(id);
-        final ShellCommandResult attached = bash(harness.mainTurn(session, ALICE), "true");
-        assertThat(attached.notices()).singleElement().asString().contains("now runs in sandbox workspace " + id)
+        final ExecutionEnvironment attached = harness.mainTurn(session, ALICE);
+        assertThat(bash(attached, "true").notices()).as("core-033 §6.5: never on the command's own result").isEmpty();
+        assertThat(attached.drainNotices()).singleElement().asString().contains("now runs in sandbox workspace " + id)
                 .doesNotContain("noticed");
+        assertThat(attached.drainNotices()).as("one-shot").isEmpty();
         assertThat(harness.sessionOptions.find(session).orElseThrow().lastWorkspaceId()).contains(id);
-        assertThat(bash(harness.mainTurn(session, ALICE), "true").notices()).isEmpty();
+        assertThat(drained(harness.mainTurn(session, ALICE), "true")).isEmpty();
 
         workspaces().clearSessionOptions(session, ALICE);
-        assertThat(bash(harness.mainTurn(session, ALICE), "true").notices()).singleElement().asString()
+        assertThat(drained(harness.mainTurn(session, ALICE), "true")).singleElement().asString()
                 .contains("ws:" + session.value());
-        assertThat(bash(harness.mainTurn(session, ALICE), "true").notices()).isEmpty();
+        assertThat(drained(harness.mainTurn(session, ALICE), "true")).isEmpty();
     }
 
     @Test
-    @DisplayName("§6.4: a turn of file tools only leaves the switch for the next Bash")
-    void theSwitchIsRecordedOnlyOnceItReachedACommandResult() throws Exception {
+    @DisplayName("core-033 §6.4: a turn of file tools only hears the switch on its first call, and it is recorded")
+    void aFileOnlyTurnHearsTheSwitch() throws Exception {
         final SandboxWorkspaceId id = create("files");
         attach(id);
 
-        harness.mainTurn(session, ALICE).fileSystem().write("/workspace/repo/a.txt", "a");
-        assertThat(harness.sessionOptions.find(session).orElseThrow().lastWorkspaceId()).isEmpty();
+        final ExecutionEnvironment turn = harness.mainTurn(session, ALICE);
+        turn.fileSystem().write("/workspace/repo/a.txt", "a");
+        assertThat(harness.sessionOptions.find(session).orElseThrow().lastWorkspaceId())
+                .as("queued, not yet delivered: recorded only by the drain").isEmpty();
+        assertThat(turn.drainNotices()).singleElement().asString().contains(id.value());
+        assertThat(harness.sessionOptions.find(session).orElseThrow().lastWorkspaceId()).contains(id);
 
         final ExecutionEnvironment next = harness.mainTurn(session, ALICE);
         next.fileSystem().write("/workspace/repo/b.txt", "b");
-        assertThat(bash(next, "true").notices()).singleElement().asString().contains(id.value());
-        assertThat(harness.sessionOptions.find(session).orElseThrow().lastWorkspaceId()).contains(id);
+        assertThat(next.drainNotices()).isEmpty();
     }
 
     @Test
     void aFirstRuleOnlyRecordIsRecordedSilently() throws Exception {
         workspaces().setSessionOptions(session, SessionSandboxOptions.Update.rule(UnattachedRule.PER_SESSION), ALICE);
 
-        assertThat(bash(harness.mainTurn(session, ALICE), "true").notices()).isEmpty();
+        assertThat(drained(harness.mainTurn(session, ALICE), "true")).isEmpty();
         assertThat(harness.sessionOptions.find(session).orElseThrow().lastWorkspaceId())
                 .contains(SandboxWorkspaceId.of("ws:" + session.value()));
     }
@@ -202,6 +214,59 @@ class ManagedSessionsIT {
         assertThat(cause(routine(alices))).contains("allowed-system-principals");
     }
 
+    @Test
+    @DisplayName("core-033 §6.4: ws:{sid}, then a request attribute, then neither — announced on turns 2 and 3")
+    void aRequestAttributeRedirectIsAnnouncedBothWays() throws Exception {
+        harness.close();
+        harness = harness(s -> s.allowSharedWorkspaces(true));
+        final SandboxWorkspaceId pinned = workspaces()
+                .create(CreateWorkspace.builder().name("pinned").access(SandboxSettings.WorkspaceAccess.TENANT).build(),
+                        ALICE)
+                .id();
+        final Map<String, String> request = Map.of(SlotChoice.WORKSPACE_ATTRIBUTE, pinned.value());
+
+        assertThat(drained(harness.mainTurn(session, ALICE), "true")).isEmpty();
+        assertThat(harness.sessionOptions.find(session)).as("never redirected: no record").isEmpty();
+
+        assertThat(drained(harness.mainTurn(session, ALBERT, request), "true")).singleElement().asString()
+                .contains("now runs in sandbox workspace " + pinned);
+        final SessionSandboxOptions bookkeeping = harness.sessionOptions.find(session).orElseThrow();
+        assertThat(bookkeeping.lastWorkspaceId()).contains(pinned);
+        assertThat(bookkeeping.workspace()).isEmpty();
+        assertThat(bookkeeping.setBy()).as("the executing caller; it grants nothing")
+                .isEqualTo(WorkspaceOwner.of(TenantId.of("t1"), ALBERT));
+        assertThat(harness.sessionOptions.byWorkspace(pinned, Optional.empty(), 10).items()).as("not an attachment")
+                .isEmpty();
+        assertThat(SandboxAdministration.of(harness.sandbox).sessions(pinned, Optional.empty(), 10).items()).isEmpty();
+        assertThatThrownBy(
+                () -> workspaces().setSessionOptions(session, SessionSandboxOptions.Update.attach(pinned), ALBERT))
+                .hasMessageContaining("only the owner");
+
+        assertThat(drained(harness.mainTurn(session, ALICE), "true")).singleElement().asString()
+                .contains("ws:" + session.value());
+        assertThat(drained(harness.mainTurn(session, ALICE), "true")).isEmpty();
+    }
+
+    @Test
+    @DisplayName("core-033 §6.1: a routine placed by request attribute runs as its task owner, through the same gate")
+    void aRoutinePlacedByRequestAttribute() throws Exception {
+        final SandboxWorkspaceId alices = create("alice's");
+        final Map<String, String> request = Map.of(SlotChoice.WORKSPACE_ATTRIBUTE, alices.value());
+
+        // Core resolves a routine's request as the task's owner (RoutineExecutor), normally the user who created it.
+        final ExecutionEnvironment owners = harness.routine(ExecutionId.generate(), ALICE, request);
+        assertThat(bash(owners, "echo placed").stdout()).isEqualTo("placed\n");
+        assertThat(((SandboxExecutionEnvironment) owners).binding().shellKey().isExecution()).isTrue();
+        assertThatThrownBy(() -> bash(harness.routine(ExecutionId.generate(), ALBERT, request), "true"))
+                .hasMessageContaining("not permitted");
+
+        harness.close();
+        harness = harness(s -> s.requirePrincipal(true));
+        final SandboxWorkspaceId systems = workspaces().create(CreateWorkspace.named("system's"), ALICE).id();
+        assertThat(cause(harness.routine(ExecutionId.generate(), Principal.system(),
+                Map.of(SlotChoice.WORKSPACE_ATTRIBUTE, systems.value())))).contains("allowed-system-principals");
+    }
+
     private ExecutionEnvironment routine(SandboxWorkspaceId workspace) {
         return harness.resolve(EnvironmentRequest.builder().agentRuntimeId(SandboxHarness.RUNTIME)
                 .executionId(ExecutionId.generate()).principal(Principal.system())
@@ -251,16 +316,16 @@ class ManagedSessionsIT {
         attach(second);
 
         // The turn bound before the re-attach still runs where it was bound, and its record write loses the CAS.
-        assertThat(bash(stale, "true").notices()).singleElement().asString().contains(first.value());
+        assertThat(drained(stale, "true")).singleElement().asString().contains(first.value());
         assertThat(harness.sessionOptions.find(session).orElseThrow().lastWorkspaceId()).isEmpty();
 
-        assertThat(bash(harness.mainTurn(session, ALICE), "true").notices()).singleElement().asString()
+        assertThat(drained(harness.mainTurn(session, ALICE), "true")).singleElement().asString()
                 .contains(second.value());
-        assertThat(bash(harness.mainTurn(session, ALICE), "true").notices()).isEmpty();
+        assertThat(drained(harness.mainTurn(session, ALICE), "true")).isEmpty();
     }
 
     @Test
-    @DisplayName("review m2: a hook's result does not take the switch notice; the model's next command does")
+    @DisplayName("core-033 §6.5: a hook's command leaves the switch in the queue for core's drain")
     void aHookDoesNotConsumeTheSwitchNotice() throws Exception {
         final SandboxWorkspaceId id = create("hooked");
         attach(id);
@@ -271,7 +336,8 @@ class ManagedSessionsIT {
 
         assertThat(hook.notices()).isEmpty();
         assertThat(harness.sessionOptions.find(session).orElseThrow().lastWorkspaceId()).isEmpty();
-        assertThat(bash(turn, "true").notices()).singleElement().asString().contains(id.value());
+        assertThat(turn.drainNotices()).as("delivered on the tool result the hook ran for").singleElement().asString()
+                .contains(id.value());
         assertThat(harness.sessionOptions.find(session).orElseThrow().lastWorkspaceId()).contains(id);
     }
 
@@ -289,22 +355,30 @@ class ManagedSessionsIT {
 
         workspaces().setSessionOptions(session, SessionSandboxOptions.Update.rule(UnattachedRule.REJECT), ALICE);
 
-        assertThat(bash(turn.get(), "true").notices()).isEmpty();
+        assertThat(drained(turn.get(), "true")).isEmpty();
         assertThat(harness.sessionOptions.find(session).orElseThrow().lastWorkspaceId()).contains(id);
     }
 
     @Test
-    @DisplayName("review m5: a clear after a turn of file tools only still announces the move back")
-    void aClearAfterFileToolsOnlyStillAnnouncesTheMove() throws Exception {
+    @DisplayName("core-033 §6.4: a clear that beats the drained switch's record write still announces the move back")
+    void aClearBeforeTheRecordWriteStillAnnouncesTheMove() throws Exception {
+        final QueueingExecutor background = new QueueingExecutor();
+        harness.close();
+        harness = SandboxHarness.builder().tenantResolver(BY_PREFIX).sessionOwnerLookup(id -> Optional.of(ALICE))
+                .background(background).build();
         final SandboxWorkspaceId id = create("files only");
         attach(id);
-        harness.mainTurn(session, ALICE).fileSystem().write("/workspace/repo/edited.txt", "x");
-        assertThat(harness.sessionOptions.find(session).orElseThrow().lastWorkspaceId()).isEmpty();
+        final ExecutionEnvironment turn = harness.mainTurn(session, ALICE);
+        turn.fileSystem().write("/workspace/repo/edited.txt", "x");
+        assertThat(turn.drainNotices()).singleElement().asString().contains(id.value());
+        assertThat(background.queued()).as("the record write waits on the background executor").isOne();
 
         workspaces().clearSessionOptions(session, ALICE);
+        background.runAll();
 
-        assertThat(harness.sessionOptions.find(session).orElseThrow().lastWorkspaceId()).contains(id);
-        assertThat(bash(harness.mainTurn(session, ALICE), "true").notices()).singleElement().asString()
+        assertThat(harness.sessionOptions.find(session).orElseThrow().lastWorkspaceId())
+                .as("the clear's fallback: the write lost its CAS").contains(id);
+        assertThat(drained(harness.mainTurn(session, ALICE), "true")).singleElement().asString()
                 .contains("ws:" + session.value());
     }
 }

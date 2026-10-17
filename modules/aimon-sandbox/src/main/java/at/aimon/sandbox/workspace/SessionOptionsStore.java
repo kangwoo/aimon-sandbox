@@ -15,8 +15,10 @@ import at.aimon.core.agent.session.SessionId;
  * {@link #delete} never reuses a version the deleted one had. What a store returns is what it keeps.
  *
  * <p>
- * <b>Hosts delete options with their sessions</b> ({@code SandboxWorkspaces.clearSessionOptions} or {@link #delete}):
- * otherwise a deleted session's record stays until its workspace is purged.
+ * <b>Options are deleted with their sessions</b> by registering {@code WorkspaceSandbox.sessionLifecycleListener()} on
+ * core's session router (kangwoo/aimon-core#253). A session deleted outside the router fires nothing: its record is
+ * removed by {@code SandboxAdministration.deleteSessionOptions}, or by the janitor's sweep once
+ * {@code closed-retention} has passed, when core's session store is wired.
  */
 public interface SessionOptionsStore {
 
@@ -75,6 +77,17 @@ public interface SessionOptionsStore {
      * @return the attached workspace ids, ordered, each once
      */
     Page<SandboxWorkspaceId, SandboxWorkspaceId> workspaces(Optional<SandboxWorkspaceId> after, int limit);
+
+    /**
+     * Every record, attached or not — the janitor's sweep of deleted sessions.
+     *
+     * @param after
+     *            the page starts after this session
+     * @param limit
+     *            the page size, at least 1
+     * @return the records, ordered by session id
+     */
+    Page<SessionSandboxOptions, SessionId> sessions(Optional<SessionId> after, int limit);
 
     /**
      * Clears {@code workspace} on every record attached to {@code id}, keeping each record's other fields; each changed

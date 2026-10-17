@@ -31,7 +31,9 @@ import at.aimon.sandbox.workspace.WorkspaceOwner;
 /**
  * The contract every {@link SessionOptionsStore} must pass (docs/design/workspace-sandbox-management.md §4.5, §5.2):
  * create-only and CAS puts, {@link StaleVersionException} for a stale, absent or deleted CAS, no version reuse after
- * delete, records that read back exactly as returned, stable {@code byWorkspace} and {@code workspaces} paging, and an
+ * delete, records that read back exactly as returned, stable {@code byWorkspace}, {@code workspaces} and
+ * {@code sessions}
+ * paging, and an
  * idempotent {@code deleteByWorkspace} that keeps every other field. {@code InMemorySessionOptionsStore} passes it; a
  * persistent store (step 6) must pass the same suite.
  *
@@ -220,6 +222,42 @@ public abstract class SessionOptionsStoreContract {
         assertThat(first.items()).containsExactly(A, B);
         assertThat(second.items()).containsExactly(SandboxWorkspaceId.of("wsm:c"));
         assertThat(second.next()).isEmpty();
+    }
+
+    @Test
+    void sessionsPagesEveryRecordInOrder() {
+        final List<String> expected = new ArrayList<>();
+        for (int i = 0; i < 11; i++) {
+            final String session = String.format("s%03d", i);
+            // Attached or not, and a record that only remembers where its session last ran: sessions lists them all.
+            final SessionSandboxOptions record = i % 3 == 0
+                    ? options(session, null).toBuilder().lastWorkspaceId(A).build()
+                    : options(session, i % 2 == 0 ? A : null);
+            store.put(record, OptionalLong.empty());
+            expected.add(session);
+        }
+        final List<String> seen = new ArrayList<>();
+        Optional<SessionId> after = Optional.empty();
+        boolean deleted = false;
+        while (true) {
+            final Page<SessionSandboxOptions, SessionId> page = store.sessions(after, 4);
+            assertThat(page.items()).hasSizeLessThanOrEqualTo(4);
+            page.items().forEach(options -> seen.add(options.session().value()));
+            if (page.next().isEmpty()) {
+                break;
+            }
+            after = page.next();
+            if (!deleted) {
+                // A record deleted between pages, after the cursor: it is not listed, and nothing else is skipped.
+                final SessionSandboxOptions gone = store.find(SessionId.of("s009")).orElseThrow();
+                store.delete(gone.session(), gone.version());
+                expected.remove("s009");
+                deleted = true;
+            }
+        }
+
+        assertThat(seen).isEqualTo(expected);
+        assertThat(store.sessions(Optional.of(SessionId.of("s010")), 4).items()).isEmpty();
     }
 
     @Test
