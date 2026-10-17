@@ -2220,7 +2220,7 @@ docker 계층, K8s 에서만 드러나는 것은 k8s 계층 — 는 [`workspace-
   하나를 옮긴다. 세션 옵션은 세션 단위 기본값으로 남는다(§8.1, [관리 설계](workspace-sandbox-management.md) §12 Q1,
   [코어 0.3.3 이행 설계](workspace-sandbox-core-033.md) §2.3)
 - **세션을 지울 때 `ws:{sessionId}` 도 닫는가** — 지금은 닫는다(§10.5). "대화 지우기" 를 같은 id 로 지우고 다시 만드는 호스트는
-  그때마다 샌드박스를 잃고, 다시 만든 세션의 첫 턴은 옛 샌드박스가 사라질 때까지(최대 `close-wait`) "being removed" 로 도구가
+  그때마다 샌드박스를 잃고, 다시 만든 세션의 첫 턴은 옛 샌드박스가 사라질 때까지(보통 최대 `close-wait`, 배경 닫기가 버려지면 janitor 가 이어받는 `close-resume-after` 와 순회 한 번 더) "being removed" 로 도구가
   실패한다. 옵션만 지우고 닫기는 선택으로 둘지(`sessionLifecycleListener(boolean closeDerived)`) 정해야 한다
   ([코어 0.3.3 이행 설계](workspace-sandbox-core-033.md) §12 Q1, §14)
 - **세션 소유자 읽기의 비용** — `sessionRecords(...)` 를 주면 메인 턴의 바인딩마다 세션 레코드 전체(대화 기록 포함)를 한 번

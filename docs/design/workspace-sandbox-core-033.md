@@ -745,7 +745,7 @@ the first table.
 | Shell state of the deleted session in a managed workspace | Not removed, as designed; README and WS §20 state it |
 | How `close()` stops the owned executor | `shutdown`, then up to `WorkspaceSandbox.BACKGROUND_CLOSE_WAIT` (5 s), then `shutdownNow`. A deletion cut short this way keeps its `SESSION_DELETED` mark and the janitor finishes it; an interrupted `awaitSandboxesGone` gives up as it does for any interrupt |
 | §9 "after the scheduler runs" | The tests drain a `QueueingExecutor` (the background executor), not the scheduler |
-| Q1 should name the failed first turn | WS §20's entry and the README say that a session re-created under the same id gets "being removed" from its tools for up to `close-wait` |
+| Q1 should name the failed first turn | WS §20's entry and the README say that a session re-created under the same id gets "being removed" from its tools for up to `close-wait` — or, when the deferred close is dropped, `close-resume-after` plus one janitor period (§6.3; PR #27 review corrected the README) |
 
 ### Where the design was wrong or incomplete
 
