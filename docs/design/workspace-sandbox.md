@@ -2100,10 +2100,8 @@ docker 계층, K8s 에서만 드러나는 것은 k8s 계층 — 는 [`workspace-
   따라오므로, 그것을 읽을 소비처가 생길 때 그 소비처의 요구로 설계한다(단계 3 구현 설계 §10 Q6)
 - ~~**aimon-core SNAPSHOT 고정**~~ *(닫았다)* — aimon-core 0.3.1 이 Central 에 나왔고, 고정을 그 릴리스로 올리고
   `mavenLocal()` 을 지웠다(PR #7, 단계 3 구현 설계 §10 Q8)
-- **aimon-core 0.3.2-SNAPSHOT 고정** *(코어 0.3.2 릴리스에서 닫는다)* — 훅 표시(`ExecutionOptions.isHook()`, 이슈 #9)
-  때문에 `main` 은 Central 의 스냅샷 저장소에서 `0.3.2-SNAPSHOT` 을 받는다(`build.gradle.kts` 의 저장소 블록 —
-  `at.aimon.core` 그룹과 스냅샷으로만 거른다). 릴리스 차단 항목이고 `scripts/release.sh` 가 막는다. 코어 0.3.2 가 나오면
-  고정을 올리고 저장소 블록을 함께 지운다
+- ~~**aimon-core 0.3.2-SNAPSHOT 고정**~~ *(닫았다)* — 훅 표시(`ExecutionOptions.isHook()`, 이슈 #9) 때문에 Central 의
+  스냅샷 저장소에서 받던 `0.3.2-SNAPSHOT` 을 릴리스된 0.3.2 로 올리고 `build.gradle.kts` 의 저장소 블록을 지웠다
 - **`aimon-sandbox-testkit` 의 발행** *(3·4단계 릴리스에서 닫는다)* — 계약 스위트를 이 저장소 밖의 구현도 통과해야 하므로
   발행하기로 했다(`aimon.publishable`). 첫 릴리스 전까지는 되돌릴 수 있다(단계 3 구현 설계 §10 Q5)
 

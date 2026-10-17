@@ -5,8 +5,7 @@ All notable aimon-sandbox changes are recorded here. The format is loosely based
 
 ## [Unreleased]
 
-Needs aimon-core **0.3.2**. Until it is released, `main` resolves `0.3.2-SNAPSHOT` from Central's snapshot repository
-(filtered to `at.aimon.core` and to snapshots), and `scripts/release.sh` refuses to release.
+Requires aimon-core **0.3.2**.
 
 ### Fixed: a skill's shell hook no longer waits for the model's shell (#9)
 
@@ -23,9 +22,9 @@ Needs aimon-core **0.3.2**. Until it is released, `main` resolves `0.3.2-SNAPSHO
 
 ### Changed
 
-- **aimon-core 0.3.2-SNAPSHOT.** Core removed `UserLocale` (EE-60); nothing in this library's main code used it.
+- **aimon-core 0.3.2.** Core removed `UserLocale` (EE-60); nothing in this library's main code used it.
 - **`scripts/release.sh` refuses while `gradle/libs.versions.toml` pins a SNAPSHOT** (any uncommented line, inline
-  `version = "…"` entries included; a dry run refuses too), so the pin above cannot be released by accident.
+  `version = "…"` entries included; a dry run refuses too), so a pre-release dependency cannot be released by accident.
 
 ## [0.1.0] - 2026-10-05
 
