@@ -17,6 +17,21 @@ public final class SlotChoice {
     /** The definition attribute naming a required profile. */
     public static final String PROFILE_ATTRIBUTE = "sandbox.profile";
 
+    /**
+     * The definition attribute naming the agent's default workspace: a managed {@code wsm:} id its sessions bind to
+     * unless their options attach them elsewhere (docs/design/workspace-sandbox-management.md §6.3). Writing it is the
+     * right to redirect every session of the agent; another principal's session only lands there if the workspace is
+     * shared. A routine running as a SYSTEM principal passes the gate only through {@code allowed-system-principals},
+     * and then needs the workspace owned by that principal or shared ({@code access: tenant}) with its tenant.
+     */
+    public static final String WORKSPACE_ATTRIBUTE = "sandbox.workspace";
+
+    /**
+     * The definition attribute tightening the unattached rule for the agent's requests: {@code per-session} or
+     * {@code reject}. It can tighten the {@code unattached} setting, never loosen it.
+     */
+    public static final String UNATTACHED_ATTRIBUTE = "sandbox.unattached";
+
     private static final Pattern SLOT_NAME = Pattern.compile("^[a-z][a-z0-9-]{0,30}$");
 
     private final String slot;

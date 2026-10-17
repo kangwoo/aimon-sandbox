@@ -8,8 +8,10 @@ import java.nio.file.Files;
 import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
+import java.util.OptionalLong;
 
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import at.aimon.core.agent.ExecutionId;
@@ -17,6 +19,7 @@ import at.aimon.core.agent.session.SessionId;
 import at.aimon.core.environment.ExecutionEnvironment;
 import at.aimon.sandbox.SandboxHarness;
 import at.aimon.sandbox.binding.ShellKey;
+import at.aimon.sandbox.binding.UnattachedRule;
 import at.aimon.sandbox.environment.SandboxExecutionEnvironment;
 import at.aimon.sandbox.provider.CreateSpec;
 import at.aimon.sandbox.provider.ProviderSandboxRef;
@@ -265,5 +268,49 @@ class SandboxJanitorTest {
                                         .provisioning(ProvisioningClaim.of(now.minus(claimAge), "dead-node"))
                                         .lastActivityAt(now).build()))
                         .build());
+    }
+
+    @Test
+    @DisplayName("management §6.6: the janitor never deletes a MANAGED CLOSED record; a DERIVED one expires")
+    void aManagedTombstoneIsKeptPastClosedRetention() {
+        final SandboxWorkspace managed = closedRecord("wsm:kept", WorkspaceOrigin.MANAGED);
+        final SandboxWorkspace derived = closedRecord("ws:expires", WorkspaceOrigin.DERIVED);
+
+        harness.clock.advance(harness.sandbox.settings().closedRetention().plusDays(30));
+        harness.sandbox.janitor().runOnce();
+
+        assertThat(harness.store.find(managed.id())).isPresent();
+        assertThat(harness.store.find(derived.id())).isEmpty();
+    }
+
+    @Test
+    @DisplayName("management §6.6: the sweep clears options attached to a workspace whose record is gone")
+    void theSweepClearsTheOptionsOfAPurgedWorkspace() {
+        final SandboxWorkspace kept = closedRecord("wsm:kept", WorkspaceOrigin.MANAGED);
+        final SessionId attachedToKept = SessionId.generate();
+        final SessionId attachedToGone = SessionId.generate();
+        harness.sessionOptions.put(options(attachedToKept, kept.id()), OptionalLong.empty());
+        harness.sessionOptions.put(options(attachedToGone, SandboxWorkspaceId.of("wsm:gone")).toBuilder()
+                .unattached(UnattachedRule.REJECT).build(), OptionalLong.empty());
+
+        harness.sandbox.janitor().runOnce();
+
+        assertThat(harness.sessionOptions.find(attachedToKept).orElseThrow().workspace()).contains(kept.id());
+        final SessionSandboxOptions swept = harness.sessionOptions.find(attachedToGone).orElseThrow();
+        assertThat(swept.workspace()).isEmpty();
+        assertThat(swept.unattached()).as("only the attachment goes").contains(UnattachedRule.REJECT);
+    }
+
+    private SessionSandboxOptions options(SessionId session, SandboxWorkspaceId workspace) {
+        return SessionSandboxOptions.builder().session(session).setBy(WorkspaceOwner.of(TenantId.DEFAULT, ALICE))
+                .workspace(workspace).updatedAt(harness.clock.instant()).build();
+    }
+
+    private SandboxWorkspace closedRecord(String id, WorkspaceOrigin origin) {
+        final java.time.Instant now = harness.clock.instant();
+        return harness.store.createIfAbsent(SandboxWorkspace.builder().id(SandboxWorkspaceId.of(id))
+                .owner(WorkspaceOwner.of(TenantId.DEFAULT, ALICE)).origin(origin).state(WorkspaceState.CLOSED)
+                .closeCause(CloseCause.EXPLICIT).incarnation("closed01").stateSince(now).createdAt(now)
+                .lastActivityAt(now).build());
     }
 }

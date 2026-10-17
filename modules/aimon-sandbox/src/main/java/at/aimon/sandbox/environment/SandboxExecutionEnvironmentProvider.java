@@ -23,6 +23,7 @@ import at.aimon.sandbox.binding.SlotChoice;
 import at.aimon.sandbox.profile.SandboxProfile;
 import at.aimon.sandbox.profile.SandboxProfileRegistry;
 import at.aimon.sandbox.provider.SandboxConnectionCache;
+import at.aimon.sandbox.workspace.SandboxSlot;
 import at.aimon.sandbox.workspace.SandboxWorkspaceManager;
 import at.aimon.sandbox.workspace.SandboxWorkspaceStore;
 import at.aimon.sandbox.workspace.WorkspaceOwner;
@@ -31,7 +32,8 @@ import at.aimon.sandbox.workspace.WorkspaceOwner;
  * aimon-core's {@link ExecutionEnvironmentProvider}, answered with sandboxes (docs/design/workspace-sandbox.md §7).
  *
  * <p>
- * {@link #resolve} makes no provider call and at most one store read: it binds the request (§8) and returns a
+ * {@link #resolve} makes no provider call and at most one workspace-store read and, for a session, one options-store
+ * read (docs/design/workspace-sandbox-management.md §6.3): it binds the request (§8) and returns a
  * {@link SandboxExecutionEnvironment} whose descriptor carries the profile's <i>declared</i> platform, OS and shell,
  * so a turn that runs no command provisions nothing and the prompt does not change between generations. A binding that
  * cannot be made is thrown as core's {@code ExecutionEnvironmentUnavailableException}; core then installs an
@@ -143,13 +145,17 @@ public final class SandboxExecutionEnvironmentProvider implements ExecutionEnvir
         // one would — refused under require-principal, anonymous otherwise — and the owner check still decides
         // whether that caller may use the parent's workspace (§8.2, §8.3). It never inherits the parent's caller.
         final WorkspaceOwner caller = callers.callerOf(request.principal());
+        // A fork inherits mustExist (it must not create what its parent may not) but never the parent's switch: the
+        // parent's environment announces and records it.
         return parentBinding.toBuilder().caller(caller).slot(choice.slot())
                 .requiredProfile(choice.requiredProfile().orElse(null)).shellKey(ShellKey.execution(executionId))
-                .root(root).build();
+                .root(root).workspaceSwitch(null).build();
     }
 
     /**
-     * The profile the descriptor declares: the required one, else the slot's (one store read), else the default. The
+     * The profile the descriptor declares: the required one, else the slot's (one store read), else — for
+     * {@code primary} of a managed workspace that has no slot yet — the profile it was created with, else the default:
+     * the profile {@code connect} will build (management design §6.1). The
      * background ceiling is read from it too, while the heartbeat limit it defaults to is applied from the connected
      * slot's profile; the two are the same profile on every path that runs a command, because {@code connect}
      * refuses a slot whose profile differs from the required one or was removed.
@@ -161,9 +167,10 @@ public final class SandboxExecutionEnvironmentProvider implements ExecutionEnvir
                     "the definition requires sandbox profile '" + required.get() + "', which is not configured"));
         }
         // A slot whose profile was removed by a redeploy is refused by connect(); the prompt still needs values.
-        return store.find(binding.workspaceId()).flatMap(workspace -> workspace.slot(binding.slot()))
-                .flatMap(slot -> profiles.find(slot.profile()))
-                .orElseGet(() -> profiles.find(profiles.defaultProfileName()).orElseThrow());
+        return store.find(binding.workspaceId())
+                .flatMap(workspace -> workspace.slot(binding.slot()).map(SandboxSlot::profile).or(
+                        () -> SandboxBinding.PRIMARY.equals(binding.slot()) ? workspace.profile() : Optional.empty()))
+                .flatMap(profiles::find).orElseGet(() -> profiles.find(profiles.defaultProfileName()).orElseThrow());
     }
 
     /**

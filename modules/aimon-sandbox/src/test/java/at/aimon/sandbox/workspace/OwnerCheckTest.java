@@ -161,4 +161,53 @@ class OwnerCheckTest {
                 .hasMessageContaining("not permitted");
         assertThatThrownBy(() -> bash(harness.mainTurn(named, null), "true")).hasMessageContaining("not permitted");
     }
+
+    private SandboxWorkspace managed(SandboxHarness h, Principal owner, SandboxSettings.WorkspaceAccess access) {
+        final java.time.Instant now = h.clock.instant();
+        return h.store.createIfAbsent(SandboxWorkspace.builder()
+                .id(SandboxWorkspaceId.of("wsm:" + java.util.UUID.randomUUID()))
+                .owner(WorkspaceOwner.of(BY_PREFIX.resolve(owner), owner)).origin(WorkspaceOrigin.MANAGED)
+                .access(access).incarnation("managed1").stateSince(now).createdAt(now).lastActivityAt(now).build());
+    }
+
+    @Test
+    @DisplayName("management §6.5: a record's own access overrides workspace-access for the use right, both ways")
+    void aRecordsAccessDecidesTheUseRight() {
+        final SandboxHarness h = harness(SandboxSettings.WorkspaceAccess.PRINCIPAL);
+        final SandboxWorkspaceManager manager = h.sandbox.manager();
+        final WorkspaceOwner albert = owner(ALBERT);
+        final SandboxWorkspace shared = managed(h, ALICE, SandboxSettings.WorkspaceAccess.TENANT);
+        final SandboxWorkspace inherited = managed(h, ALICE, null);
+
+        assertThat(manager.mayUse(shared, albert)).isTrue();
+        assertThat(manager.mayUse(shared, owner(BOB))).as("never across tenants").isFalse();
+        assertThat(manager.mayUse(inherited, albert)).as("absent access: the deployment setting").isFalse();
+
+        harness.close();
+        final SandboxHarness tenantWide = harness(SandboxSettings.WorkspaceAccess.TENANT);
+        final SandboxWorkspace narrowed = managed(tenantWide, ALICE, SandboxSettings.WorkspaceAccess.PRINCIPAL);
+        assertThat(tenantWide.sandbox.manager().mayUse(narrowed, albert)).isFalse();
+        assertThat(tenantWide.sandbox.manager().mayUse(narrowed, owner(ALICE))).isTrue();
+    }
+
+    @Test
+    @DisplayName("management §6.5: only the owner principal manages a MANAGED record, whatever its access")
+    void manageOfAManagedRecordNeedsTheOwnerPrincipal() {
+        final SandboxHarness h = harness(SandboxSettings.WorkspaceAccess.TENANT);
+        final SandboxWorkspace shared = managed(h, ALICE, SandboxSettings.WorkspaceAccess.TENANT);
+
+        assertThatThrownBy(() -> h.sandbox.manager().close(shared.id(), ALBERT))
+                .hasMessageContaining("not permitted to manage");
+        assertThat(h.store.find(shared.id()).orElseThrow().state()).isEqualTo(WorkspaceState.OPEN);
+
+        h.sandbox.manager().close(shared.id(), ALICE);
+        assertThatThrownBy(() -> h.sandbox.manager().reopen(shared.id(), ALBERT))
+                .hasMessageContaining("not permitted to manage");
+        h.sandbox.manager().reopen(shared.id(), ALICE);
+        assertThat(h.store.find(shared.id()).orElseThrow().state()).isEqualTo(WorkspaceState.OPEN);
+    }
+
+    private static WorkspaceOwner owner(Principal principal) {
+        return WorkspaceOwner.of(BY_PREFIX.resolve(principal), principal);
+    }
 }

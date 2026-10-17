@@ -33,11 +33,13 @@ import at.aimon.sandbox.testkit.ManualClock;
 import at.aimon.sandbox.testkit.ManualScheduler;
 import at.aimon.sandbox.testkit.SandboxTestProfiles;
 import at.aimon.sandbox.workspace.InMemorySandboxWorkspaceStore;
+import at.aimon.sandbox.workspace.InMemorySessionOptionsStore;
 import at.aimon.sandbox.workspace.SandboxEvent;
 import at.aimon.sandbox.workspace.SandboxSlot;
 import at.aimon.sandbox.workspace.SandboxWorkspace;
 import at.aimon.sandbox.workspace.SandboxWorkspaceId;
 import at.aimon.sandbox.workspace.SandboxWorkspaceStore;
+import at.aimon.sandbox.workspace.SessionOptionsStore;
 
 /**
  * A workspace sandbox on the local-process provider, with a manual clock and scheduler, for integration tests. Close it
@@ -53,6 +55,7 @@ public final class SandboxHarness implements AutoCloseable {
     public final LocalProcessSandboxProvider local;
     public final FaultInjectingSandboxProvider faults;
     public final SandboxWorkspaceStore store;
+    public final SessionOptionsStore sessionOptions;
     public final List<SandboxEvent> events = new ArrayList<>();
     public final WorkspaceSandbox sandbox;
 
@@ -60,10 +63,17 @@ public final class SandboxHarness implements AutoCloseable {
         this.local = builder.local != null ? builder.local : LocalProcessSandboxProvider.builder().clock(clock).build();
         this.faults = new FaultInjectingSandboxProvider(builder.decorator.apply(local, clock));
         this.store = builder.store != null ? builder.store : new InMemorySandboxWorkspaceStore();
+        this.sessionOptions = builder.sessionOptions != null
+                ? builder.sessionOptions
+                : new InMemorySessionOptionsStore();
         final SandboxSettings settings = builder.settings.apply(SandboxTestProfiles
                 .settings(builder.profiles.toArray(SandboxProfile[]::new)).closeWait(Duration.ofSeconds(2))).build();
         final WorkspaceSandbox.Builder assembly = WorkspaceSandbox.builder().settings(settings).provider(faults)
-                .store(store).clock(clock).scheduler(scheduler).eventListener(events::add);
+                .store(store).sessionOptionsStore(sessionOptions).clock(clock).scheduler(scheduler)
+                .eventListener(event -> {
+                    events.add(event);
+                    builder.listener.onEvent(event);
+                });
         if (builder.tenantResolver != null) {
             assembly.tenantResolver(builder.tenantResolver);
         }
@@ -150,6 +160,9 @@ public final class SandboxHarness implements AutoCloseable {
         private SandboxTenantResolver tenantResolver;
         private SessionOwnerLookup sessionOwnerLookup;
         private SandboxWorkspaceStore store;
+        private SessionOptionsStore sessionOptions;
+        private at.aimon.sandbox.workspace.SandboxEventListener listener = event -> {
+        };
         private LocalProcessSandboxProvider local;
         private at.aimon.sandbox.binding.SandboxBindingPolicy bindingPolicy;
 
@@ -188,6 +201,17 @@ public final class SandboxHarness implements AutoCloseable {
 
         public Builder store(SandboxWorkspaceStore store) {
             this.store = store;
+            return this;
+        }
+
+        /** Called after each event is recorded in {@code events}, e.g. to throw from a listener. */
+        public Builder listener(at.aimon.sandbox.workspace.SandboxEventListener listener) {
+            this.listener = listener;
+            return this;
+        }
+
+        public Builder sessionOptions(SessionOptionsStore sessionOptions) {
+            this.sessionOptions = sessionOptions;
             return this;
         }
 

@@ -61,11 +61,18 @@ import at.aimon.core.tools.bash.BashTool;
 import at.aimon.core.tools.task.TaskTool;
 import at.aimon.sandbox.RecordingProvider;
 import at.aimon.sandbox.SandboxHarness;
+import at.aimon.sandbox.binding.SlotChoice;
+import at.aimon.sandbox.binding.UnattachedRule;
+import at.aimon.sandbox.provider.ProviderSandboxRef;
 import at.aimon.sandbox.provider.SandboxProviderException;
 import at.aimon.sandbox.testkit.FaultInjectingSandboxProvider.Fault;
 import at.aimon.sandbox.testkit.FaultInjectingSandboxProvider.Operation;
 import at.aimon.sandbox.testkit.SandboxTestProfiles;
+import at.aimon.sandbox.workspace.CreateWorkspace;
+import at.aimon.sandbox.workspace.SandboxWorkspaceId;
+import at.aimon.sandbox.workspace.SessionSandboxOptions;
 import at.aimon.sandbox.workspace.WorkspaceScan;
+import at.aimon.sandbox.workspace.WorkspaceView;
 
 /**
  * The sandbox behind a real {@link OrcaAgentExecutor} (§16 rows 14 and 15): the prompt describes the declared
@@ -81,7 +88,8 @@ class OrcaRuntimeSandboxE2ETest {
 
     private RecordingProvider recorder;
     private final SandboxHarness harness = SandboxHarness.builder()
-            .decorate((provider, clock) -> recorder = new RecordingProvider(provider)).build();
+            .decorate((provider, clock) -> recorder = new RecordingProvider(provider))
+            .sessionOwnerLookup(session -> Optional.of(SandboxHarness.ALICE)).build();
     private ScriptedLlmClient llm;
     private DefaultSubagentExecutionManager subagents;
     private OrcaAgentExecutor executor;
@@ -110,6 +118,14 @@ class OrcaRuntimeSandboxE2ETest {
     }
 
     private OrcaAgentRuntime runtime(boolean withTaskTool) {
+        return runtime(withTaskTool, Map.of());
+    }
+
+    private OrcaAgentRuntime runtime(Map<String, String> attributes) {
+        return runtime(false, attributes);
+    }
+
+    private OrcaAgentRuntime runtime(boolean withTaskTool, Map<String, String> attributes) {
         final LocalFileSystem control = new LocalFileSystem(new LocalFileSystemConfig(tempDir.toString()));
         control.initialize();
         final DefaultCommandRegistry commands = new DefaultCommandRegistry(List.of(), skills, control,
@@ -123,7 +139,7 @@ class OrcaRuntimeSandboxE2ETest {
         }
         return OrcaAgentRuntime.builder()
                 .agent(DefaultAgent.builder().name("sandboxed").maxIterations(3).systemPrompt("You are a test agent")
-                        .model(model).build())
+                        .model(model).attributes(attributes).build())
                 .toolRegistry(toolRegistry).hookRegistry(hookRegistry).commandRegistry(commands)
                 .subagentRegistry(subagentRegistry).skillRegistry(skills).controlFileSystem(control)
                 .executionEnvironmentProvider(harness.sandbox.environmentProvider()).build();
@@ -329,6 +345,98 @@ class OrcaRuntimeSandboxE2ETest {
 
         assertThat(result.isSuccess()).as(result.getErrorMessage()).isTrue();
         assertThat(llm.toolResults).isNotEmpty().noneMatch(text -> text.contains("Blocked: guard hook"));
+    }
+
+    private OrcaAgentExecutionResult runBash(OrcaAgentRuntime runtime, SessionId session, String command) {
+        llm.respond(LlmResponse
+                .tools(List.of(ToolUse.of("b" + llm.toolResults.size(), "Bash", Map.of("command", command)))));
+        llm.respond(LlmResponse.text("Done."));
+        return executor.execute(runtime, OrcaAgentExecutionRequest.builder().userInput("go").sessionId(session)
+                .principal(SandboxHarness.ALICE).build());
+    }
+
+    @Test
+    @DisplayName("management §9.3: an agent's sandbox.workspace runs its Bash in the pre-created sandbox")
+    void anAgentDefaultRunsBashInThePreCreatedSandbox() throws Exception {
+        final WorkspaceView created = harness.sandbox.workspaces().create(CreateWorkspace.named("pre-created"),
+                SandboxHarness.ALICE);
+        final SessionId session = SessionId.generate();
+
+        final OrcaAgentExecutionResult result = runBash(
+                runtime(Map.of(SlotChoice.WORKSPACE_ATTRIBUTE, created.id().value())), session,
+                "echo agent-default > marker.txt");
+
+        assertThat(result.isSuccess()).as(result.getErrorMessage()).isTrue();
+        assertThat(managedFile(created.id(), "/workspace/repo/marker.txt")).isEqualTo("agent-default\n");
+        assertThat(harness.store.find(SandboxWorkspaceId.of("ws:" + session.value()))).isEmpty();
+        // No options record: the session was never redirected, so it hears of no switch (§6.4).
+        assertThat(llm.toolResults).noneMatch(text -> text.contains("now runs in sandbox workspace"));
+    }
+
+    @Test
+    @DisplayName("management §9.3: a session's options attach it elsewhere, over the agent default")
+    void sessionOptionsOverrideTheAgentDefault() throws Exception {
+        final WorkspaceView agentDefault = harness.sandbox.workspaces().create(CreateWorkspace.named("default"),
+                SandboxHarness.ALICE);
+        final WorkspaceView attached = harness.sandbox.workspaces().create(CreateWorkspace.named("attached"),
+                SandboxHarness.ALICE);
+        final SessionId session = SessionId.generate();
+        harness.sandbox.workspaces().setSessionOptions(session, SessionSandboxOptions.Update.attach(attached.id()),
+                SandboxHarness.ALICE);
+
+        final OrcaAgentExecutionResult result = runBash(
+                runtime(Map.of(SlotChoice.WORKSPACE_ATTRIBUTE, agentDefault.id().value())), session,
+                "echo attached > marker.txt");
+
+        assertThat(result.isSuccess()).as(result.getErrorMessage()).isTrue();
+        assertThat(managedFile(attached.id(), "/workspace/repo/marker.txt")).isEqualTo("attached\n");
+        assertThat(Files.exists(managedPath(agentDefault.id(), "/workspace/repo/marker.txt"))).isFalse();
+    }
+
+    @Test
+    @DisplayName("management §9.3: sandbox.unattached reject — an unattached session's tool call reports it")
+    void anUnattachedSessionUnderRejectReportsTheRejection() {
+        final SessionId session = SessionId.generate();
+
+        final OrcaAgentExecutionResult result = runBash(runtime(Map.of(SlotChoice.UNATTACHED_ATTRIBUTE, "reject")),
+                session, "echo x");
+
+        assertThat(result.isSuccess()).as(result.getErrorMessage()).isTrue();
+        assertThat(llm.toolResults).anyMatch(text -> text.contains("not attached to a sandbox workspace"));
+        assertThat(harness.faults.calls(Operation.CREATE)).isZero();
+    }
+
+    @Test
+    @DisplayName("management §6.3: a session option can tighten the rule, and per-session runs where nothing tightens")
+    void theSessionOptionDecidesWithinTheFloorAndTheAgent() throws Exception {
+        final SessionId strict = SessionId.generate();
+        final SessionId relaxed = SessionId.generate();
+        harness.sandbox.workspaces().setSessionOptions(strict, SessionSandboxOptions.Update.rule(UnattachedRule.REJECT),
+                SandboxHarness.ALICE);
+        harness.sandbox.workspaces().setSessionOptions(relaxed,
+                SessionSandboxOptions.Update.rule(UnattachedRule.PER_SESSION), SandboxHarness.ALICE);
+
+        runBash(runtime(), strict, "echo strict");
+        assertThat(llm.toolResults).anyMatch(text -> text.contains("not attached to a sandbox workspace"));
+
+        final OrcaAgentExecutionResult result = runBash(runtime(), relaxed, "echo relaxed > relaxed.txt");
+        assertThat(result.isSuccess()).as(result.getErrorMessage()).isTrue();
+        assertThat(harness.hostFile(relaxed, "/workspace/repo/relaxed.txt")).isEqualTo("relaxed\n");
+
+        llm.toolResults.clear();
+        runBash(runtime(Map.of(SlotChoice.UNATTACHED_ATTRIBUTE, "reject")), relaxed, "echo again");
+        assertThat(llm.toolResults).as("a session option cannot loosen the agent's reject")
+                .anyMatch(text -> text.contains("not attached to a sandbox workspace"));
+    }
+
+    private Path managedPath(SandboxWorkspaceId id, String sandboxPath) {
+        final ProviderSandboxRef ref = harness.store.find(id).orElseThrow().slot("primary").orElseThrow().providerRef()
+                .orElseThrow();
+        return harness.local.hostRoot(ref).resolve(sandboxPath.substring(1));
+    }
+
+    private String managedFile(SandboxWorkspaceId id, String sandboxPath) throws java.io.IOException {
+        return Files.readString(managedPath(id, sandboxPath));
     }
 
     /** Answers from a queue and records the prompts and tool results it was sent. */

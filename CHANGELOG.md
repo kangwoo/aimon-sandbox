@@ -7,6 +7,44 @@ All notable aimon-sandbox changes are recorded here. The format is loosely based
 
 Requires aimon-core **0.3.2**.
 
+### Added: managed workspaces, session options and an agent default
+
+Management design [`docs/design/workspace-sandbox-management.md`](docs/design/workspace-sandbox-management.md), PR 1.
+
+- **`WorkspaceSandbox.workspaces()`** (`SandboxWorkspaces`): `create` a workspace under a generated `wsm:` id and
+  provision its `primary` slot before returning; `provision` (retry after a `WorkspaceProvisioningException`),
+  `describe`, `list` the caller's own, `close`, `reopen` (which provisions) and `purge` (CLOSED managed workspaces
+  only; the id is never reused). Views carry no provider sandbox id.
+- **Session options**: `setSessionOptions` / `clearSessionOptions` / `deleteSessionOptions` / `sessionOptions` attach
+  a session to a managed workspace, set its own unattached rule, and remove the record when the host deletes the
+  session. Only the session's owner may, which needs a `SessionOwnerLookup`. They
+  live in the new `SessionOptionsStore` SPI (`InMemorySessionOptionsStore` by default, single node only;
+  `WorkspaceSandbox.Builder.sessionOptionsStore`) with a `SessionOptionsStoreContract` in the testkit.
+- **Binding**: the configured policy is wrapped in `SessionOptionsBindingPolicy` — session options, then the
+  definition's `sandbox.workspace`, then the effective unattached rule
+  `strictest(unattached, sandbox.unattached, session option)`. A binding to a workspace it did not derive is
+  `mustExist` and never re-creates a missing record. A session that moved hears so once ("now runs in sandbox
+  workspace …") with its next command's result — never with a hook's.
+- **Rights**: a record's own `access` decides who may use it; close, reopen and purge of a managed workspace are its
+  owner's alone.
+- **Settings**: `unattached` (`per-session`), `allow-shared-workspaces` (false), `max-managed-per-owner` (20, or
+  `unlimited`).
+- **Janitor**: managed CLOSED records are kept past `closed-retention`; a sweep clears session options still attached
+  to a purged workspace.
+- **Events**: types `WORKSPACE_CREATED`, `WORKSPACE_PURGED`, `SESSION_OPTIONS_SET`, `SESSION_OPTIONS_CLEARED`, and
+  `session()`, `actor()` and `workspace()` (the `Optional` workspace; `workspaceId()` throws on a session event that
+  names none). A listener that throws a `LinkageError` no longer fails the transition it hears of.
+- **Recorded failures** never quote the provider's raw sandbox id: a server message that does gets the id's hash instead.
+
+### Breaking for custom `SandboxWorkspaceStore`s
+
+- **`SandboxWorkspace`** gains `origin`, `name`, `profile` and `access`, and **`WorkspaceScan`** gains `owner` and
+  `origin` filters. A custom store **must persist the four fields** through `createIfAbsent` and `update` (an
+  `access` of `principal` included — dropping it widens a narrowed workspace, dropping `origin` lets the janitor delete
+  a managed record) and **should honour the filters**; run the updated `SandboxWorkspaceStoreContract`. The manager
+  re-checks every scanned record, so a store that ignores the filters is slow, not unsafe.
+- New `SandboxEvent.Type` constants: a listener with an exhaustive `switch` needs a default branch.
+
 ### Fixed: a skill's shell hook no longer waits for the model's shell (#9)
 
 - **A hook's command takes no shell lock.** aimon-core 0.3.2 marks it with `ExecutionOptions.isHook()`, and

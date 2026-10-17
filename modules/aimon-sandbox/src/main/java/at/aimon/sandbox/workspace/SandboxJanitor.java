@@ -27,7 +27,10 @@ import at.aimon.sandbox.profile.SandboxProfile;
  * <li><b>idle close</b> — every OPEN workspace with no live slot for {@code closeAfter}, counted from the latest of
  * its creation, its last reopen and its slots' {@code lastActiveAt};</li>
  * <li><b>resume</b> — every close stuck in CLOSING for {@code closeResumeAfter}, from the top;</li>
- * <li><b>tombstones</b> — every CLOSED record older than {@code closedRetention} is deleted;</li>
+ * <li><b>tombstones</b> — every {@code DERIVED} CLOSED record older than {@code closedRetention} is deleted; a
+ * {@code MANAGED} one is kept until {@code purge} (management design §6.6);</li>
+ * <li><b>options sweep</b> — session options still attached to a workspace whose record is gone (a {@code purge}
+ * whose own {@code deleteByWorkspace} failed) are cleared;</li>
  * <li>node-local: {@code exec:} shell directories unused for {@code execShellIdle};</li>
  * <li><b>reconcile</b> — the deployment's sandboxes against the records: orphans, stale generations, failed leftovers
  * and duplicates are destroyed, missing sandboxes confirmed LOST ({@link SandboxReconciler}).</li>
@@ -40,6 +43,7 @@ import at.aimon.sandbox.profile.SandboxProfile;
 public final class SandboxJanitor implements AutoCloseable {
 
     private static final Logger log = LoggerFactory.getLogger(SandboxJanitor.class);
+    private static final int SWEEP_PAGE = 100;
 
     private final SandboxWorkspaceManager manager;
     private final SandboxScheduler scheduler;
@@ -82,6 +86,7 @@ public final class SandboxJanitor implements AutoCloseable {
         forEach(Set.of(WorkspaceState.OPEN), workspace -> enforceIdle(workspace, now));
         forEach(Set.of(WorkspaceState.CLOSING), workspace -> resumeClose(workspace, now));
         forEach(Set.of(WorkspaceState.CLOSED), workspace -> deleteTombstone(workspace, now));
+        sweepSessionOptions();
         try {
             manager.connections().sweepExecShells(settings.execShellIdle());
         } catch (RuntimeException e) {
@@ -175,6 +180,10 @@ public final class SandboxJanitor implements AutoCloseable {
     }
 
     private void deleteTombstone(SandboxWorkspace workspace, Instant now) {
+        if (workspace.origin() == WorkspaceOrigin.MANAGED) {
+            // Its id may be named by session options and agent definitions; only purge ends it (§6.6).
+            return;
+        }
         if (workspace.stateSince().map(since -> idleFor(since, now, settings.closedRetention())).orElse(true)) {
             try {
                 manager.store().delete(workspace.id(), workspace.version());
@@ -182,6 +191,33 @@ public final class SandboxJanitor implements AutoCloseable {
             } catch (StaleVersionException e) {
                 log.debug("Workspace {} changed since the scan; its record is kept", workspace.id());
             }
+        }
+    }
+
+    /**
+     * Clears the attachment of options whose workspace record no longer exists. Ids in options are managed ids, which
+     * are never reused, so a missing record is a purged one and nothing can re-create it in between.
+     */
+    private void sweepSessionOptions() {
+        final SessionOptionsStore options = manager.sessionOptionsStore();
+        Optional<SandboxWorkspaceId> after = Optional.empty();
+        try {
+            while (true) {
+                final Page<SandboxWorkspaceId, SandboxWorkspaceId> page = options.workspaces(after, SWEEP_PAGE);
+                for (SandboxWorkspaceId id : page.items()) {
+                    if (manager.store().find(id).isEmpty()) {
+                        final int cleared = options.deleteByWorkspace(id);
+                        log.info("Cleared the attachment of {} session(s) to purged workspace {}", cleared, id);
+                    }
+                }
+                if (page.next().isEmpty()) {
+                    return;
+                }
+                after = page.next();
+            }
+        } catch (RuntimeException e) {
+            log.warn("Sweeping the session options of purged workspaces failed; the next cycle retries: {}",
+                    e.getMessage(), e);
         }
     }
 

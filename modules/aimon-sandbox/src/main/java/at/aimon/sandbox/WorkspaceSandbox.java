@@ -10,6 +10,7 @@ import at.aimon.sandbox.binding.CallerResolver;
 import at.aimon.sandbox.binding.DefaultSandboxBindingPolicy;
 import at.aimon.sandbox.binding.SandboxBindingPolicy;
 import at.aimon.sandbox.binding.SandboxTenantResolver;
+import at.aimon.sandbox.binding.SessionOptionsBindingPolicy;
 import at.aimon.sandbox.binding.SessionOwnerLookup;
 import at.aimon.sandbox.environment.SandboxExecutionEnvironmentProvider;
 import at.aimon.sandbox.profile.SandboxProfileRegistry;
@@ -17,12 +18,14 @@ import at.aimon.sandbox.provider.SandboxConnectionCache;
 import at.aimon.sandbox.provider.SandboxProvider;
 import at.aimon.sandbox.workspace.DefaultSandboxAdmission;
 import at.aimon.sandbox.workspace.InMemorySandboxWorkspaceStore;
+import at.aimon.sandbox.workspace.InMemorySessionOptionsStore;
 import at.aimon.sandbox.workspace.SandboxAdmission;
 import at.aimon.sandbox.workspace.SandboxEventListener;
 import at.aimon.sandbox.workspace.SandboxJanitor;
 import at.aimon.sandbox.workspace.SandboxScheduler;
 import at.aimon.sandbox.workspace.SandboxWorkspaceManager;
 import at.aimon.sandbox.workspace.SandboxWorkspaceStore;
+import at.aimon.sandbox.workspace.SessionOptionsStore;
 
 /**
  * The assembly: builds, validates and closes the application-scoped singletons of docs/design/workspace-sandbox.md
@@ -64,9 +67,11 @@ public final class WorkspaceSandbox implements AutoCloseable {
     private final SandboxScheduler janitorScheduler;
     private final boolean ownScheduler;
     private final SandboxWorkspaceStore store;
+    private final SessionOptionsStore sessionOptions;
     private final SandboxProfileRegistry profiles;
     private final SandboxConnectionCache connections;
     private final SandboxWorkspaceManager manager;
+    private final SandboxWorkspaces workspaces;
     private final SandboxJanitor janitor;
     private final SandboxExecutionEnvironmentProvider environmentProvider;
 
@@ -83,6 +88,9 @@ public final class WorkspaceSandbox implements AutoCloseable {
         this.janitorScheduler = ownScheduler ? SandboxScheduler.daemon("aimon-sandbox-janitor", 1) : builder.scheduler;
         try {
             this.store = builder.store != null ? builder.store : new InMemorySandboxWorkspaceStore();
+            this.sessionOptions = builder.sessionOptionsStore != null
+                    ? builder.sessionOptionsStore
+                    : new InMemorySessionOptionsStore();
             this.profiles = new SandboxProfileRegistry(settings.profiles(), settings.defaultProfile());
             final Clock clock = builder.clock;
             this.connections = new SandboxConnectionCache(provider, clock);
@@ -94,12 +102,16 @@ public final class WorkspaceSandbox implements AutoCloseable {
                             ? SandboxAdmission.UNLIMITED
                             : new DefaultSandboxAdmission(store, settings.maxRunningPerTenant());
             this.manager = SandboxWorkspaceManager.builder().settings(settings).profiles(profiles).provider(provider)
-                    .store(store).connections(connections).admission(admission).events(builder.eventListener)
-                    .callers(callers).clock(clock).scheduler(scheduler).build();
+                    .store(store).sessionOptions(sessionOptions).connections(connections).admission(admission)
+                    .events(builder.eventListener).callers(callers).sessionOwners(builder.sessionOwnerLookup)
+                    .clock(clock).scheduler(scheduler).build();
+            this.workspaces = new SandboxWorkspaces(manager);
             this.janitor = new SandboxJanitor(manager, janitorScheduler);
-            final SandboxBindingPolicy policy = builder.bindingPolicy != null
+            final SandboxBindingPolicy configured = builder.bindingPolicy != null
                     ? builder.bindingPolicy
                     : new DefaultSandboxBindingPolicy(callers, profiles, builder.sessionOwnerLookup);
+            final SandboxBindingPolicy policy = new SessionOptionsBindingPolicy(configured, callers, profiles,
+                    sessionOptions, settings.unattached());
             this.environmentProvider = SandboxExecutionEnvironmentProvider.builder().policy(policy).callers(callers)
                     .manager(manager).connections(connections).profiles(profiles).store(store).settings(settings)
                     .clock(clock).build();
@@ -125,6 +137,11 @@ public final class WorkspaceSandbox implements AutoCloseable {
     /** @return the manager ({@code close} and {@code reopen} for the application) */
     public SandboxWorkspaceManager manager() {
         return manager;
+    }
+
+    /** @return the owner-facing management of workspaces: create, attach sessions, close, reopen, purge */
+    public SandboxWorkspaces workspaces() {
+        return workspaces;
     }
 
     /** @return the janitor; call {@link SandboxJanitor#start()} to run it */
@@ -189,6 +206,7 @@ public final class WorkspaceSandbox implements AutoCloseable {
         private SandboxProvider provider;
         private boolean ownProvider;
         private SandboxWorkspaceStore store;
+        private SessionOptionsStore sessionOptionsStore;
         private SandboxTenantResolver tenantResolver;
         private SessionOwnerLookup sessionOwnerLookup;
         private SandboxAdmission admission;
@@ -227,6 +245,15 @@ public final class WorkspaceSandbox implements AutoCloseable {
             return this;
         }
 
+        /**
+         * Default: a new {@link InMemorySessionOptionsStore} — <b>single node only</b>, like the in-memory workspace
+         * store (docs/design/workspace-sandbox-management.md §12 Q4).
+         */
+        public Builder sessionOptionsStore(SessionOptionsStore sessionOptionsStore) {
+            this.sessionOptionsStore = sessionOptionsStore;
+            return this;
+        }
+
         /** Required with {@code require-principal}; default: everyone in one tenant. */
         public Builder tenantResolver(SandboxTenantResolver tenantResolver) {
             this.tenantResolver = tenantResolver;
@@ -250,7 +277,12 @@ public final class WorkspaceSandbox implements AutoCloseable {
             return this;
         }
 
-        /** Default: {@link DefaultSandboxBindingPolicy}. */
+        /**
+         * Default: {@link DefaultSandboxBindingPolicy}. Either way it is wrapped in a
+         * {@link SessionOptionsBindingPolicy}:
+         * session options and a definition's {@code sandbox.workspace} resolve first, and this policy binds what is
+         * left unattached under {@code per-session}.
+         */
         public Builder bindingPolicy(SandboxBindingPolicy bindingPolicy) {
             this.bindingPolicy = bindingPolicy;
             return this;

@@ -8,6 +8,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 
+import at.aimon.sandbox.SandboxSettings;
 import at.aimon.sandbox.provider.VolumeRef;
 
 /**
@@ -17,11 +18,21 @@ import at.aimon.sandbox.provider.VolumeRef;
  *
  * <p>
  * Immutable; {@code with*} and {@link #toBuilder()} return copies. {@link #version()} is assigned by the store.
+ *
+ * <p>
+ * A {@link WorkspaceOrigin#MANAGED} record also carries what {@code create} was asked for
+ * (docs/design/workspace-sandbox-management.md §4.1): a display {@link #name()}, the requested {@link #profile()} —
+ * kept even while no slot exists — and its own {@link #access()}. Records written before these fields existed read as
+ * {@code DERIVED} with none of them.
  */
 public final class SandboxWorkspace {
 
     private final SandboxWorkspaceId id;
     private final WorkspaceOwner owner;
+    private final WorkspaceOrigin origin;
+    private final String name;
+    private final String profile;
+    private final SandboxSettings.WorkspaceAccess access;
     private final WorkspaceState state;
     private final String incarnation;
     private final VolumeRef sharedVolume;
@@ -38,6 +49,10 @@ public final class SandboxWorkspace {
     private SandboxWorkspace(Builder builder) {
         this.id = Objects.requireNonNull(builder.id, "id must not be null");
         this.owner = Objects.requireNonNull(builder.owner, "owner must not be null");
+        this.origin = Objects.requireNonNull(builder.origin, "origin must not be null");
+        this.name = builder.name;
+        this.profile = builder.profile;
+        this.access = builder.access;
         this.state = Objects.requireNonNull(builder.state, "state must not be null");
         this.incarnation = Objects.requireNonNull(builder.incarnation, "incarnation must not be null");
         this.sharedVolume = builder.sharedVolume;
@@ -59,10 +74,10 @@ public final class SandboxWorkspace {
 
     /** @return a builder holding this workspace's values */
     public Builder toBuilder() {
-        return new Builder().id(id).owner(owner).state(state).incarnation(incarnation).sharedVolume(sharedVolume)
-                .stateSince(stateSince).closeCause(closeCause).retainVolumeUntil(retainVolumeUntil)
-                .retainedVolumes(retainedVolumes).slots(slots).quota(quota).version(version).createdAt(createdAt)
-                .lastActivityAt(lastActivityAt);
+        return new Builder().id(id).owner(owner).origin(origin).name(name).profile(profile).access(access).state(state)
+                .incarnation(incarnation).sharedVolume(sharedVolume).stateSince(stateSince).closeCause(closeCause)
+                .retainVolumeUntil(retainVolumeUntil).retainedVolumes(retainedVolumes).slots(slots).quota(quota)
+                .version(version).createdAt(createdAt).lastActivityAt(lastActivityAt);
     }
 
     /** @return the id */
@@ -73,6 +88,29 @@ public final class SandboxWorkspace {
     /** @return the owner, fixed at creation */
     public WorkspaceOwner owner() {
         return owner;
+    }
+
+    /** @return how the record came to exist ({@code DERIVED} unless {@code create} made it) */
+    public WorkspaceOrigin origin() {
+        return origin;
+    }
+
+    /** @return the display name {@code create} was given; never model-facing, not unique */
+    public Optional<String> name() {
+        return Optional.ofNullable(name);
+    }
+
+    /**
+     * @return the profile {@code create} asked for: the required profile of every provisioning of {@code primary} when
+     *         the binding names none
+     */
+    public Optional<String> profile() {
+        return Optional.ofNullable(profile);
+    }
+
+    /** @return this workspace's own access mode; empty means the deployment's {@code workspace-access} */
+    public Optional<SandboxSettings.WorkspaceAccess> access() {
+        return Optional.ofNullable(access);
     }
 
     /** @return the lifecycle state */
@@ -175,10 +213,11 @@ public final class SandboxWorkspace {
         if (!(o instanceof SandboxWorkspace that)) {
             return false;
         }
-        return version == that.version && id.equals(that.id) && owner.equals(that.owner) && state == that.state
-                && incarnation.equals(that.incarnation) && Objects.equals(sharedVolume, that.sharedVolume)
-                && Objects.equals(stateSince, that.stateSince) && closeCause == that.closeCause
-                && Objects.equals(retainVolumeUntil, that.retainVolumeUntil)
+        return version == that.version && id.equals(that.id) && owner.equals(that.owner) && origin == that.origin
+                && Objects.equals(name, that.name) && Objects.equals(profile, that.profile) && access == that.access
+                && state == that.state && incarnation.equals(that.incarnation)
+                && Objects.equals(sharedVolume, that.sharedVolume) && Objects.equals(stateSince, that.stateSince)
+                && closeCause == that.closeCause && Objects.equals(retainVolumeUntil, that.retainVolumeUntil)
                 && retainedVolumes.equals(that.retainedVolumes) && slots.equals(that.slots) && quota.equals(that.quota)
                 && createdAt.equals(that.createdAt) && lastActivityAt.equals(that.lastActivityAt);
     }
@@ -190,14 +229,18 @@ public final class SandboxWorkspace {
 
     @Override
     public String toString() {
-        return "SandboxWorkspace{" + id + ", owner=" + owner + ", state=" + state + ", incarnation=" + incarnation
-                + ", version=" + version + ", slots=" + slots.values() + '}';
+        return "SandboxWorkspace{" + id + ", owner=" + owner + ", origin=" + origin + ", state=" + state
+                + ", incarnation=" + incarnation + ", version=" + version + ", slots=" + slots.values() + '}';
     }
 
     /** Builder for {@link SandboxWorkspace}. */
     public static final class Builder {
         private SandboxWorkspaceId id;
         private WorkspaceOwner owner;
+        private WorkspaceOrigin origin = WorkspaceOrigin.DERIVED;
+        private String name;
+        private String profile;
+        private SandboxSettings.WorkspaceAccess access;
         private WorkspaceState state = WorkspaceState.OPEN;
         private String incarnation;
         private VolumeRef sharedVolume;
@@ -221,6 +264,26 @@ public final class SandboxWorkspace {
 
         public Builder owner(WorkspaceOwner owner) {
             this.owner = owner;
+            return this;
+        }
+
+        public Builder origin(WorkspaceOrigin origin) {
+            this.origin = origin;
+            return this;
+        }
+
+        public Builder name(String name) {
+            this.name = name;
+            return this;
+        }
+
+        public Builder profile(String profile) {
+            this.profile = profile;
+            return this;
+        }
+
+        public Builder access(SandboxSettings.WorkspaceAccess access) {
+            this.access = access;
             return this;
         }
 

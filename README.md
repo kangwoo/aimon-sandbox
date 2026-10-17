@@ -82,6 +82,40 @@ ExecutionEnvironmentSpec.shared(sandbox.environmentProvider());
   §12.1). A hook's command runs outside the model's shell session: it takes no shell lock, starts from the
   session's cwd and exports, and changes neither (aimon-core 0.3.2's `ExecutionOptions.isHook()`).
 
+## Managing workspaces
+
+Without anything else, a session's first command creates its own workspace (`ws:{sessionId}`) and provisions it.
+`WorkspaceSandbox.workspaces()` lets an application create a sandbox **before** any agent runs and put sessions into
+it ([`docs/design/workspace-sandbox-management.md`](docs/design/workspace-sandbox-management.md)):
+
+```java
+SandboxWorkspaces workspaces = sandbox.workspaces();
+WorkspaceView ws = workspaces.create(CreateWorkspace.named("ticket-4711"), alice);   // primary RUNNING on return
+workspaces.setSessionOptions(sessionId, SessionSandboxOptions.Update.attach(ws.id()), alice);
+// every turn of that session, and its forks, now runs in ws; the model hears once that it moved
+workspaces.close(ws.id(), alice);
+workspaces.purge(ws.id(), alice);                                                   // gone for good; id never reused
+```
+
+- **Ids are generated, never chosen** (`wsm:{uuid}`); the `name` is for people and never reaches the model. A
+  failed first provisioning keeps the workspace and throws `WorkspaceProvisioningException` with its id: retry with
+  `provision(id)` or `purge` it. One owner holds at most `max-managed-per-owner` (20) managed workspaces.
+- **Session options need a `SessionOwnerLookup`**: only a session's owner sets them, to a workspace that owner may
+  use. `clearSessionOptions` detaches a session but keeps a small record of where it last ran; when you delete the
+  session, call `deleteSessionOptions` (while your lookup still knows it), or that record stays.
+- **An agent default**: a definition's `attributes: { sandbox: { workspace: wsm:…, unattached: reject } }` binds every
+  session of that agent that is not attached elsewhere, and `reject` refuses unattached sessions a sandbox. The
+  `unattached` setting is the floor; a definition and a session's own option can only tighten it. Writing
+  `sandbox.workspace` is the right to redirect every session of that agent.
+- **Use and manage are separate rights.** Anyone the workspace's access admits may use it; only its owner closes,
+  reopens or purges it.
+- **A shared workspace is one trust domain.** Every session attached to it — and, with `access: tenant`, every
+  principal of the tenant — can read and change every file, including the other sessions' shell state under
+  `/workspace/.aimon-shell/`, which each command sources, and uses the same profile credentials. Sharing a managed
+  workspace across principals in a `principal` deployment therefore needs `allow-shared-workspaces: true`.
+- **Files do not persist yet.** A slot ends after its profile's `terminate-after`, and the next use starts from an
+  empty `/workspace` (with the usual "recreated" notice). Persistent files come with shared volumes (step 5).
+
 ## Build
 
 ```bash
