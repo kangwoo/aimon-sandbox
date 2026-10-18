@@ -15,8 +15,9 @@ import at.aimon.sandbox.workspace.WorkspaceOwner;
  * <ul>
  * <li>workspace: {@code ws:{sessionId}}, else {@code ws:{executionId}}; a request with neither is rejected — no id
  * is invented for it;</li>
- * <li>owner: the session's owner from {@link SessionOwnerLookup} for a main turn (the executing principal when no
- * lookup is configured — single tenant only), the executing principal for a routine;</li>
+ * <li>owner: the session's owner from {@link SessionOwnerLookup} for a main turn — the owner core recorded, the host's
+ * lookup, or both, as {@code WorkspaceSandbox} wires them; the executing principal when neither is configured (single
+ * tenant only) — and the executing principal for a routine;</li>
  * <li>slot: {@code sandbox.slot} else {@code primary}; required profile: {@code sandbox.profile}, which must be
  * configured;</li>
  * <li>shell key: {@code session:{sessionId}} or {@code exec:{executionId}}; root: {@code /workspace/repo}.</li>
@@ -72,7 +73,9 @@ public final class DefaultSandboxBindingPolicy implements SandboxBindingPolicy {
         if (sessionOwners == null) {
             return caller;
         }
-        return sessionOwners.ownerOf(session).map(callers::ownerOf).orElseThrow(
-                () -> new BindingRejectedException("the owner of session " + session.value() + " is not known"));
+        return sessionOwners.ownerOf(session).map(callers::ownerOf)
+                .orElseThrow(() -> new BindingRejectedException("the owner of session " + session.value()
+                        + " is not known: set SubmitRequest.owner(...) on the submit that creates the session, or "
+                        + "answer it from your SessionOwnerLookup"));
     }
 }

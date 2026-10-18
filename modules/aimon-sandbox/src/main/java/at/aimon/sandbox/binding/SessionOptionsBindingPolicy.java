@@ -1,7 +1,10 @@
 package at.aimon.sandbox.binding;
 
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.OptionalLong;
+import java.util.Set;
 
 import at.aimon.core.agent.ExecutionId;
 import at.aimon.core.agent.session.SessionId;
@@ -14,11 +17,14 @@ import at.aimon.sandbox.workspace.SessionSandboxOptions;
 import at.aimon.sandbox.workspace.WorkspaceOwner;
 
 /**
- * Resolves a root request through session options and the agent default before the configured policy
- * (docs/design/workspace-sandbox-management.md §6.3). {@code WorkspaceSandbox} wraps whatever policy the host
- * configured in it, so "only a policy makes bindings" still holds.
+ * Resolves a root request through its request attributes, session options and the agent default before the configured
+ * policy (docs/design/workspace-sandbox-management.md §6.3, docs/design/workspace-sandbox-core-033.md §5.1, §6.1).
+ * {@code WorkspaceSandbox} wraps whatever policy the host configured in it, so "only a policy makes bindings" still
+ * holds. The first row that applies wins:
  *
- * <ol>
+ * <ol start="0">
+ * <li>the request's {@code sandbox.workspace} ({@link SandboxRequestAttributes#WORKSPACE}) names one → that workspace,
+ * for this execution only, {@code session:{id}} or {@code exec:{id}};</li>
  * <li>the session's options attach it to a workspace → that workspace, {@code session:{id}};</li>
  * <li>the definition's {@code sandbox.workspace} names one → that workspace, {@code session:{id}} or
  * {@code exec:{id}};</li>
@@ -26,18 +32,26 @@ import at.aimon.sandbox.workspace.WorkspaceOwner;
  * by default); {@code reject} → no sandbox.</li>
  * </ol>
  *
- * Rows 1 and 2 bind as the caller, are {@code mustExist} — a purged id is "does not exist", never re-created — and
+ * Rows 0 to 2 bind as the caller, are {@code mustExist} — a purged id is "does not exist", never re-created — and
  * keep the meaning of {@code sandbox.slot} and {@code sandbox.profile}; the manager's use check at {@code connect}
- * decides whether the executing principal may enter. The effective rule is
- * {@code strictest(setting, sandbox.unattached, session option)}: each layer can only tighten the one above it.
+ * decides whether the executing principal may enter. A request attribute redirects only its own execution and writes
+ * no session option, so the use right is the whole right it needs. The effective rule is
+ * {@code strictest(setting, sandbox.unattached, session option, request sandbox.unattached)}: each layer can only
+ * tighten the one above it. A request key under {@code sandbox.} other than those two is refused.
  *
  * <p>
  * Every root request with a session reads the options store once. A failing store fails the bind rather than falling
- * back to {@code per-session}, which would put an attached session in a different workspace. A session that has an
- * options record and lands in another workspace than it last connected to carries a {@link WorkspaceSwitch}. Forks are
- * unchanged: they inherit their parent's binding.
+ * back to {@code per-session}, which would put an attached session in a different workspace — also when row 0
+ * applies, since the switch notice needs the record. A session that lands in another workspace than it last connected
+ * to carries a {@link WorkspaceSwitch}. Forks are unchanged: they inherit their parent's binding, row 0 included, and
+ * never reach this policy's {@code bind}.
  */
 public final class SessionOptionsBindingPolicy implements SandboxBindingPolicy {
+
+    /** The {@code sandbox.*} request keys a host may set; the definition keeps {@code slot} and {@code profile}. */
+    private static final Set<String> REQUEST_KEYS = Set.of(SlotChoice.WORKSPACE_ATTRIBUTE,
+            SlotChoice.UNATTACHED_ATTRIBUTE);
+    private static final String SANDBOX_PREFIX = "sandbox.";
 
     private final SandboxBindingPolicy delegate;
     private final CallerResolver callers;
@@ -71,32 +85,37 @@ public final class SessionOptionsBindingPolicy implements SandboxBindingPolicy {
      *            the definition's {@code sandbox.unattached}, or {@code null}
      * @param session
      *            the session's own rule, or {@code null}
-     * @return {@code strictest(floor, agent, session)}
+     * @param request
+     *            the request's {@code sandbox.unattached}, or {@code null}
+     * @return {@code strictest(floor, agent, session, request)}
      */
-    UnattachedRule effectiveRule(UnattachedRule agent, UnattachedRule session) {
+    UnattachedRule effectiveRule(UnattachedRule agent, UnattachedRule session, UnattachedRule request) {
         UnattachedRule rule = floor;
-        if (agent != null) {
-            rule = UnattachedRule.strictest(rule, agent);
-        }
-        if (session != null) {
-            rule = UnattachedRule.strictest(rule, session);
+        for (UnattachedRule layer : new UnattachedRule[]{agent, session, request}) {
+            if (layer != null) {
+                rule = UnattachedRule.strictest(rule, layer);
+            }
         }
         return rule;
     }
 
     @Override
     public SandboxBinding bind(BindingContext context) {
+        final Map<String, String> request = requestAttributes(context);
         final Optional<SessionId> session = context.sessionId();
         final Optional<SessionSandboxOptions> record = session.flatMap(this::read);
+        final Optional<SandboxWorkspaceId> requested = requestedWorkspace(request);
         final Optional<SandboxWorkspaceId> agentDefault = agentDefault(context);
         final SandboxBinding binding;
-        if (record.flatMap(SessionSandboxOptions::workspace).isPresent()) {
+        if (requested.isPresent()) {
+            binding = managed(context, requested.get());
+        } else if (record.flatMap(SessionSandboxOptions::workspace).isPresent()) {
             binding = managed(context, record.get().workspace().get());
         } else if (agentDefault.isPresent()) {
             binding = managed(context, agentDefault.get());
         } else {
             final UnattachedRule rule = effectiveRule(agentRule(context),
-                    record.flatMap(SessionSandboxOptions::unattached).orElse(null));
+                    record.flatMap(SessionSandboxOptions::unattached).orElse(null), requestRule(request));
             if (rule == UnattachedRule.REJECT) {
                 throw new BindingRejectedException(session.isPresent()
                         ? "this session is not attached to a sandbox workspace"
@@ -104,7 +123,7 @@ public final class SessionOptionsBindingPolicy implements SandboxBindingPolicy {
             }
             binding = delegate.bind(context);
         }
-        return record.map(r -> withSwitch(binding, r)).orElse(binding);
+        return session.map(id -> withSwitch(binding, id, record, requested.isPresent())).orElse(binding);
     }
 
     @Override
@@ -118,6 +137,42 @@ public final class SessionOptionsBindingPolicy implements SandboxBindingPolicy {
         } catch (RuntimeException e) {
             throw new SandboxUnavailableException(
                     "the session's sandbox options cannot be read right now: " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * The request's {@code sandbox.*} keys, refusing any this policy does not read: a placement input dropped silently
+     * would be the worse failure (core's reasoning for #252).
+     */
+    private static Map<String, String> requestAttributes(BindingContext context) {
+        final Map<String, String> request = context.requestAttributes();
+        for (String key : request.keySet()) {
+            if (key.startsWith(SANDBOX_PREFIX) && !REQUEST_KEYS.contains(key)) {
+                throw new BindingRejectedException(
+                        "request attribute environment." + key + " is not supported; a request may set only "
+                                + SandboxRequestAttributes.WORKSPACE + " and " + SandboxRequestAttributes.UNATTACHED);
+            }
+        }
+        return request;
+    }
+
+    private static Optional<SandboxWorkspaceId> requestedWorkspace(Map<String, String> request) {
+        final String value = request.get(SlotChoice.WORKSPACE_ATTRIBUTE);
+        return value == null
+                ? Optional.empty()
+                : Optional.of(ManagedIds.require(value, "the request's " + SandboxRequestAttributes.WORKSPACE));
+    }
+
+    private static UnattachedRule requestRule(Map<String, String> request) {
+        final String value = request.get(SlotChoice.UNATTACHED_ATTRIBUTE);
+        if (value == null) {
+            return null;
+        }
+        try {
+            return UnattachedRule.parse(value);
+        } catch (IllegalArgumentException e) {
+            throw new BindingRejectedException(
+                    "the request's " + SandboxRequestAttributes.UNATTACHED + ": " + e.getMessage());
         }
     }
 
@@ -145,7 +200,7 @@ public final class SessionOptionsBindingPolicy implements SandboxBindingPolicy {
         return context.agent().map(agent -> "agent definition '" + agent.getName() + "'").orElse("the definition");
     }
 
-    /** Rows 1–2: the named workspace as the caller, {@code mustExist}, the definition's slot and profile. */
+    /** Rows 0–2: the named workspace as the caller, {@code mustExist}, the definition's slot and profile. */
     private SandboxBinding managed(BindingContext context, SandboxWorkspaceId workspace) {
         final WorkspaceOwner caller = callers.callerOf(context.principal());
         final ShellKey shellKey;
@@ -167,20 +222,27 @@ public final class SessionOptionsBindingPolicy implements SandboxBindingPolicy {
     }
 
     /**
-     * §6.4: a session with an options record that lands somewhere else than it last connected carries a switch. A
-     * record that never attached the session ({@code lastWorkspaceId} and {@code workspace} both empty — it only set a
-     * rule) is recorded silently, whatever row bound it: the session ran where it runs now, under the delegate or the
-     * agent default, before the record existed.
+     * §6.4: a session that lands somewhere else than it last connected carries a switch. Without an options record
+     * only a request-attribute redirect does — otherwise the session never moved — and its notice uses the from-absent
+     * wording; the recorder then creates the record. A record that never attached the session
+     * ({@code lastWorkspaceId} and {@code workspace} both empty — it only set a rule) is recorded silently when
+     * rows 1–3 bound it: the session ran where it runs now, under the delegate or the agent default, before the record
+     * existed. Row 0 with no {@code lastWorkspaceId} is always announced (core-033 design §6.4).
      */
-    private static SandboxBinding withSwitch(SandboxBinding binding, SessionSandboxOptions record) {
+    private static SandboxBinding withSwitch(SandboxBinding binding, SessionId session,
+            Optional<SessionSandboxOptions> record, boolean requested) {
+        if (record.isEmpty() && !requested) {
+            return binding;
+        }
         final SandboxWorkspaceId to = binding.workspaceId();
-        final Optional<SandboxWorkspaceId> from = record.lastWorkspaceId();
+        final Optional<SandboxWorkspaceId> from = record.flatMap(SessionSandboxOptions::lastWorkspaceId);
         if (from.isPresent() && from.get().equals(to)) {
             return binding;
         }
-        final WorkspaceSwitch change = from.isEmpty() && record.workspace().isEmpty()
-                ? WorkspaceSwitch.silent(record.session(), to, record.version())
-                : WorkspaceSwitch.announced(record.session(), from.orElse(null), to, record.version());
+        final OptionalLong version = record.map(r -> OptionalLong.of(r.version())).orElse(OptionalLong.empty());
+        final WorkspaceSwitch change = !requested && from.isEmpty() && record.get().workspace().isEmpty()
+                ? WorkspaceSwitch.silent(session, to, version)
+                : WorkspaceSwitch.announced(session, from.orElse(null), to, version);
         return binding.toBuilder().workspaceSwitch(change).build();
     }
 }

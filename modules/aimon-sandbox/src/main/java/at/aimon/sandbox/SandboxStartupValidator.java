@@ -56,6 +56,7 @@ final class SandboxStartupValidator {
     static final class Wiring {
         private final ProviderCapabilities capabilities;
         private final boolean tenantResolverSupplied;
+        /** A host lookup, core's session store ({@code sessionRecords}), or both. */
         private final boolean sessionOwnerLookupSupplied;
 
         Wiring(ProviderCapabilities capabilities, boolean tenantResolverSupplied, boolean sessionOwnerLookupSupplied) {
@@ -99,7 +100,7 @@ final class SandboxStartupValidator {
             violations.add("require-principal needs a SandboxTenantResolver");
         }
         if (settings.requirePrincipal() && !wiring.sessionOwnerLookupSupplied) {
-            violations.add("require-principal needs a SessionOwnerLookup");
+            violations.add("require-principal needs a SessionOwnerLookup or sessionRecords(...)");
         }
         if (settings.maxRunningPerTenant() < 1 && settings.maxRunningPerTenant() != SandboxSettings.UNLIMITED) {
             violations.add("admission.max-running-per-tenant must be at least 1, or 'unlimited' set explicitly");

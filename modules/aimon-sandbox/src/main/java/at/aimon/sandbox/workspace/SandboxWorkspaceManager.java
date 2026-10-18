@@ -12,14 +12,18 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalLong;
+import java.util.concurrent.Executor;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Predicate;
+import java.util.function.Supplier;
 import java.util.function.UnaryOperator;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import at.aimon.core.agent.session.SessionId;
+import at.aimon.core.agent.session.store.SessionRecordStore;
 import at.aimon.core.base.Principal;
 import at.aimon.sandbox.SandboxConfigurationException;
 import at.aimon.sandbox.SandboxSettings;
@@ -103,8 +107,10 @@ public final class SandboxWorkspaceManager {
     private final SandboxEventListener events;
     private final CallerResolver callers;
     private final SessionOwnerLookup sessionOwners;
+    private final Supplier<? extends SessionRecordStore> sessionRecords;
     private final Clock clock;
     private final SandboxScheduler scheduler;
+    private final Executor background;
     private final SandboxSeeder seeder;
 
     private SandboxWorkspaceManager(Builder builder) {
@@ -118,8 +124,10 @@ public final class SandboxWorkspaceManager {
         this.events = Objects.requireNonNull(builder.events, "events must not be null");
         this.callers = Objects.requireNonNull(builder.callers, "callers must not be null");
         this.sessionOwners = builder.sessionOwners;
+        this.sessionRecords = builder.sessionRecords;
         this.clock = Objects.requireNonNull(builder.clock, "clock must not be null");
         this.scheduler = Objects.requireNonNull(builder.scheduler, "scheduler must not be null");
+        this.background = Objects.requireNonNull(builder.background, "background must not be null");
         this.seeder = new SandboxSeeder(settings.provisionTimeout(), provider.capabilities().controlPlaneEndpoints());
     }
 
@@ -250,6 +258,8 @@ public final class SandboxWorkspaceManager {
         private final List<String> notices = new ArrayList<>();
         private int conflicts;
         private boolean provisioned;
+        /** Whether this call reported that the slot's files are gone (an idle reopen, a re-creation, a loss). */
+        private boolean reset;
         private int provisionings;
         private Duration pollDelay = FIRST_POLL;
 
@@ -273,11 +283,19 @@ public final class SandboxWorkspaceManager {
         /** @return the connected slot, or {@code null} to go round again */
         private ConnectedSlot step() {
             SandboxWorkspace workspace = loadOrCreate(binding);
+            if (workspace.state() != WorkspaceState.OPEN
+                    && workspace.closeCause().orElse(null) == CloseCause.SESSION_DELETED) {
+                // Ahead of the use check: a re-created session with the same id and another owner must hear the same
+                // answer as its predecessor's owner would, never "not permitted" (core-033 design §6.3).
+                throw new SandboxUnavailableException(
+                        "this session's sandbox workspace is being removed; retry shortly");
+            }
             checkUse(workspace, binding.caller());
             if (workspace.state() == WorkspaceState.CLOSED
                     && workspace.closeCause().orElse(CloseCause.EXPLICIT) == CloseCause.IDLE) {
                 workspace = store.update(workspace.id(), workspace.version(), reopened(workspace, clock.instant()));
                 notices.add(RESET_NOTICE);
+                reset = true;
                 emit(SandboxEvent.Type.WORKSPACE_REOPENED, workspace, null, "reopened after an idle close");
             } else if (workspace.state() == WorkspaceState.CLOSING) {
                 throw new SandboxUnavailableException("the sandbox workspace is being closed; retry shortly");
@@ -330,6 +348,7 @@ public final class SandboxWorkspaceManager {
                 notices.add("the sandbox was recreated (generation " + next.generation() + "): files under "
                         + "/workspace and shell state (cwd, exported variables) from before are gone");
             }
+            reset |= slot != null && slot.state() == SlotState.TERMINATED;
             provisioned = true;
             // The stored slot, not the in-memory one: a store may round what it keeps (an Instant's precision).
             create(claimed, claimed.slot(binding.slot()).orElseThrow(), profile);
@@ -343,6 +362,7 @@ public final class SandboxWorkspaceManager {
             } catch (SandboxNotFoundException e) {
                 activity(workspace, slot, profile).markLost();
                 notices.add("the sandbox was lost and has been recreated; /workspace was reset");
+                reset = true;
                 return null;
             } catch (SandboxProviderException e) {
                 throw new SandboxUnavailableException("the sandbox cannot be reached: " + e.getMessage(), e);
@@ -355,7 +375,8 @@ public final class SandboxWorkspaceManager {
             if (provisioned && took.compareTo(SLOW_PROVISIONING) >= 0) {
                 notices.add("sandbox provisioned in " + took.toSeconds() + "s");
             }
-            return new ConnectedSlot(workspace, slot, profile, connection, notices, activity(workspace, slot, profile));
+            return new ConnectedSlot(workspace, slot, profile, connection, notices, activity(workspace, slot, profile),
+                    reset);
         }
 
         private void waitOrTakeOver(SandboxWorkspace workspace, SandboxSlot slot, SandboxProfile profile) {
@@ -1128,7 +1149,7 @@ public final class SandboxWorkspaceManager {
      * @param caller
      *            the principal asking
      * @throws at.aimon.sandbox.binding.BindingRejectedException
-     *             without a {@code SessionOwnerLookup}, for an unknown session, a caller that is not its owner, a
+     *             without an owner source, for an unknown session, a caller that is not its owner, a
      *             malformed id, or a workspace the session's owner may not use
      * @throws SandboxUnavailableException
      *             when the workspace does not exist, is closing, or was closed explicitly
@@ -1199,8 +1220,10 @@ public final class SandboxWorkspaceManager {
                 return;
             }
             final SessionSandboxOptions record = current.get();
-            // Where the session last ran: recorded, else the workspace it is being detached from — a turn of file
-            // tools only never recorded it, and the next turn must still hear that it moved (§6.4).
+            // Where the session last ran: recorded, else the workspace it is being detached from. Every tool result now
+            // delivers the switch notice (core-033 design §6.4), but its record write is asynchronous and loses its CAS
+            // to this clear when the two race: without the fallback the next turn would land elsewhere silently,
+            // although the model was last told it runs here.
             final Optional<SandboxWorkspaceId> last = record.lastWorkspaceId().or(record::workspace);
             try {
                 if (last.isEmpty()) {
@@ -1222,25 +1245,17 @@ public final class SandboxWorkspaceManager {
     }
 
     /**
-     * Deletes a session's options record outright, {@code lastWorkspaceId} included — what a host calls when it
-     * deletes the session (while its {@code SessionOwnerLookup} still knows it). The same rights as
-     * {@link #setSessionOptions}. Absent is success.
-     *
-     * <p>
-     * <b>Internal.</b> Public only for use across this library's packages: not supported API, and it may change in
-     * any release.
-     *
-     * @param session
-     *            the session
-     * @param caller
-     *            the principal asking
+     * Deletes a session's options record outright, {@code lastWorkspaceId} included: the administrator's cleanup for a
+     * session deleted outside core's router, which fires no {@code SessionLifecycleListener}. Such a session may be
+     * unknown to every owner source by now, and a single-tenant host has none at all — yet a request attribute can
+     * still leave a {@code lastWorkspaceId} record behind there — so the owner only names the event: unknown, the
+     * event names the record's {@code setBy}.
      */
-    public void deleteSessionOptions(SessionId session, Principal caller) {
-        deleteSessionOptions(session, Acting.as(callers.callerOf(Optional.ofNullable(caller))));
-    }
-
     private void deleteSessionOptions(SessionId session, Acting acting) {
-        final WorkspaceOwner sessionOwner = requireSessionOwner(session, acting);
+        Objects.requireNonNull(session, "session must not be null");
+        final Optional<WorkspaceOwner> knownOwner = sessionOwners == null
+                ? Optional.empty()
+                : sessionOwners.ownerOf(session).map(callers::ownerOf);
         for (int attempt = 0; attempt <= settings.casRetries(); attempt++) {
             final Optional<SessionSandboxOptions> current = sessionOptions.find(session);
             if (current.isEmpty()) {
@@ -1249,7 +1264,7 @@ public final class SandboxWorkspaceManager {
             try {
                 sessionOptions.delete(session, current.get().version());
                 emitSession(SandboxEvent.Type.SESSION_OPTIONS_CLEARED, session, current.get().workspace().orElse(null),
-                        sessionOwner, acting.actor(), "deleted");
+                        knownOwner.orElse(current.get().setBy()), acting.actor(), "deleted");
                 return;
             } catch (StaleVersionException e) {
                 log.debug("CAS conflict on the options of session {} (attempt {}); re-reading", session.value(),
@@ -1275,8 +1290,9 @@ public final class SandboxWorkspaceManager {
     }
 
     /**
-     * Records where a session last connected (§6.4), best effort: a lost CAS or a store error is logged, and the worst
-     * case is the switch notice repeating once.
+     * Records where a session last connected (§6.4) on the background executor, so that core's
+     * {@code drainNotices()}, which triggers it, never waits on the store (core-033 design §6.4). A refused submission
+     * is logged; the worst case is the switch notice repeating once.
      *
      * <p>
      * <b>Internal.</b> Public only for use across this library's packages: not supported API, and it may change in
@@ -1285,18 +1301,181 @@ public final class SandboxWorkspaceManager {
      * @param session
      *            the session
      * @param expectedVersion
-     *            the version the binding policy read
+     *            the version the binding policy read; empty when the session had no options record
      * @param workspace
      *            where it connected
+     * @param setBy
+     *            the executing caller, recorded on a record this creates
      */
-    public void recordLastWorkspace(SessionId session, long expectedVersion, SandboxWorkspaceId workspace) {
+    public void recordLastWorkspaceLater(SessionId session, OptionalLong expectedVersion, SandboxWorkspaceId workspace,
+            WorkspaceOwner setBy) {
+        runInBackground("recording the last workspace of session " + session.value(),
+                () -> recordLastWorkspace(session, expectedVersion, workspace, setBy));
+    }
+
+    /**
+     * Records where a session last connected (§6.4), best effort: a lost CAS or a store error is logged, and the worst
+     * case is the switch notice repeating once. With no {@code expectedVersion} the session had no record and one is
+     * created holding only {@code lastWorkspaceId} — unless core's session store is wired and no longer knows the
+     * session: a write queued behind a deletion must not bring the deleted session's state back.
+     *
+     * <p>
+     * A record created here grants nothing: {@code setBy} is the executing caller, who need not be the session's
+     * owner, and every right over the session is checked against the owner source. It has no {@code workspace}, so no
+     * listing shows it as an attachment.
+     */
+    void recordLastWorkspace(SessionId session, OptionalLong expectedVersion, SandboxWorkspaceId workspace,
+            WorkspaceOwner setBy) {
         try {
-            sessionOptions.find(session).filter(current -> current.version() == expectedVersion)
+            if (expectedVersion.isEmpty()) {
+                final Optional<SessionRecordStore> records = sessionRecords();
+                if (records.isPresent() && !records.get().exists(session)) {
+                    log.debug("Session {} no longer exists; its last workspace is not recorded", session.value());
+                    return;
+                }
+                sessionOptions.put(SessionSandboxOptions.builder().session(session).setBy(setBy)
+                        .lastWorkspaceId(workspace).updatedAt(clock.instant()).build(), OptionalLong.empty());
+                return;
+            }
+            final long expected = expectedVersion.getAsLong();
+            sessionOptions.find(session).filter(current -> current.version() == expected)
                     .ifPresent(current -> sessionOptions.put(current.toBuilder().lastWorkspaceId(workspace).build(),
-                            OptionalLong.of(expectedVersion)));
+                            OptionalLong.of(expected)));
         } catch (RuntimeException e) {
             log.debug("Recording the last workspace of session {} failed; the switch notice may repeat once: {}",
                     session.value(), e.getMessage());
+        }
+    }
+
+    // ---------------------------------------------------------------------------------------------------------------
+    // session deletion (kangwoo/aimon-core#253, docs/design/workspace-sandbox-core-033.md §6.3)
+    // ---------------------------------------------------------------------------------------------------------------
+
+    /**
+     * Drops what this module keeps for a deleted session. Called by the session cleanup on the deleting node, under
+     * the session's lease, so it does store reads and CAS writes only and no provider call:
+     *
+     * <ol>
+     * <li>the session's options record is deleted;</li>
+     * <li>its derived workspace {@code ws:{sessionId}} is marked {@link CloseCause#SESSION_DELETED} — OPEN becomes
+     * CLOSING, a CLOSING or CLOSED record keeps its state — so that from now on {@code connect} refuses it and a new
+     * session with the same id never reaches the deleted one's sandbox. A managed workspace the session was attached to
+     * is shared and has its own owner: it is not touched.</li>
+     * </ol>
+     *
+     * Terminating the sandboxes and deleting the record then run on the background executor
+     * ({@link #finishSessionDeletion}); the janitor finishes it if that never happens. Never throws: a store failure is
+     * logged, and the janitor's sweeps are behind every step.
+     *
+     * <p>
+     * <b>Internal.</b> Public only for use across this library's packages: not supported API, and it may change in
+     * any release.
+     *
+     * @param session
+     *            the deleted session
+     * @param owner
+     *            the owner core recorded for it, named on the options event
+     */
+    public void sessionDeleted(SessionId session, Optional<Principal> owner) {
+        deleteOptionsOfDeletedSession(session, owner);
+        final SandboxWorkspaceId derived = SandboxWorkspaceId.of("ws:" + session.value());
+        final Optional<SandboxWorkspace> marked;
+        try {
+            marked = mutate(derived, current -> {
+                if (current.origin() != WorkspaceOrigin.DERIVED) {
+                    return null;
+                }
+                if (current.closeCause().orElse(null) == CloseCause.SESSION_DELETED
+                        && current.state() != WorkspaceState.OPEN) {
+                    return current;
+                }
+                return switch (current.state()) {
+                    case OPEN -> current.toBuilder().state(WorkspaceState.CLOSING).stateSince(clock.instant())
+                            .closeCause(CloseCause.SESSION_DELETED).build();
+                    // An idle close in flight keeps passing its own guard (state and incarnation) and ends CLOSED with
+                    // this cause; an idle-closed record or a tombstone holds no sandbox and is only deleted.
+                    case CLOSING, CLOSED -> current.toBuilder().closeCause(CloseCause.SESSION_DELETED).build();
+                };
+            });
+        } catch (RuntimeException e) {
+            log.warn("Marking workspace {} of deleted session {} failed; it ends by the idle policy: {}", derived,
+                    session.value(), e.getMessage());
+            return;
+        }
+        marked.ifPresent(workspace -> runInBackground("removing workspace " + derived + " of a deleted session",
+                () -> finishSessionDeletion(derived, workspace.incarnation())));
+    }
+
+    private void deleteOptionsOfDeletedSession(SessionId session, Optional<Principal> owner) {
+        try {
+            for (int attempt = 0; attempt <= settings.casRetries(); attempt++) {
+                final Optional<SessionSandboxOptions> current = sessionOptions.find(session);
+                if (current.isEmpty()) {
+                    return;
+                }
+                try {
+                    sessionOptions.delete(session, current.get().version());
+                } catch (StaleVersionException e) {
+                    continue;
+                }
+                emitSession(SandboxEvent.Type.SESSION_OPTIONS_CLEARED, session, current.get().workspace().orElse(null),
+                        ownerForEvent(owner, current.get()), null, "session deleted");
+                return;
+            }
+            log.warn("The options of deleted session {} kept changing; the janitor's sweep deletes them",
+                    session.value());
+        } catch (RuntimeException e) {
+            log.warn("Deleting the options of deleted session {} failed; the janitor's sweep deletes them: {}",
+                    session.value(), e.getMessage());
+        }
+    }
+
+    private WorkspaceOwner ownerForEvent(Optional<Principal> owner, SessionSandboxOptions record) {
+        try {
+            return owner.map(callers::ownerOf).orElse(record.setBy());
+        } catch (RuntimeException e) {
+            return record.setBy();
+        }
+    }
+
+    /**
+     * The deferred part of a session deletion, also the janitor's: closes the workspace — terminate, destroy, wait up
+     * to {@code close-wait} — while it is still CLOSING with {@code incarnation}, then deletes the record once it is
+     * {@code CLOSED(SESSION_DELETED)} with that incarnation, without {@code closed-retention}. Never throws.
+     *
+     * @param id
+     *            the derived workspace
+     * @param incarnation
+     *            the incarnation that was marked; a record reopened since is left alone
+     */
+    void finishSessionDeletion(SandboxWorkspaceId id, String incarnation) {
+        final Predicate<SandboxWorkspace> marked = current -> current.incarnation().equals(incarnation)
+                && current.closeCause().orElse(null) == CloseCause.SESSION_DELETED;
+        try {
+            closeProcedure(id, CloseCause.SESSION_DELETED,
+                    current -> current.state() == WorkspaceState.CLOSING && marked.test(current));
+            final Optional<SandboxWorkspace> closed = store.find(id)
+                    .filter(current -> current.state() == WorkspaceState.CLOSED && marked.test(current));
+            if (closed.isPresent()) {
+                store.delete(id, closed.get().version());
+                emit(SandboxEvent.Type.WORKSPACE_PURGED, closed.get(), null, "session deleted");
+            }
+        } catch (StaleVersionException e) {
+            // The janitor and this task race for the delete; whoever lost has nothing left to do.
+            log.debug("Workspace {} of a deleted session changed while it was being removed: {}", id, e.getMessage());
+        } catch (RuntimeException e) {
+            log.warn("Removing workspace {} of a deleted session did not finish; the janitor does: {}", id,
+                    e.getMessage());
+        }
+    }
+
+    /** Hands one-shot work to the background executor; a refusal is logged, never thrown. */
+    private void runInBackground(String what, Runnable task) {
+        try {
+            background.execute(task);
+        } catch (RejectedExecutionException e) {
+            log.warn("The background executor refused {}; it is left to the janitor or a repeated notice: {}", what,
+                    e.getMessage());
         }
     }
 
@@ -1513,7 +1692,7 @@ public final class SandboxWorkspaceManager {
      * any release. Use {@code SandboxAdministration}.
      *
      * @param session
-     *            the session, known to the {@code SessionOwnerLookup}
+     *            the session; it need not exist any more
      * @param actor
      *            the operator, recorded
      */
@@ -1905,6 +2084,11 @@ public final class SandboxWorkspaceManager {
         return store;
     }
 
+    /** @return core's session store, when the assembly wires one */
+    Optional<SessionRecordStore> sessionRecords() {
+        return sessionRecords == null ? Optional.empty() : Optional.ofNullable(sessionRecords.get());
+    }
+
     SessionOptionsStore sessionOptionsStore() {
         return sessionOptions;
     }
@@ -2014,8 +2198,10 @@ public final class SandboxWorkspaceManager {
         private SandboxEventListener events = SandboxEventListener.NOOP;
         private CallerResolver callers;
         private SessionOwnerLookup sessionOwners;
+        private Supplier<? extends SessionRecordStore> sessionRecords;
         private Clock clock = Clock.systemUTC();
         private SandboxScheduler scheduler;
+        private Executor background = Runnable::run;
 
         private Builder() {
         }
@@ -2072,6 +2258,15 @@ public final class SandboxWorkspaceManager {
             return this;
         }
 
+        /**
+         * Default: none — the janitor does not sweep the options of deleted sessions, and a {@code lastWorkspaceId}
+         * record is created without checking that its session still exists.
+         */
+        public Builder sessionRecords(Supplier<? extends SessionRecordStore> sessionRecords) {
+            this.sessionRecords = sessionRecords;
+            return this;
+        }
+
         public Builder clock(Clock clock) {
             this.clock = clock;
             return this;
@@ -2079,6 +2274,15 @@ public final class SandboxWorkspaceManager {
 
         public Builder scheduler(SandboxScheduler scheduler) {
             this.scheduler = scheduler;
+            return this;
+        }
+
+        /**
+         * Runs one-shot work: the deferred part of a session deletion and the {@code lastWorkspaceId} write after a
+         * drain. Default: inline, on the calling thread — {@code WorkspaceSandbox} supplies a pool of its own.
+         */
+        public Builder background(Executor background) {
+            this.background = background;
             return this;
         }
 

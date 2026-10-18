@@ -7,9 +7,13 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -18,6 +22,7 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
 import at.aimon.core.agent.AgentRuntimeId;
+import at.aimon.core.agent.session.SessionDeletedEvent;
 import at.aimon.core.agent.session.SessionId;
 import at.aimon.core.base.Principal;
 import at.aimon.core.environment.EnvironmentRequest;
@@ -30,6 +35,7 @@ import at.aimon.sandbox.SandboxSettings;
 import at.aimon.sandbox.SandboxWorkspaces;
 import at.aimon.sandbox.WorkspaceSandbox;
 import at.aimon.sandbox.binding.ShellKey;
+import at.aimon.sandbox.binding.SlotChoice;
 import at.aimon.sandbox.profile.SandboxProfile;
 import at.aimon.sandbox.provider.Capability;
 import at.aimon.sandbox.provider.ProviderSandboxRef;
@@ -56,6 +62,8 @@ import at.aimon.sandbox.workspace.WorkspaceView;
  * list it (verdict {@code OK}), an admin terminate is followed by a new generation,
  * two sessions of one owner share its files but not their cwd, an explicit close answers "closed" and a purge "does
  * not exist" — and, as documented behaviour of a shared workspace (§6.5), one session can read another's shell state.
+ * The core 0.3.3 seams on the same server (docs/design/workspace-sandbox-core-033.md §9): a turn placed by request
+ * attribute, and a deleted session's {@code ws:{sid}} closed by the lifecycle listener.
  */
 @Tag("docker")
 class ManagedWorkspaceSandboxIT {
@@ -66,6 +74,7 @@ class ManagedWorkspaceSandboxIT {
     private final ManualClock clock = new ManualClock(Instant.now());
     private final ManualScheduler scheduler = new ManualScheduler(clock);
     private final SessionOptionsStore sessionOptions = new InMemorySessionOptionsStore();
+    private final ExecutorService background = Executors.newSingleThreadExecutor();
     private OpenSandboxProvider provider;
     private WorkspaceSandbox assembly;
 
@@ -80,7 +89,8 @@ class ManagedWorkspaceSandboxIT {
                 .closeWait(Duration.ofSeconds(20)).build();
         assembly = WorkspaceSandbox.builder().settings(settings).provider(provider)
                 .store(new InMemorySandboxWorkspaceStore()).sessionOptionsStore(sessionOptions)
-                .sessionOwnerLookup(session -> Optional.of(ALICE)).clock(clock).scheduler(scheduler).build();
+                .sessionOwnerLookup(session -> Optional.of(ALICE)).clock(clock).scheduler(scheduler)
+                .backgroundExecutor(background).build();
     }
 
     @AfterEach
@@ -89,6 +99,7 @@ class ManagedWorkspaceSandboxIT {
         assembly.store().scan(WorkspaceScan.builder().build()).forEach(record -> ids.add(record.id()));
         ids.forEach(id -> assembly.manager().close(id, ALICE));
         assembly.close();
+        background.shutdownNow();
         provider.close();
     }
 
@@ -205,9 +216,46 @@ class ManagedWorkspaceSandboxIT {
         SandboxAdministration.of(assembly).terminateSlot(id, "primary", Principal.user("operator"));
 
         assertThat(provider.status(first)).isEmpty();
-        final ShellCommandResult after = bash(mainTurn(session), "ls /workspace/repo");
+        final ExecutionEnvironment turn = mainTurn(session);
+        final ShellCommandResult after = bash(turn, "ls /workspace/repo");
         assertThat(after.stdout()).doesNotContain("f");
-        assertThat(after.notices()).anyMatch(notice -> notice.contains("recreated (generation 2)"));
+        assertThat(turn.drainNotices()).anyMatch(notice -> notice.contains("recreated (generation 2)"));
         assertThat(assembly.store().find(id).orElseThrow().slot("primary").orElseThrow().generation()).isEqualTo(2);
+    }
+
+    @Test
+    @DisplayName("core-033 #252: a turn placed by request attribute runs in the named workspace, announced once")
+    void aRequestAttributePlacesATurn() throws Exception {
+        final SandboxWorkspaceId id = workspaces().create(CreateWorkspace.named("placed"), ALICE).id();
+        final SessionId session = SessionId.generate();
+        final ExecutionEnvironment turn = ExecutionEnvironments.resolveOrUnavailable(assembly.environmentProvider(),
+                EnvironmentRequest.builder().agentRuntimeId(RUNTIME).sessionId(session).principal(ALICE)
+                        .requestAttributes(Map.of(SlotChoice.WORKSPACE_ATTRIBUTE, id.value())).build());
+
+        bash(turn, "echo placed > /workspace/repo/marker");
+
+        assertThat(turn.drainNotices()).singleElement().asString().contains("now runs in sandbox workspace " + id);
+        assertThat(bash(mainTurn(attached(id)), "cat /workspace/repo/marker").stdout()).isEqualTo("placed\n");
+        assertThat(assembly.store().find(SandboxWorkspaceId.of("ws:" + session.value()))).isEmpty();
+    }
+
+    @Test
+    @DisplayName("core-033 #253: the lifecycle listener closes a deleted session's ws:{sid} on the server")
+    void theLifecycleListenerClosesADeletedSessionsWorkspace() throws Exception {
+        final SessionId session = SessionId.generate();
+        bash(mainTurn(session), "true");
+        final SandboxWorkspaceId derived = SandboxWorkspaceId.of("ws:" + session.value());
+        final ProviderSandboxRef ref = assembly.store().find(derived).orElseThrow().slot("primary").orElseThrow()
+                .providerRef().orElseThrow();
+
+        assembly.sessionLifecycleListener().onDeleted(
+                SessionDeletedEvent.builder().sessionId(session).owner(ALICE).deletedAt(Instant.now()).build());
+        assertThat(assembly.store().find(derived).orElseThrow().state()).as("marked under the lease")
+                .isEqualTo(WorkspaceState.CLOSING);
+        background.shutdown();
+        assertThat(background.awaitTermination(60, TimeUnit.SECONDS)).isTrue();
+
+        assertThat(provider.status(ref)).isEmpty();
+        assertThat(assembly.store().find(derived)).isEmpty();
     }
 }

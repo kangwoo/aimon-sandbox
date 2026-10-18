@@ -304,10 +304,12 @@ class WorkspaceLifecycleIT {
         assertThat(harness.record(session).state()).isEqualTo(WorkspaceState.CLOSED);
         assertThat(harness.record(session).closeCause()).contains(CloseCause.IDLE);
 
-        final ShellCommandResult next = bash(harness.mainTurn(session, ALICE), "ls /workspace/repo; echo fresh");
+        final ExecutionEnvironment turn = harness.mainTurn(session, ALICE);
+        final ShellCommandResult next = bash(turn, "ls /workspace/repo; echo fresh");
 
         assertThat(next.stdout()).isEqualTo("fresh\n");
-        assertThat(next.notices()).contains(SandboxWorkspaceManager.RESET_NOTICE);
+        assertThat(turn.drainNotices()).contains(SandboxWorkspaceManager.RESET_NOTICE);
+        assertThat(next.notices()).isEmpty();
         assertThat(harness.record(session).state()).isEqualTo(WorkspaceState.OPEN);
         assertThat(harness.record(session).incarnation()).isNotEqualTo(incarnation);
     }
@@ -430,10 +432,11 @@ class WorkspaceLifecycleIT {
         harness.sandbox.janitor().runOnce();
         assertThat(harness.store.find(id(session))).isEmpty();
 
-        final ShellCommandResult next = bash(harness.mainTurn(session, ALICE), "echo new");
+        final ExecutionEnvironment turn = harness.mainTurn(session, ALICE);
+        final ShellCommandResult next = bash(turn, "echo new");
 
         assertThat(next.stdout()).isEqualTo("new\n");
-        assertThat(next.notices()).doesNotContain(SandboxWorkspaceManager.RESET_NOTICE);
+        assertThat(turn.drainNotices()).doesNotContain(SandboxWorkspaceManager.RESET_NOTICE);
         assertThat(harness.primary(session).generation()).isEqualTo(1);
     }
 

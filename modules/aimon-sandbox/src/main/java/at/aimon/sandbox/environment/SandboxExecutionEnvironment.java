@@ -2,6 +2,7 @@ package at.aimon.sandbox.environment;
 
 import java.time.Clock;
 import java.time.Duration;
+import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 
@@ -20,6 +21,12 @@ import at.aimon.sandbox.workspace.SandboxWorkspaceManager;
  * One execution's view of its sandbox (docs/design/workspace-sandbox.md §7): a {@link SandboxBinding} plus the file
  * system, shell, staging and content search that act on it. It holds no remote resource — core's contract makes an
  * environment a view with nothing to close — and provisions nothing until the first file or shell call.
+ *
+ * <p>
+ * Environment-level facts — a reset, a re-creation, a lost sandbox, a workspace switch — reach the model through
+ * {@link #drainNotices()}, which core calls after every model-facing tool call (kangwoo/aimon-core#254). Each instance
+ * has one queue of its own, never shared with a fork (core EE-107). Facts about one command — it was killed, its
+ * working directory was gone — stay on that command's result.
  */
 public final class SandboxExecutionEnvironment implements ExecutionEnvironment {
 
@@ -30,6 +37,7 @@ public final class SandboxExecutionEnvironment implements ExecutionEnvironment {
     private final SandboxStaging staging;
     private final SandboxContentSearch contentSearch;
     private final Duration backgroundCommandTimeout;
+    private final PendingNotices pending;
 
     SandboxExecutionEnvironment(SandboxBinding binding, EnvironmentDescriptor descriptor,
             Duration backgroundCommandTimeout, SandboxWorkspaceManager manager, SandboxConnectionCache connections,
@@ -39,9 +47,10 @@ public final class SandboxExecutionEnvironment implements ExecutionEnvironment {
         this.backgroundCommandTimeout = Objects.requireNonNull(backgroundCommandTimeout,
                 "backgroundCommandTimeout must not be null");
         // §6.4 of the management design: the switch is announced after the first successful connect, and recorded
-        // once the notice reached a command result.
-        final PendingNotices pending = new PendingNotices(binding.workspaceSwitch().orElse(null),
-                change -> manager.recordLastWorkspace(change.session(), change.optionsVersion(), change.to()));
+        // once core drained the notice. The write goes to the manager's background executor: a drain must not wait on
+        // the options store.
+        this.pending = new PendingNotices(binding.workspaceSwitch().orElse(null), change -> manager
+                .recordLastWorkspaceLater(change.session(), change.optionsVersion(), change.to(), binding.caller()));
         this.fileSystem = new SandboxFileSystem(binding, manager, pending);
         this.shell = new SandboxShell(binding, manager, connections, settings, pending, clock);
         this.staging = new SandboxStaging(binding, manager, connections, pending, fileSystem);
@@ -101,6 +110,15 @@ public final class SandboxExecutionEnvironment implements ExecutionEnvironment {
     @Override
     public Optional<Duration> backgroundCommandTimeout() {
         return Optional.of(backgroundCommandTimeout);
+    }
+
+    /**
+     * @return the notices queued since the last drain, oldest first — each returned once, and recorded as delivered
+     *         (a workspace switch among them is recorded as the session's {@code lastWorkspaceId})
+     */
+    @Override
+    public List<String> drainNotices() {
+        return pending.drain();
     }
 
     @Override

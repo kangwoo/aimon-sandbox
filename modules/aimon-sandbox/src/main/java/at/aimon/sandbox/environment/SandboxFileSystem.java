@@ -33,9 +33,9 @@ import at.aimon.sandbox.workspace.SandboxWorkspaceManager;
  * <li>{@link ProviderFileSystem} over the connection's files API.</li>
  * </ol>
  *
- * Every call connects first (lazy provisioning) and records activity; notices the connect produced are queued for the
- * next shell result. There is no other path restriction: nothing outside the sandbox is reachable, and inside it the
- * shell can do anything the file tools could.
+ * Every call connects first (lazy provisioning) and records activity; notices the connect produced are queued for
+ * core's {@code drainNotices()}, which puts them on this very tool's result. There is no other path restriction:
+ * nothing outside the sandbox is reachable, and inside it the shell can do anything the file tools could.
  */
 final class SandboxFileSystem implements VirtualFileSystem {
 
@@ -64,7 +64,7 @@ final class SandboxFileSystem implements VirtualFileSystem {
 
     private ConnectedSlot connect() {
         final ConnectedSlot slot = manager.connect(binding);
-        pending.addAll(slot.notices());
+        pending.addAll(slot);
         slot.activity().record(false);
         return slot;
     }

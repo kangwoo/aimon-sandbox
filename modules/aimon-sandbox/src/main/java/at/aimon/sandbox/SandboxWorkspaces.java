@@ -29,8 +29,11 @@ import at.aimon.sandbox.workspace.WorkspaceView;
  * <p>
  * <b>Rights.</b> Using a workspace — being attached to it, describing it, provisioning it — follows its access mode
  * (its own, else {@code workspace-access}). Managing it — close, reopen, purge — is its owner principal's alone.
- * Redirecting a session is a right over the session: only its owner sets its options, which needs a
- * {@code SessionOwnerLookup}.
+ * Redirecting a session is a right over the session: only its owner sets its options, which needs an owner source —
+ * the owner core recorded ({@code WorkspaceSandbox.Builder.sessionRecords}), a {@code SessionOwnerLookup}, or both. A
+ * single execution can also be placed by its host through request attributes
+ * ({@link at.aimon.sandbox.binding.SandboxRequestAttributes}), which need only the use right. A session's options are
+ * deleted with it by {@code WorkspaceSandbox.sessionLifecycleListener()}.
  *
  * <p>
  * <b>A shared workspace is one trust domain.</b> Every session attached to it can read and change every file —
@@ -125,7 +128,7 @@ public final class SandboxWorkspaces {
      * @param caller
      *            the session's owner
      * @throws at.aimon.sandbox.binding.BindingRejectedException
-     *             without a {@code SessionOwnerLookup}, for an unknown session, a caller that is not its owner, a
+     *             without an owner source, for an unknown session, a caller that is not its owner, a
      *             malformed id, or a workspace the session's owner may not use; nothing is written
      * @throws at.aimon.sandbox.workspace.SandboxUnavailableException
      *             when the workspace does not exist, is closing or was closed explicitly
@@ -136,8 +139,8 @@ public final class SandboxWorkspaces {
 
     /**
      * Clears a session's attachment and rule: its next turn falls back to the agent default or the unattached rule,
-     * and hears that it moved — so a small record of where it last ran is kept. To remove the record too, when the
-     * session itself is deleted, call {@link #deleteSessionOptions}.
+     * and hears that it moved — so a small record of where it last ran is kept. The record goes with the session,
+     * through {@code WorkspaceSandbox.sessionLifecycleListener()}.
      *
      * @param session
      *            the session
@@ -146,20 +149,6 @@ public final class SandboxWorkspaces {
      */
     public void clearSessionOptions(SessionId session, Principal caller) {
         manager.clearSessionOptions(session, caller);
-    }
-
-    /**
-     * Deletes a session's options record outright. Hosts call this when they delete the session — before their
-     * {@code SessionOwnerLookup} forgets it, since the same right applies — or the record stays until its workspace is
-     * purged, and a record of where the session last ran stays for good.
-     *
-     * @param session
-     *            the session
-     * @param caller
-     *            the session's owner
-     */
-    public void deleteSessionOptions(SessionId session, Principal caller) {
-        manager.deleteSessionOptions(session, caller);
     }
 
     /**

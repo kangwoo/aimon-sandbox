@@ -191,7 +191,9 @@ class ActivityHeartbeatIT {
 
         assertThat(next.stdout()).isEqualTo("again\n");
         assertThat(harness.primary(session).generation()).isEqualTo(2);
-        assertThat(next.notices()).anyMatch(notice -> notice.contains("recreated (generation 2)"));
+        assertThat(env.drainNotices()).as("delivered by core's drain, not on the command (core-033 §6.5)")
+                .anyMatch(notice -> notice.contains("recreated (generation 2)"));
+        assertThat(next.notices()).isEmpty();
     }
 
     @Test

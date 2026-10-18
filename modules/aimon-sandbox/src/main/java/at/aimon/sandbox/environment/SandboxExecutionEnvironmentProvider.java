@@ -119,6 +119,11 @@ public final class SandboxExecutionEnvironmentProvider implements ExecutionEnvir
                 .build();
     }
 
+    /**
+     * A fork never gets a {@link BindingContext}, so it cannot read request attributes (kangwoo/aimon-core#252) — core
+     * never forwards them to a fork anyway, and a hand-built fork request carrying some still binds to its parent's
+     * workspace. Its environment gets a notice queue of its own, never the parent's (core EE-107).
+     */
     private SandboxBinding bindFork(EnvironmentRequest request, ForkDefinition fork) {
         final ExecutionEnvironment parent = request.parent().orElseThrow(() -> new BindingRejectedException(
                 "this fork has no parent environment, so it cannot share a sandbox workspace (EE-30)"));

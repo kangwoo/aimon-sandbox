@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.catchThrowable;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.function.Function;
 import java.util.stream.Stream;
@@ -13,11 +14,14 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
+import at.aimon.core.agent.ExecutionId;
 import at.aimon.core.agent.session.SessionId;
 import at.aimon.core.base.Principal;
 import at.aimon.core.environment.exception.ExecutionEnvironmentUnavailableException;
 import at.aimon.sandbox.SandboxSettings.WorkspaceAccess;
 import at.aimon.sandbox.binding.SandboxTenantResolver;
+import at.aimon.sandbox.binding.SlotChoice;
+import at.aimon.sandbox.testkit.FaultInjectingSandboxProvider;
 import at.aimon.sandbox.workspace.CreateWorkspace;
 import at.aimon.sandbox.workspace.SandboxWorkspaceId;
 import at.aimon.sandbox.workspace.SessionSandboxOptions;
@@ -26,10 +30,10 @@ import at.aimon.sandbox.workspace.WorkspaceState;
 
 /**
  * The rights matrix of management design §9.1: {setSessionOptions, clearSessionOptions, sessionOptions, describe,
- * provision, connect, close, reopen, purge} × {owner, tenant-mate, other tenant, anonymous} × deployment {principal,
- * tenant} × record
- * access {absent, principal, tenant}. The expectations are the rules of §6.2 and §6.5 restated, not read back from the
- * code: use follows the effective access, manage and the right over a session are the owner principal's.
+ * provision, connect, a turn and a routine placed by request attribute (core-033 §6.1), close, reopen, purge} ×
+ * {owner, tenant-mate, other tenant, anonymous} × deployment {principal, tenant} × record access {absent, principal,
+ * tenant}. The expectations are the rules of §6.2 and §6.5 restated, not read back from the code: use follows the
+ * effective access, manage and the right over a session are the owner principal's.
  */
 class ManagedRightsMatrixTest {
 
@@ -50,7 +54,12 @@ class ManagedRightsMatrixTest {
     }
 
     private enum Operation {
-        SET_SESSION_OPTIONS, CLEAR_SESSION_OPTIONS, SESSION_OPTIONS, DESCRIBE, PROVISION, CONNECT, CLOSE, REOPEN, PURGE
+        // the right over a session
+        SET_SESSION_OPTIONS, CLEAR_SESSION_OPTIONS, SESSION_OPTIONS,
+        // use: directly, and placed by request attribute (core-033 §6.1)
+        DESCRIBE, PROVISION, CONNECT, REQUESTED_TURN, REQUESTED_ROUTINE,
+        // manage
+        CLOSE, REOPEN, PURGE
     }
 
     static Stream<Arguments> deploymentsAndAccess() {
@@ -108,6 +117,10 @@ class ManagedRightsMatrixTest {
             case DESCRIBE :
             case PROVISION :
             case CONNECT :
+                // A request attribute redirects only its own execution: the use right is the whole right (core-033
+                // §6.1).
+            case REQUESTED_TURN :
+            case REQUESTED_ROUTINE :
                 final boolean sameTenant = caller == Caller.OWNER || caller == Caller.TENANT_MATE;
                 return sameTenant && (caller == Caller.OWNER || access.orElse(deployment) == WorkspaceAccess.TENANT);
             case SET_SESSION_OPTIONS :
@@ -135,6 +148,20 @@ class ManagedRightsMatrixTest {
             if (refused != null) {
                 assertThat(refused).isInstanceOf(ExecutionEnvironmentUnavailableException.class)
                         .hasMessageContaining("not permitted");
+            }
+            return refused == null;
+        }
+        if (operation == Operation.REQUESTED_TURN || operation == Operation.REQUESTED_ROUTINE) {
+            final Map<String, String> request = Map.of(SlotChoice.WORKSPACE_ATTRIBUTE, id.value());
+            final int created = harness.faults.calls(FaultInjectingSandboxProvider.Operation.CREATE);
+            final Throwable refused = catchThrowable(() -> SandboxHarness.bash(operation == Operation.REQUESTED_TURN
+                    ? harness.mainTurn(SessionId.generate(), caller, request)
+                    : harness.routine(ExecutionId.generate(), caller, request), "true"));
+            if (refused != null) {
+                assertThat(refused).isInstanceOf(ExecutionEnvironmentUnavailableException.class)
+                        .hasMessageContaining("not permitted");
+                assertThat(harness.faults.calls(FaultInjectingSandboxProvider.Operation.CREATE))
+                        .as("a refused redirect provisions nothing").isEqualTo(created);
             }
             return refused == null;
         }

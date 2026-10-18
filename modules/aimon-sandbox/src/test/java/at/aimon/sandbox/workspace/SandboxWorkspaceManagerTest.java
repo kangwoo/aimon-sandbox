@@ -239,9 +239,10 @@ class SandboxWorkspaceManagerTest {
             }
         }).build();
 
-        final ShellCommandResult result = bash(harness.mainTurn(SessionId.generate(), ALICE), "true");
+        final ExecutionEnvironment turn = harness.mainTurn(SessionId.generate(), ALICE);
+        bash(turn, "true");
 
-        assertThat(result.notices()).contains("sandbox provisioned in 7s");
+        assertThat(turn.drainNotices()).contains("sandbox provisioned in 7s");
     }
 
     @Test

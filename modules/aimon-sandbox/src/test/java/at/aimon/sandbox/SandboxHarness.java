@@ -8,12 +8,15 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.Executor;
 import java.util.function.BiFunction;
 import java.util.function.UnaryOperator;
 
 import at.aimon.core.agent.AgentRuntimeId;
 import at.aimon.core.agent.ExecutionId;
+import at.aimon.core.agent.session.SessionDeletedEvent;
 import at.aimon.core.agent.session.SessionId;
+import at.aimon.core.agent.session.store.SessionRecordStore;
 import at.aimon.core.base.Principal;
 import at.aimon.core.environment.EnvironmentRequest;
 import at.aimon.core.environment.ExecutionEnvironment;
@@ -57,6 +60,8 @@ public final class SandboxHarness implements AutoCloseable {
     public final SandboxWorkspaceStore store;
     public final SessionOptionsStore sessionOptions;
     public final List<SandboxEvent> events = new ArrayList<>();
+    /** Core's session store, when the test wired {@code sessionRecords}. */
+    public final SessionRecordStore sessionRecords;
     public final WorkspaceSandbox sandbox;
 
     private SandboxHarness(Builder builder) {
@@ -70,7 +75,7 @@ public final class SandboxHarness implements AutoCloseable {
                 .settings(builder.profiles.toArray(SandboxProfile[]::new)).closeWait(Duration.ofSeconds(2))).build();
         final WorkspaceSandbox.Builder assembly = WorkspaceSandbox.builder().settings(settings).provider(faults)
                 .store(store).sessionOptionsStore(sessionOptions).clock(clock).scheduler(scheduler)
-                .eventListener(event -> {
+                .backgroundExecutor(builder.background).eventListener(event -> {
                     events.add(event);
                     builder.listener.onEvent(event);
                 });
@@ -82,6 +87,10 @@ public final class SandboxHarness implements AutoCloseable {
         }
         if (builder.sessionOwnerLookup != null) {
             assembly.sessionOwnerLookup(builder.sessionOwnerLookup);
+        }
+        this.sessionRecords = builder.sessionRecords;
+        if (sessionRecords != null) {
+            assembly.sessionRecords(sessionRecords);
         }
         this.sandbox = assembly.build();
     }
@@ -107,6 +116,26 @@ public final class SandboxHarness implements AutoCloseable {
     public ExecutionEnvironment routine(ExecutionId execution, Principal principal) {
         return resolve(EnvironmentRequest.builder().agentRuntimeId(RUNTIME).executionId(execution).principal(principal)
                 .build());
+    }
+
+    /** A main turn with request attributes, as core forwards them: {@code environment.} already stripped. */
+    public ExecutionEnvironment mainTurn(SessionId session, Principal principal,
+            Map<String, String> requestAttributes) {
+        return resolve(EnvironmentRequest.builder().agentRuntimeId(RUNTIME).sessionId(session).principal(principal)
+                .requestAttributes(requestAttributes).build());
+    }
+
+    /** A routine run with request attributes, as core forwards a {@code RoutineExecutionAttributes} answer. */
+    public ExecutionEnvironment routine(ExecutionId execution, Principal principal,
+            Map<String, String> requestAttributes) {
+        return resolve(EnvironmentRequest.builder().agentRuntimeId(RUNTIME).executionId(execution).principal(principal)
+                .requestAttributes(requestAttributes).build());
+    }
+
+    /** What core's router tells the registered listener once it deleted a session's record. */
+    public void sessionDeleted(SessionId session, Principal owner) {
+        sandbox.sessionLifecycleListener().onDeleted(
+                SessionDeletedEvent.builder().sessionId(session).owner(owner).deletedAt(clock.instant()).build());
     }
 
     public ExecutionEnvironment fork(ExecutionEnvironment parent, ExecutionId execution, Principal principal,
@@ -165,6 +194,20 @@ public final class SandboxHarness implements AutoCloseable {
         };
         private LocalProcessSandboxProvider local;
         private at.aimon.sandbox.binding.SandboxBindingPolicy bindingPolicy;
+        private SessionRecordStore sessionRecords;
+        private Executor background = Runnable::run;
+
+        /** Core's session store as the owner source; see {@code WorkspaceSandbox.Builder.sessionRecords}. */
+        public Builder sessionRecords(SessionRecordStore sessionRecords) {
+            this.sessionRecords = sessionRecords;
+            return this;
+        }
+
+        /** Default: inline, so a drain's record write has happened when the drain returns. */
+        public Builder background(Executor background) {
+            this.background = background;
+            return this;
+        }
 
         public Builder bindingPolicy(at.aimon.sandbox.binding.SandboxBindingPolicy bindingPolicy) {
             this.bindingPolicy = bindingPolicy;

@@ -88,6 +88,15 @@ public final class InMemorySessionOptionsStore implements SessionOptionsStore {
     }
 
     @Override
+    public Page<SessionSandboxOptions, SessionId> sessions(Optional<SessionId> after, int limit) {
+        requirePositive(limit);
+        final List<SessionSandboxOptions> matching = records.values().stream()
+                .filter(record -> after.map(a -> record.session().value().compareTo(a.value()) > 0).orElse(true))
+                .sorted(Comparator.comparing(record -> record.session().value())).limit(limit + 1L).toList();
+        return page(matching, limit, SessionSandboxOptions::session);
+    }
+
+    @Override
     public int deleteByWorkspace(SandboxWorkspaceId id) {
         Objects.requireNonNull(id, "id must not be null");
         int changed = 0;

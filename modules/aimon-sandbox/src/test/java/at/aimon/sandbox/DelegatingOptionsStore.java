@@ -45,6 +45,11 @@ public class DelegatingOptionsStore implements SessionOptionsStore {
     }
 
     @Override
+    public Page<SessionSandboxOptions, SessionId> sessions(Optional<SessionId> after, int limit) {
+        return delegate.sessions(after, limit);
+    }
+
+    @Override
     public int deleteByWorkspace(SandboxWorkspaceId id) {
         return delegate.deleteByWorkspace(id);
     }

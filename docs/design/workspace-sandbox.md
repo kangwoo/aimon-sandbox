@@ -563,7 +563,11 @@ SDK 의 `SandboxPool`(warm pool)은 SPI 에 올리지 않는다. 풀은 `create`
 [실행 환경 설계](https://github.com/kangwoo/aimon-core/blob/main/docs/design/tool/execution-environment.md)
 가 정본이고, **이미 구현되었다**(aimon-core PR #195, #196). 이 모듈의 기준은 그 뒤의 PR #204–#208 까지다 — 훅의 실행
 환경, 셸 취소와 `KillShell`, 백그라운드 상한, 런타임 바인딩, 격리 경계, 훅의 fail-closed(aimon-core `0.3.1-SNAPSHOT`
-@ `61604b4`). 그 위에 PR #211 의 훅 표시(`ExecutionOptions.isHook()`, 코어 0.3.2 — §9, §12.1)를 쓴다. 구현이 설계에서 벗어난 점은 그 저장소의
+@ `61604b4`). 그 위에 PR #211 의 훅 표시(`ExecutionOptions.isHook()`, 코어 0.3.2 — §9, §12.1)를 쓴다. 코어 0.3.3 의 세 이음매도 쓴다 —
+요청 속성 `EnvironmentRequest.requestAttributes()`(kangwoo/aimon-core#252, PR #257 — §8.1), 실행 환경 notice
+`ExecutionEnvironment.drainNotices()`(#254, PR #258 — 아래 표), 세션 소유자 `SessionRecordView.getOwner()` 와 삭제 이벤트
+`SessionLifecycleListener.onDeleted`(#253, PR #259 — §8.3, §10.5). 이행 설계는
+[`workspace-sandbox-core-033.md`](workspace-sandbox-core-033.md) 다. 구현이 설계에서 벗어난 점은 그 저장소의
 `execution-environment-implementation.md` §10, 남은 항목은 `docs/backlog/execution-environment-open-items.md`
 (EE-*)에 있다. 이 모듈이 쓰는 코어 기능은 모두 들어가 있다 — 경로 규칙 래퍼의 공개 팩토리
 `VirtualFileSystems.withPathRules`(§11.1), notice 를 싣는 백그라운드 `Bash`, 포크 요청의 `EnvironmentRequest.fork()`
@@ -592,7 +596,8 @@ SDK 의 `SandboxPool`(warm pool)은 SPI 에 올리지 않는다. 풀은 `create`
 | `stage(resource)` | `/workspace/.aimon-staged/{name}/{contentKey}/` 로 materialize. 샌드박스 안의 `.staged` 마커가 있고 **사본의 내용 해시가 `contentKey` 와 맞을 때만** 생략한다. 스테이징 영역은 **파일 도구에 읽기 전용**이다(코어 §4.4, 이 문서 §11.1) |
 | `isolate(branchKey)` | `git worktree add /workspace/.worktrees/{branchKey}` 후 `root` 만 바꾼 환경(§11.2). `root` 가 git 저장소가 아니면(seed 없는 프로파일) 비어 있음을 돌려주고, 코어는 그 워크플로 단계를 거부한다(C30) |
 | `fork()` 가 있는 요청(포크) | 부모와 같은 워크스페이스, shellKey 는 `exec:{executionId}`. 슬롯은 기본적으로 부모와 같고, 바인딩 정책이 `ForkDefinition` 의 속성을 보고 바꿀 수 있다(§8.2). 부모 환경이 없거나, 샌드박스 환경이 아니거나, 사용 불가면 포크도 사용 불가 |
-| `ShellCommandResult.notices()` | 셸 상태 소실, generation 변경, 샌드박스 소실 후 재생성, 앞 노드가 남긴 명령의 정리를 알린다 |
+| `drainNotices()` | 실행 환경 수준의 사실 — idle 뒤의 초기화, 샌드박스 재생성 · 소실, 느린 프로비저닝, 워크스페이스 전환, 이 실행이 마지막으로 쓴 뒤 다른 실행(포크 등)이 만든 새 generation — 을 환경 인스턴스마다 하나인 큐에 쌓아 둔다. 코어가 모델에게 가는 모든 도구 호출 뒤에(PostTool 훅 뒤) 꺼내 그 결과 머리에 `[environment] ` 줄로 한 번 싣는다 — `Read` 만 쓴 턴도 듣는다. 꺼낸 것은 전달된 것으로 친다. 큐는 포크와 나누지 않는다(코어 EE-107) |
+| `ShellCommandResult.notices()` | 그 명령에 대한 사실만 — 명령이 죽어 cd/export 가 반영되지 않았다, 저장한 작업 디렉터리가 없어 다른 곳에서 돌았다. 결과를 담은 예외(`ShellExecutionException` · `ShellTimeoutException` · `ShellCancelledException`)와 `BashOutput` 이 읽는 백그라운드 명령의 결과도 같다. `connect` 실패는 그 사실을 `SandboxUnavailableException` 메시지에 붙인다 — 그 오류가 곧 도구 결과다 |
 | 취소 — `ShellFeature.CANCELLATION` · `ExecutionOptions.getCancellation()` | `SandboxShell` 이 선언한다. 포그라운드와 백그라운드를 가리지 않는다. 신호가 걸리면 `RunningCommand.kill()` 로 그 exec 의 프로세스 그룹을 끝내고, `execute` 는 그때까지의 출력을 실은 `ShellCancelledException` 을 던진다. 걸린 쪽 스레드는 종료 요청을 보내고 돌아온다. 이미 걸린 신호면 명령을 띄우지 않고 프로비저닝도 하지 않는다. 닿는 범위는 프로세스 그룹까지다(§9). 그래서 코어의 `KillShell` 이 샌드박스의 백그라운드 명령을 끝낸다 |
 | `backgroundCommandTimeout()` | 선언한 프로파일의 `backgroundCommandTimeout` 을 돌려준다. 항상 값이 있고, 기본은 24시간이다(§5.3) |
 | `bindRuntime(id)` | 재정의하지 않는다 — 코어의 기본값 `RuntimeBinding.NONE` 을 쓴다. 이 제공자는 런타임 단위로 쥐는 것이 없다. 워크스페이스는 세션·실행 id 로, 연결은 샌드박스로, 셸 락은 샌드박스와 shellKey 로 잡힌다(§3.2). 그래서 핸들을 닫아도 도는 명령이 멈추지 않고, 같은 id 의 다른 바인딩이 쓰는 것을 놓지 않으며, 바인딩하지 않은 id 의 `resolve` 도 답한다. 나중에 런타임 id 로 무언가를 쥐게 되면 그때 `bindRuntime` 을 구현하고, 그 `close()` 는 도는 명령을 건드리지 않는다. 닫는 순서: 코어 스택(또는 런타임)을 먼저, `WorkspaceSandbox` 를 나중에 닫는다 — 스택 종료가 도는 명령에 거는 취소는 이 어셈블리가 쥔 연결로 나간다 |
@@ -651,10 +656,18 @@ public interface SandboxBindingPolicy {
 정의의 속성은 코어가 정의 파일의 `attributes:` 블록을 점 표기 키로 평탄화한 것이다(`sandbox.slot`,
 `sandbox.profile`, `sandbox.workspace`, `sandbox.unattached`). `definitionAttributes()` 는 포크면 서브에이전트의, 아니면 에이전트의 속성을 준다.
 
-**설정된 정책은 `SessionOptionsBindingPolicy` 로 감싼다**([관리 설계](workspace-sandbox-management.md) §6.3). 루트 요청은 ① 세션 옵션이 붙인 워크스페이스,
+**요청 속성**(`BindingContext.requestAttributes()`, 코어 0.3.3 · kangwoo/aimon-core#252)은 호스트가 실행 하나에 붙이는 배치
+입력이다. 메인 턴은 `SubmitOptions` 의 실행 속성, 루틴은 호스트의 `RoutineExecutionAttributes` 에서 `environment.` 로 시작하는
+키만 접두사를 떼어 온다(값은 String). 포크에는 오지 않는다. 이 모듈이 읽는 키는 `sandbox.workspace` 와 `sandbox.unattached`
+둘이고(`SandboxRequestAttributes`), 그 밖의 `sandbox.*` 키는 거부한다 — `sandbox.slot` · `sandbox.profile` 은 정의 작성자의 몫이다.
+호스트가 주는 값이므로 모델 출력으로 채우지 않는다([코어 0.3.3 이행 설계](workspace-sandbox-core-033.md) §6.1).
+
+**설정된 정책은 `SessionOptionsBindingPolicy` 로 감싼다**([관리 설계](workspace-sandbox-management.md) §6.3). 루트 요청은 ⓪ 요청 속성
+`sandbox.workspace`(그 실행에만, [코어 0.3.3 이행 설계](workspace-sandbox-core-033.md) §5.1), ① 세션 옵션이 붙인 워크스페이스,
 ② 정의의 `sandbox.workspace`(관리형 `wsm:` id 만), ③ 그 밖에는 실효 unattached 규칙 —
-`strictest(설정 unattached, sandbox.unattached, 세션 옵션)` — 이 `per-session` 이면 감싼 정책(기본 정책이면 아래 §8.2)의
-바인딩, `reject` 면 사용 불가 순으로 정한다. ①②의 바인딩은 호출자를 owner 로 쓰고 `mustExist` 다(§10.1 1단계). 각 층은 위의
+`strictest(설정 unattached, sandbox.unattached, 세션 옵션, 요청 sandbox.unattached)` — 이 `per-session` 이면 감싼 정책(기본 정책이면 아래 §8.2)의
+바인딩, `reject` 면 사용 불가 순으로 정한다. ⓪①②의 바인딩은 호출자를 owner 로 쓰고 `mustExist` 다(§10.1 1단계). ⓪은 세션
+옵션을 쓰지 않고 그 실행만 옮기므로 실행하는 주체의 사용 권한만 본다. 각 층은 위의
 층을 조이기만 한다. 그래서 "바인딩을 만드는 것은 정책뿐" 은 그대로다. 세션이 있는 루트 요청은 워크스페이스 저장소 외에
 옵션 저장소를 한 번 읽고, 그 읽기가 실패하면 `per-session` 으로 넘어가지 않고 사용 불가로 답한다.
 
@@ -681,7 +694,7 @@ Task 도구(전경·백그라운드), `Skill` 도구와 슬래시 명령의 FORK
 | 항목 | 규칙 |
 |------|-----|
 | workspaceId | 세션에서 결정론적으로 — `ws:{sessionId}`. 세션이 없고 실행 id 가 있는 실행(스케줄 루틴)은 `ws:{executionId}`. **둘 다 없는 요청은 사용 불가**다. 워크스페이스를 지어낼 근거가 없는 요청에 공유될 id 를 만들지 않는다 |
-| owner | `(tenantId, principal)` — principal 은 `TYPE:id`(§8.3). 메인 턴은 **세션의 소유자**(`SessionOwnerLookup`), 루틴은 요청의 주체. tenantId 는 `SandboxTenantResolver` 가 주체에서 구한다(§8.3) |
+| owner | `(tenantId, principal)` — principal 은 `TYPE:id`(§8.3). 메인 턴은 **세션의 소유자**(코어가 기록한 소유자, 그다음 `SessionOwnerLookup`), 루틴은 요청의 주체. tenantId 는 `SandboxTenantResolver` 가 주체에서 구한다(§8.3) |
 | slot | `definitionAttributes()` 의 `sandbox.slot` 이 있으면 그것, 없으면 `primary` |
 | profile | `sandbox.profile` 이 있으면 그것이 **요구 프로파일**이다. 없으면 요구가 없고, 슬롯을 처음 만들 때만 설정의 기본 프로파일을 쓴다. 슬롯의 프로파일은 만들 때 고정된다(§8.3) |
 | shellKey | 메인 턴: `session:{sessionId}` — 턴을 넘어 cwd 가 유지된다. 루틴: `exec:{executionId}`. 포크는 위의 규칙대로 `exec:{executionId}` — 부모 셸을 오염시키지 않는다 |
@@ -691,8 +704,9 @@ workspaceId 를 결정론적으로 만들기 때문에 별도의 세션→워크
 노드로 옮겨가도 같은 id 가 다시 계산된다. 여러 세션에 걸치는 워크스페이스(티켓 하나에 세션 여럿)가
 필요한 애플리케이션은 자기 도메인에서 id 를 찾는 정책을 주입한다. 그 매핑은 애플리케이션의 데이터다.
 
-결정론적 id 가 매핑을 없애는 것은 **파생 워크스페이스**의 이야기다. 관리형 워크스페이스에는 세션 옵션(§5.1) 또는 정의의
+결정론적 id 가 매핑을 없애는 것은 **파생 워크스페이스**의 이야기다. 관리형 워크스페이스에는 요청 속성, 세션 옵션(§5.1) 또는 정의의
 `sandbox.workspace` 로 닿고, 그 때문에 루틴도 `ws:{executionId}` 대신 관리형 워크스페이스에 묶일 수 있다([관리 설계](workspace-sandbox-management.md) §8 D1·D2).
+요청 속성으로 묶인 부모의 포크도 부모의 워크스페이스를 물려받는다.
 
 ### 8.3 테넌트 검사
 
@@ -711,10 +725,13 @@ workspaceId 를 결정론적으로 만들기 때문에 별도의 세션→워크
   남의 세션 워크스페이스에 닿지 못하게 하려는 것이다. 팀이 한 워크스페이스를 같이 쓰는 애플리케이션은 `tenant` 로
   낮추고, 그 공유를 자기 정책(여러 세션에 걸치는 워크스페이스 id)으로 표현한다
 
-**owner 는 먼저 부른 쪽이 정하지 않는다.** 기본 정책은 메인 턴의 owner 를 세션의 소유자에서 가져온다. 코어의 세션
-저장소(`SessionRecord`)에는 소유 주체가 없으므로(코어에 제안: kangwoo/aimon-core#253), 소유자는 애플리케이션이 `SessionOwnerLookup.ownerOf(SessionId)` 로
-알려 준다 — 세션을 만든 사용자는 애플리케이션의 데이터다. `require-principal: true` 이면 이 빈이 필수이고 없으면 기동을
-거부한다(§13.2). 그러면 레코드가 없을 때(`InMemory` 재시작, 툼스톤 만료 뒤) 세션 id 를 아는 다른 주체가 먼저 불러도
+**owner 는 먼저 부른 쪽이 정하지 않는다.** 기본 정책은 메인 턴의 owner 를 세션의 소유자에서 가져온다. 코어 0.3.3 은 세션
+레코드에 소유자를 기록한다(`SessionRecordView.getOwner()`, kangwoo/aimon-core#253 — 세션 레코드를 만드는 submit 에 호스트가
+`SubmitRequest.owner(...)` 를 실었을 때만, 처음 값으로, 강제하지 않고). `WorkspaceSandbox.Builder.sessionRecords(...)` 를 주면
+그 소유자를 쓰고, 애플리케이션의 `SessionOwnerLookup.ownerOf(SessionId)` 는 코어가 소유자를 기록하지 않은 세션에만 묻는
+대체 경로가 된다. 둘 중 하나만 줄 수도 있다. `require-principal: true` 이면 둘 중 하나가 필수이고 없으면 기동을
+거부한다(§13.2). 어느 출처도 소유자를 모르는 세션은 `require-principal` 과 상관없이 바인딩이 거부된다 — 요청 주체로 물러서지 않는다.
+그것이 이 설정이 막으려는 "먼저 부른 쪽이 owner" 이기 때문이다([코어 0.3.3 이행 설계](workspace-sandbox-core-033.md) §5.2). 그러면 레코드가 없을 때(`InMemory` 재시작, 툼스톤 만료 뒤) 세션 id 를 아는 다른 주체가 먼저 불러도
 owner 는 세션 소유자로 정해지고, 그 주체는 검사에서 막힌다. 단일 테넌트 배포에서 빈이 없으면 요청 주체를 owner 로
 쓴다 — 먼저 부른 쪽이 owner 가 되는 약점을 받아들이는 구성이다. CLOSED 레코드는 `closedRetention` 동안 툼스톤으로 남아
 같은 id 의 재생성을 막는다(§10.5).
@@ -727,7 +744,8 @@ owner 는 세션 소유자로 정해지고, 그 주체는 검사에서 막힌다
 **관리**(`close`, `reopen`, `purge`)는 `MANAGED` 레코드면 접근 모드와 상관없이 owner 의 테넌트와 principal 이어야 하고,
 `DERIVED` 레코드면 사용 규칙 그대로다. 레코드의 `access: tenant` 는 공유 결정이라 `principal` 배포에서는
 `allow-shared-workspaces: true` 가 있어야 만들 수 있다(`principal` 로 좁히는 것은 언제나 된다). 세션 옵션을 바꾸는 것은
-워크스페이스가 아니라 **세션에 대한 권한**이다 — `SessionOwnerLookup` 이 답한 세션 소유자만 바꾸고, 그 빈이 없으면 거부한다.
+워크스페이스가 아니라 **세션에 대한 권한**이다 — 소유자 출처(코어가 기록한 소유자, `SessionOwnerLookup`)가 답한 세션 소유자만
+바꾸고, 출처가 없으면 거부한다.
 옵션으로 붙인 세션의 턴도 `connect` 에서 **실행하는** 주체로 다시 검사한다.
 
 **운영자 경로는 owner 검사를 하지 않는다**([관리 설계](workspace-sandbox-management.md) §5.5). `SandboxAdministration.of(WorkspaceSandbox)` 는 모든 워크스페이스와
@@ -1218,6 +1236,16 @@ owner 그대로)하며 "/workspace 가 초기화되었다" notice 를 붙인다.
 마친다(§10.4). id 를 다시 쓰지 않으므로 두 쓰기 사이에 다른 워크스페이스가 끼어들 수 없다. `DERIVED` 툼스톤은 `purge` 할 수
 없다 — 지우면 그 세션의 다음 턴이 `ws:{sid}` 를 조용히 다시 만든다.
 
+**세션이 지워지면 그 `DERIVED` 레코드도 간다**([코어 0.3.3 이행 설계](workspace-sandbox-core-033.md) §6.3). 코어의 세션
+라우터가 세션을 지우고 `SessionLifecycleListener.onDeleted` 를 부르면(kangwoo/aimon-core#253, 지운 노드에서, 세션의 lease 를
+쥔 채로), `WorkspaceSandbox.sessionLifecycleListener()` 가 세션 옵션을 지우고 `ws:{sessionId}` 를
+`closeCause=session_deleted` 로 표시한다 — OPEN 은 CLOSING 으로, CLOSING · CLOSED 는 상태를 둔 채 원인만. 그 뒤의 `connect` 는
+레코드의 owner 를 보기 전에 "being removed; retry shortly" 로 답하므로, 같은 id 로 다시 만든 세션이 지운 세션의 샌드박스에
+닿지 않는다. 샌드박스 종료와 레코드 삭제는 배경 실행기가 하고(`closedRetention` 없이), 그것이 돌지 못하면 janitor 가 CLOSING
+을 이어서 닫고 `CLOSED(session_deleted)` 를 첫 순회에 지운다. 세션이 붙어 있던 관리형 워크스페이스는 공유물이라 건드리지
+않는다. 라우터를 거치지 않은 삭제는 이벤트가 없다 — 그 세션의 `ws:{sid}` 는 idle 정책과 `closedRetention` 으로 끝나고, 옵션은
+운영자의 `deleteSessionOptions` 나 janitor 의 스윕(코어의 세션 저장소를 줄 때, `closedRetention` 뒤)이 지운다.
+
 `InMemory` 저장소는 재시작하면 툼스톤도 잃는다. 단일 노드 기본 구성에서는 재시작 뒤 닫힌 세션의 다음 턴이 새
 워크스페이스를 만든다 — 툼스톤을 지켜야 하는 애플리케이션은 영속 저장소를 쓴다(§5.3).
 
@@ -1688,11 +1716,12 @@ aimon:
   없는 `credentials`, `network-isolation` 선언과 빈 `control-plane-probes` 를 거부한다
 - 프로파일이 요구하는 capability 를 프로바이더가 광고한다(§6.4)
 - 프로파일의 `runtime-class` 는 프로바이더가 선언한 서버의 class 와 같다 — OpenSandbox 는 요청마다 class 를 받지 않는다(§6.4)
-- `require-principal: true` 이면 `SandboxTenantResolver` 와 `SessionOwnerLookup` 빈이 있다
+- `require-principal: true` 이면 `SandboxTenantResolver` 가 있고, 세션 소유자의 출처 — `sessionRecords(...)`(코어가 기록한 소유자)나
+  `SessionOwnerLookup`, 또는 둘 다 — 가 있다
 - `default-profile` 과 `allowed-profiles` 가 모두 정의된 프로파일이다
 - `insecure-allow` 는 `HARDENED_SECURITY_CONTEXT` · `RUNTIME_CLASS` · `NETWORK_ISOLATION` 만 면제한다
 - `admission.max-running-per-tenant` 는 1 이상이거나 명시한 `unlimited` 다 — 값이 없어서 전부 허용이 되는 경로는 없다
-- `max-managed-per-owner` 도 1 이상이거나 명시한 `unlimited` 다. 세션 옵션에 필요한 `SessionOwnerLookup` 은 기동이 아니라
+- `max-managed-per-owner` 도 1 이상이거나 명시한 `unlimited` 다. 세션 옵션에 필요한 소유자 출처는 기동이 아니라
   옵션을 쓸 때 검사한다 — 옵션을 쓰지 않는 배포에는 필요 없다
 
 아직 구현되지 않은 기능을 쓰는 프로파일은 조용히 무시하지 않고 **거부한다.** `pause-after`(`PAUSE_RESUME`, 7단계),
@@ -1919,6 +1948,9 @@ CI 워크플로가 없으므로 "4단계의 첫 CI" 는 아직 오지 않았다(
 | close 도중 다른 실행의 `connect` | CLOSED 뒤에 남는 슬롯 없음 | 3 |
 | close 도중 노드 종료 | janitor 가 이어서 CLOSED 까지 | 3 |
 | `closeAfter` 로 닫힌 뒤 같은 세션의 다음 턴 | 같은 워크스페이스를 새 incarnation 으로 자동 reopen 해 빈 `/workspace` 에서 실행, "/workspace 초기화" notice (막지 않는 CLOSED(idle) 레코드) | 3 |
+| 그 턴이 `Read` 만 쓴다 | 첫 도구 결과 머리에 `[environment]` notice 가 한 번, 둘째에는 없다(`drainNotices()`) | 코어 0.3.3 |
+| 포크가 샌드박스를 재생성 → 부모의 다음 호출 | 포크의 큐에 재생성 notice, 부모는 다음 `connect` 에서 "이 실행이 마지막으로 쓴 뒤 재생성되었다" notice 한 번 | 코어 0.3.3 |
+| 세션 삭제(`onDeleted`) → 같은 id 의 새 세션 | 옵션이 지워지고 `ws:{sid}` 는 즉시 CLOSING, 새 세션은 "being removed", 배경 작업 뒤 새 incarnation | 코어 0.3.3 |
 | `default-profile` 을 바꿔 재배포 → 진행 중인 워크스페이스 | 기존 `primary` 슬롯을 계속 쓴다 | 3 |
 | 다른 테넌트 principal 로 같은 workspaceId (`connect` · `close` · `reopen`) | 모두 거부 | 3 |
 | 다른 테넌트 워크스페이스에 대한 `SandboxStop` · `SandboxList` | 거부 | 5 |
@@ -2180,8 +2212,35 @@ docker 계층, K8s 에서만 드러나는 것은 k8s 계층 — 는 [`workspace-
   `mavenLocal()` 을 지웠다(PR #7, 단계 3 구현 설계 §10 Q8)
 - ~~**aimon-core 0.3.2-SNAPSHOT 고정**~~ *(닫았다)* — 훅 표시(`ExecutionOptions.isHook()`, 이슈 #9) 때문에 Central 의
   스냅샷 저장소에서 받던 `0.3.2-SNAPSHOT` 을 릴리스된 0.3.2 로 올리고 `build.gradle.kts` 의 저장소 블록을 지웠다
-- **요청 단위 실행 옵션** — 워크스페이스나 unattached 규칙을 실행마다(루틴 포함) 고르려면 코어의 `EnvironmentRequest` 가 요청
-  속성을 실어야 한다. 지금은 세션 단위다([관리 설계](workspace-sandbox-management.md) §12 Q1)
+- **aimon-core 0.3.3-SNAPSHOT 고정** *(릴리스 전에 닫는다)* — 요청 속성 · 세션 소유자와 삭제 이벤트 · `drainNotices()`(코어
+  #252 · #253 · #254) 때문에 Central 의 스냅샷 저장소에서 `0.3.3-SNAPSHOT` 을 받는다. `scripts/release.sh` 가 거부하므로 릴리스를
+  막는다. 릴리스된 0.3.3 으로 올리면서 `build.gradle.kts` 의 저장소 블록을 함께 지운다
+- ~~**요청 단위 실행 옵션**~~ *(코어 0.3.3 으로 닫았다)* — 코어가 `environment.*` 실행 속성을 `EnvironmentRequest.requestAttributes()`
+  로 넘기고(kangwoo/aimon-core#252), 메인 턴과 루틴이 `environment.sandbox.workspace` · `environment.sandbox.unattached` 로 실행
+  하나를 옮긴다. 세션 옵션은 세션 단위 기본값으로 남는다(§8.1, [관리 설계](workspace-sandbox-management.md) §12 Q1,
+  [코어 0.3.3 이행 설계](workspace-sandbox-core-033.md) §2.3)
+- **세션을 지울 때 `ws:{sessionId}` 도 닫는가** — 지금은 닫는다(§10.5). "대화 지우기" 를 같은 id 로 지우고 다시 만드는 호스트는
+  그때마다 샌드박스를 잃고, 다시 만든 세션의 첫 턴은 옛 샌드박스가 사라질 때까지(보통 최대 `close-wait`, 배경 닫기가 버려지면 janitor 가 이어받는 `close-resume-after` 와 순회 한 번 더) "being removed" 로 도구가
+  실패한다. 옵션만 지우고 닫기는 선택으로 둘지(`sessionLifecycleListener(boolean closeDerived)`) 정해야 한다
+  ([코어 0.3.3 이행 설계](workspace-sandbox-core-033.md) §12 Q1, §14)
+- **세션 소유자 읽기의 비용** — `sessionRecords(...)` 를 주면 메인 턴의 바인딩마다 세션 레코드 전체(대화 기록 포함)를 한 번
+  읽는다. 코어에 좁은 읽기가 생길 때까지 받아들인다. 노드 로컬 캐시는 같은 id 의 재생성(다른 노드는 삭제를 듣지 못한다)에서
+  옛 owner 를 새 `ws:{sid}` 에 굳혀 버리므로 두지 않았다(코어 SO-5, [코어 0.3.3 이행 설계](workspace-sandbox-core-033.md) §12 Q3)
+- **소유자 없는 세션과 `require-principal`** — 어느 출처도 소유자를 모르는 세션은 샌드박스를 받지 못한다. `SubmitRequest.owner`
+  를 싣기 전에 만든 세션이 남은 호스트는 그 세션이 사라질 때까지 `SessionOwnerLookup` 을 대체 경로로 둔다. 이 엄격함을 유지할지
+  확인이 필요하다. 같은 이유로 `sessionRecords(...)` 만 준 배포는 첫 submit 전에 세션 옵션을 정할 수 없다 — 첫 턴을 요청 속성으로
+  옮기거나, 레코드를 `provision(id, agentRef, owner)` 로 먼저 만들거나, 대체 lookup 을 둔다
+  ([코어 0.3.3 이행 설계](workspace-sandbox-core-033.md) §12 Q7 · Q8)
+- **지운 세션의 옵션을 쓸어 내는 유예** — janitor 는 코어의 세션 저장소에 없는 세션의 옵션을 `closedRetention`(기본 7일)이 지난
+  뒤에 지운다. 첫 submit 전에 쓴 옵션을 지키려는 유예인데, 따로 설정을 둘지 정하지 않았다
+  ([코어 0.3.3 이행 설계](workspace-sandbox-core-033.md) §12 Q5)
+- **턴 사이의 재생성 알림** — 실행 안의 재생성(포크가 만든 것 포함)은 generation 비교로 알린다(§7). 그러나 턴과 턴 사이에 다른
+  세션(공유 `wsm:` 워크스페이스)이나 앞 턴의 포크가 재생성하면, 다음 턴의 새 환경은 비교할 기준이 없어 알리지 못한다. 막으려면
+  세션마다 마지막으로 본 generation 을 `lastWorkspaceId` 옆에 기록해야 한다([코어 0.3.3 이행 설계](workspace-sandbox-core-033.md) §6.5)
+- **지운 세션이 관리형 워크스페이스에 남긴 셸 상태** — `/workspace/.aimon-shell/session-{sid}` 는 지우지 않는다. 지우려면
+  리스너가 짧게 끝나야 하는 자리에서 `connect`(프로비저닝)를 해야 한다. 같은 워크스페이스에서 같은 id 로 다시 만든 세션은 그
+  cwd 와 export 에서 시작한다. 배경 단계에서 RUNNING 슬롯이 있을 때만 지우는 방법이 있다
+  ([코어 0.3.3 이행 설계](workspace-sandbox-core-033.md) §6.3, §14)
 - **비동기 · 멱등 `create`** — 동기 `create` 는 `provisionTimeout` 까지 막는다. HTTP 호스트에는 PROVISIONING 을 바로 돌려주는
   경로와 응답을 잃어도 둘째 워크스페이스를 만들지 않는 멱등 키가 필요할 수 있다([관리 설계](workspace-sandbox-management.md) §12 Q3)
 - **`aimon-sandbox-testkit` 의 발행** *(3·4단계 릴리스에서 닫는다)* — 계약 스위트를 이 저장소 밖의 구현도 통과해야 하므로
@@ -2257,7 +2316,8 @@ docker 계층, K8s 에서만 드러나는 것은 k8s 계층 — 는 [`workspace-
 - [`workspace-sandbox-step3.md`](workspace-sandbox-step3.md) — 3단계(도메인과 로컬 경로)의 구현 설계, 결정(§10)과 구현이 벗어난 점(§12)
 - [`workspace-sandbox-step4.md`](workspace-sandbox-step4.md) — 4단계(OpenSandbox 프로바이더와 조정)의 구현 설계, 결정(§10)과 구현이 벗어난 점(§13)
 - [`workspace-sandbox-core-031.md`](workspace-sandbox-core-031.md) — aimon-core 0.3.1 을 따라간 변경(셸 취소 · 백그라운드 상한 · 런타임 바인딩)의 설계, 열린 질문(§9)과 구현이 벗어난 점(§10)
-- [`workspace-sandbox-management.md`](workspace-sandbox-management.md) — 워크스페이스 관리(만들기 · 세션 옵션 · 관리 API)의 설계와 구현이 벗어난 점(§15)
+- [`workspace-sandbox-management.md`](workspace-sandbox-management.md) — 워크스페이스 관리(만들기 · 세션 옵션 · 관리 API)의 설계와 구현이 벗어난 점(§15, §16), 코어 0.3.3 이후 바뀐 점(§17)
+- [`workspace-sandbox-core-033.md`](workspace-sandbox-core-033.md) — aimon-core 0.3.3 의 세 이음매(요청 속성 · 세션 소유자와 삭제 이벤트 · 실행 환경 notice)를 따라간 변경의 설계, 열린 질문(§12)과 구현이 벗어난 점(§14)
 - [`opensandbox-spike.md`](opensandbox-spike.md) — 2단계(OpenSandbox 스파이크)의 결과와 근거
 - [`sandbox.md` @ `704013c`](https://github.com/kangwoo/aimon-sandbox/blob/704013c02cb14f16ec37ebf8c07f90d7e107db73/docs/design/sandbox.md) — 이 설계가 대체한 identifier 기반 설계(삭제됨)
 - [`scope-model.md`](https://github.com/kangwoo/aimon-core/blob/main/docs/overview/scope-model.md) — 수명과 소멸 책임

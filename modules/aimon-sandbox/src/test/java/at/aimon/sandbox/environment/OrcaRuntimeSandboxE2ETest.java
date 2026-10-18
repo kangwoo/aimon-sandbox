@@ -57,10 +57,13 @@ import at.aimon.core.subagent.Subagent;
 import at.aimon.core.subagent.SubagentContent;
 import at.aimon.core.subagent.SubagentMetadata;
 import at.aimon.core.subagent.SubagentRegistry;
+import at.aimon.core.tools.EnvironmentNotices;
 import at.aimon.core.tools.bash.BashTool;
+import at.aimon.core.tools.file.ReadTool;
 import at.aimon.core.tools.task.TaskTool;
 import at.aimon.sandbox.RecordingProvider;
 import at.aimon.sandbox.SandboxHarness;
+import at.aimon.sandbox.binding.SandboxRequestAttributes;
 import at.aimon.sandbox.binding.SlotChoice;
 import at.aimon.sandbox.binding.UnattachedRule;
 import at.aimon.sandbox.provider.ProviderSandboxRef;
@@ -133,6 +136,7 @@ class OrcaRuntimeSandboxE2ETest {
         commands.initialize();
         final DefaultToolRegistry toolRegistry = new DefaultToolRegistry();
         toolRegistry.register(new BashTool());
+        toolRegistry.register(new ReadTool());
         final LlmModel model = LlmModel.builder().name("m").build();
         if (withTaskTool) {
             toolRegistry.register(new TaskTool(model, subagentRegistry, toolRegistry, hookRegistry, subagents));
@@ -429,6 +433,112 @@ class OrcaRuntimeSandboxE2ETest {
                 .anyMatch(text -> text.contains("not attached to a sandbox workspace"));
     }
 
+    // ----------------------------------------------------------------------------------------------------------------
+    // core 0.3.3 seams through the real loop (docs/design/workspace-sandbox-core-033.md §9)
+    // ----------------------------------------------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("core-033 #252: a turn's request attribute runs its Bash, and its Task fork's, in the named workspace")
+    void aRequestAttributeTurnAndItsForkRunInTheNamedWorkspace() throws Exception {
+        subagentRegistry.add(
+                Subagent.of("worker", SubagentMetadata.builder().description("does the work").maxIterations(3).build(),
+                        SubagentContent.of("You are the worker.")));
+        final WorkspaceView created = harness.sandbox.workspaces().create(CreateWorkspace.named("placed"),
+                SandboxHarness.ALICE);
+        final SessionId session = SessionId.generate();
+        llm.respond(
+                LlmResponse.tools(List.of(ToolUse.of("t1", "Bash", Map.of("command", "echo turn > turn-marker.txt")))));
+        llm.respond(LlmResponse.tools(List.of(ToolUse.of("t2", "Task",
+                Map.of("subagent_name", "worker", "prompt", "Write the fork marker.", "description", "mark")))));
+        llm.respond(LlmResponse
+                .tools(List.of(ToolUse.of("w1", "Bash", Map.of("command", "cat turn-marker.txt > fork-marker.txt")))));
+        llm.respond(LlmResponse.text("Fork done."));
+        llm.respond(LlmResponse.text("Done."));
+
+        final OrcaAgentExecutionResult result = executor.execute(runtime(true),
+                OrcaAgentExecutionRequest.builder().userInput("go").sessionId(session).principal(SandboxHarness.ALICE)
+                        .executionAttributes(SandboxRequestAttributes.workspace(created.id())).build());
+
+        assertThat(result.isSuccess()).as(result.getErrorMessage()).isTrue();
+        assertThat(managedFile(created.id(), "/workspace/repo/fork-marker.txt")).isEqualTo("turn\n");
+        assertThat(harness.store.find(SandboxWorkspaceId.of("ws:" + session.value()))).isEmpty();
+        assertThat(llm.resultsById.get("t1")).as("delivered by core's drain, once")
+                .startsWith(EnvironmentNotices.PREFIX + "this session now runs in sandbox workspace " + created.id());
+        assertThat(llm.resultsById.values()).filteredOn(text -> text.contains("now runs in sandbox workspace"))
+                .hasSize(1);
+        assertThat(harness.sessionOptions.find(session).orElseThrow().lastWorkspaceId()).contains(created.id());
+        assertThat(harness.sessionOptions.find(session).orElseThrow().workspace())
+                .as("a request attribute writes no session option").isEmpty();
+    }
+
+    /** A turn of {@code Read} calls only, each its own tool use. */
+    private OrcaAgentExecutionResult runReads(SessionId session, String... ids) {
+        for (String id : ids) {
+            llm.respond(LlmResponse
+                    .tools(List.of(ToolUse.of(id, "Read", Map.of("file_path", "/workspace/repo/missing.txt")))));
+        }
+        llm.respond(LlmResponse.text("Done."));
+        return executor.execute(runtime(), OrcaAgentExecutionRequest.builder().userInput("look").sessionId(session)
+                .principal(SandboxHarness.ALICE).build());
+    }
+
+    private void idleClose(SessionId session) {
+        harness.clock.advance(java.time.Duration.ofHours(3));
+        harness.sandbox.janitor().runOnce();
+        harness.clock.advance(java.time.Duration.ofHours(25));
+        harness.sandbox.janitor().runOnce();
+        assertThat(harness.record(session).state()).isEqualTo(at.aimon.sandbox.workspace.WorkspaceState.CLOSED);
+    }
+
+    @Test
+    @DisplayName("core-033 #254: a Read-only turn hears an idle reset on its first tool result, exactly once")
+    void aReadOnlyTurnHearsTheResetExactlyOnce() throws Exception {
+        final SessionId session = SessionId.generate();
+        runBash(runtime(), session, "echo before > kept.txt");
+        idleClose(session);
+
+        final OrcaAgentExecutionResult result = runReads(session, "r1", "r2");
+
+        assertThat(result.isSuccess()).as(result.getErrorMessage()).isTrue();
+        assertThat(llm.resultsById.get("r1")).startsWith(
+                EnvironmentNotices.PREFIX + at.aimon.sandbox.workspace.SandboxWorkspaceManager.RESET_NOTICE);
+        assertThat(llm.resultsById.get("r2")).doesNotContain(EnvironmentNotices.PREFIX);
+    }
+
+    @Test
+    @DisplayName("core-033 #254: an attached session's switch reaches its first Read only, and is recorded")
+    void aReadOnlyTurnHearsTheSwitchOnceAndRecordsIt() throws Exception {
+        final WorkspaceView attached = harness.sandbox.workspaces().create(CreateWorkspace.named("moved"),
+                SandboxHarness.ALICE);
+        final SessionId session = SessionId.generate();
+        harness.sandbox.workspaces().setSessionOptions(session, SessionSandboxOptions.Update.attach(attached.id()),
+                SandboxHarness.ALICE);
+
+        runReads(session, "r1", "r2");
+
+        assertThat(llm.resultsById.get("r1")).startsWith(EnvironmentNotices.PREFIX + "this session now runs in");
+        assertThat(llm.resultsById.get("r2")).doesNotContain(EnvironmentNotices.PREFIX);
+        assertThat(harness.sessionOptions.find(session).orElseThrow().lastWorkspaceId()).contains(attached.id());
+        runReads(session, "r3");
+        assertThat(llm.resultsById.get("r3")).doesNotContain(EnvironmentNotices.PREFIX);
+    }
+
+    @Test
+    @DisplayName("core-033 #254: a Bash result carries the drained line once, and not among the command's own")
+    void aBashResultCarriesTheResetOnce() throws Exception {
+        final SessionId session = SessionId.generate();
+        runBash(runtime(), session, "true");
+        idleClose(session);
+
+        runBash(runtime(), session, "echo after");
+
+        // The session's transcript replays the earlier turn's result too; this turn's is the one that says "after".
+        final String text = llm.resultsById.values().stream().filter(result -> result.contains("after")).findFirst()
+                .orElseThrow();
+        assertThat(text).startsWith(EnvironmentNotices.PREFIX + "/workspace was reset").contains("after");
+        assertThat(text.split("/workspace was reset", -1)).hasSize(2);
+    }
+
     private Path managedPath(SandboxWorkspaceId id, String sandboxPath) {
         final ProviderSandboxRef ref = harness.store.find(id).orElseThrow().slot("primary").orElseThrow().providerRef()
                 .orElseThrow();
@@ -444,6 +554,8 @@ class OrcaRuntimeSandboxE2ETest {
         private final Deque<LlmResponse> responses = new ArrayDeque<>();
         private final List<String> systemPrompts = new ArrayList<>();
         private final List<String> toolResults = new ArrayList<>();
+        /** Each tool result once, by tool-use id: {@link #toolResults} repeats a result with every later request. */
+        private final Map<String, String> resultsById = new java.util.LinkedHashMap<>();
         private final List<String> userMessages = new ArrayList<>();
 
         void respond(LlmResponse response) {
@@ -461,7 +573,10 @@ class OrcaRuntimeSandboxE2ETest {
                 List<ToolDefinition> tools, LlmModel modelConfig, LlmCallMetadata metadata) {
             systemPrompts.add(systemPrompt);
             for (Message message : messages) {
-                message.getToolUseResults().forEach(r -> toolResults.add(String.valueOf(r.getContent())));
+                message.getToolUseResults().forEach(r -> {
+                    toolResults.add(String.valueOf(r.getContent()));
+                    resultsById.put(r.getToolUseId(), String.valueOf(r.getContent()));
+                });
                 userMessages.add(String.valueOf(message.getContent()));
             }
             return responses.isEmpty() ? LlmResponse.text("done") : responses.poll();
