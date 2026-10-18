@@ -369,8 +369,8 @@ public final class WorkspaceSandbox implements AutoCloseable {
          * Core's session store (kangwoo/aimon-core#253): the owner it recorded — set by
          * {@code SubmitRequest.owner(...)} on the submit that creates a session — becomes the session's owner, with
          * {@link #sessionOwnerLookup} as the fallback for sessions recorded without one. The janitor also uses it to
-         * sweep the options of sessions deleted outside the router. Each main-turn bind then loads the session's record
-         * once.
+         * sweep the options of sessions deleted outside the router. Each main-turn bind then reads the session's owner
+         * alone ({@code SessionRecordStore.loadOwner}), not its record.
          */
         public Builder sessionRecords(SessionRecordStore sessionRecords) {
             Objects.requireNonNull(sessionRecords, "sessionRecords must not be null");

@@ -21,6 +21,13 @@ allprojects {
             }
         }
     }
+
+    // Re-check the pinned SNAPSHOT on every build. Gradle's default keeps a resolved snapshot for 24 hours, so a CI
+    // cache restored from yesterday compiled against a core without the API just published. Only the aimon-core
+    // SNAPSHOT is a changing module here. Delete together with the SNAPSHOT pin.
+    configurations.all {
+        resolutionStrategy.cacheChangingModulesFor(0, "seconds")
+    }
 }
 
 // Module-wide quality, formatting and publishing config lives in pre-compiled script plugins under
