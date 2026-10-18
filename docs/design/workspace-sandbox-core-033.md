@@ -689,6 +689,8 @@ Only items the implementation actually hits with evidence go into the file.
   purpose is now served by the listener). Keep it, deprecated, if anyone already built against the unreleased API?
 - **Q3 — Owner read cost.** One full record load per main-turn bind when `sessionRecords` is wired. Accept until core
   offers a narrow read (designed), or add a bounded node-local cache despite the id-reuse hazard of §2.2?
+  **Resolved (2026-10-18):** core added `SessionRecordStore#loadOwner` (kangwoo/aimon-core#262, SO-5), and
+  `SessionOwnerLookup.recorded` now calls it — the owner alone, no transcript. No cache was added.
 - **Q4 — First-turn wording for request-attribute sessions.** A session pinned by request attribute from its first
   turn hears "now runs in sandbox workspace X; files and shell state from any earlier workspace of this session are
   not here" once. Alternative: probe whether the derived workspace exists and stay silent when it does not (one more
