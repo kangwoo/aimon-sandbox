@@ -39,6 +39,8 @@
 aimon-core `0.3.3` 이 필요하다(릴리스 전까지는 `0.3.3-SNAPSHOT`) — 훅 표시 `ExecutionOptions.isHook()`(0.3.2)에 더해, 실행 하나를
 옮기는 요청 속성(`SandboxRequestAttributes`), 코어가 기록한 세션 소유자(`WorkspaceSandbox.Builder.sessionRecords`)와 세션 삭제
 리스너(`WorkspaceSandbox.sessionLifecycleListener()`), 모든 도구 결과에 실리는 환경 notice(`drainNotices()`)를 쓴다
-([`workspace-sandbox-core-033.md`](../../docs/design/workspace-sandbox-core-033.md)).
+([`workspace-sandbox-core-033.md`](../../docs/design/workspace-sandbox-core-033.md)). 코어가 꺼내지 않는 훅 · 워크플로 단계 ·
+스테이징이 일으킨 초기화는 세션 옵션에 남겨 세션의 다음 도구 결과에 알린다
+([`workspace-sandbox-unannounced-reset.md`](../../docs/design/workspace-sandbox-unannounced-reset.md)).
 
 옛 구현이 필요하면 `at.aimon.core:aimon-sandbox{,-docker,-kubernetes}:0.2.4` 가 Maven Central 에 그대로 있다.

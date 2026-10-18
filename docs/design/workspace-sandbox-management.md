@@ -708,3 +708,11 @@ their approved text, and this table says where they no longer describe the code.
 | P16 — hooks take no notice | a hook's command result takes none | gone: shell results carry only per-command notices, and core drains on the tool the hook ran for | §6.5 |
 | P7 — `clearSessionOptions` fallback to the attached workspace | needed because a file-only turn never recorded `lastWorkspaceId` | kept, for a different case: a drained switch whose asynchronous record write loses its CAS to the clear | §6.4 |
 
+Later, kangwoo/aimon-sandbox#28 ([`workspace-sandbox-unannounced-reset.md`](workspace-sandbox-unannounced-reset.md),
+**UR**) added one field to the record of §5.2:
+
+| Where | Was | Now | UR |
+|---|---|---|---|
+| §5.2 — `SessionSandboxOptions` | `workspace`, `unattached`, `lastWorkspaceId` | also `unannouncedReset()`: a reset of the session's sandbox that no drain has delivered yet, written by the session's root environment before it queues the reset notice and cleared by the drain that delivers it. `clearSessionOptions` keeps it, and a record holding only it is no attachment and no move (§6.4's switch ignores it). The listener, the operator's delete and the janitor's sweep remove it with the record. A store must persist it | §2.1, §3, §6 |
+| §6.4 — the `lastWorkspaceId` write | its own asynchronous write after the drain | folded into one asynchronous acknowledgement per drain with the reset's clear, a CAS on the version the environment knows (the policy's read, or its own reset write's). A reset write of the same environment that follows the drain writes the switch along, so it cannot make that acknowledgement lose its CAS | §5.3, §6.2, §12 |
+

@@ -6,6 +6,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
 
 import java.nio.file.Files;
+import java.time.Duration;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
@@ -14,7 +16,10 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import at.aimon.core.agent.session.SessionId;
+import at.aimon.core.environment.ExecutionEnvironment;
+import at.aimon.core.shell.ExecutionOptions;
 import at.aimon.core.shell.ShellCommandResult;
+import at.aimon.sandbox.QueueingExecutor;
 import at.aimon.sandbox.SandboxHarness;
 import at.aimon.sandbox.testkit.FaultInjectingSandboxProvider;
 import at.aimon.sandbox.testkit.FaultInjectingSandboxProvider.Fault;
@@ -96,5 +101,82 @@ class MultiNodeScenariosTest {
         assertThat(b.get(60, TimeUnit.SECONDS).stdout()).isEqualTo("b\n");
         assertThat(nodeA.primary(session).seeded()).isTrue();
         assertThat(nodeA.local.sandboxCount()).isOne();
+    }
+
+    // ----------------------------------------------------------------------------------------------------------------
+    // the durable unannounced reset (docs/design/workspace-sandbox-unannounced-reset.md §6.5)
+    // ----------------------------------------------------------------------------------------------------------------
+
+    /** Two nodes sharing the workspace store, the options store and the provider; node A's background queues. */
+    private static final class Shared implements AutoCloseable {
+        final QueueingExecutor backgroundA = new QueueingExecutor();
+        final SandboxHarness a = SandboxHarness.builder().settings(s -> s.nodeId("node-a")).background(backgroundA)
+                .build();
+        final SandboxHarness b = SandboxHarness.builder().store(a.store).local(a.local).sessionOptions(a.sessionOptions)
+                .settings(s -> s.nodeId("node-b")).build();
+
+        /**
+         * Idle past {@code closeAfter} and closed, by node A's janitor; both clocks move together. Node A's background
+         * queue is left alone.
+         */
+        void idleClose(SessionId session) {
+            for (Duration step : List.of(Duration.ofHours(2), Duration.ofHours(24))) {
+                a.clock.advance(step);
+                b.clock.advance(step);
+                a.sandbox.janitor().runOnce();
+            }
+            assertThat(a.record(session).state()).isEqualTo(WorkspaceState.CLOSED);
+        }
+
+        @Override
+        public void close() {
+            b.sandbox.close();
+            a.close();
+        }
+    }
+
+    private static final ExecutionOptions HOOK = ExecutionOptions.builder().timeout(Duration.ofSeconds(20)).hook(true)
+            .build();
+
+    @Test
+    @DisplayName("unannounced-reset §6.5: node A's hook-only turn resets; node B's next turn tells it once")
+    void aResetKeptOnOneNodeIsToldOnAnother() throws Exception {
+        try (Shared nodes = new Shared()) {
+            final SessionId session = SessionId.generate();
+            bash(nodes.a.mainTurn(session, ALICE), "true");
+            nodes.idleClose(session);
+
+            bash(nodes.a.mainTurn(session, ALICE), "true", HOOK);
+
+            final ExecutionEnvironment onB = nodes.b.mainTurn(session, ALICE);
+            bash(onB, "true");
+            assertThat(onB.drainNotices()).singleElement().asString().startsWith("/workspace was reset at ");
+            assertThat(nodes.a.sessionOptions.find(session)).isEmpty();
+            final ExecutionEnvironment again = nodes.a.mainTurn(session, ALICE);
+            bash(again, "true");
+            assertThat(again.drainNotices()).isEmpty();
+        }
+    }
+
+    @Test
+    @DisplayName("unannounced-reset §6.5: node A's late acknowledgement leaves the newer reset node B kept since")
+    void aLateAcknowledgementLeavesANewerReset() throws Exception {
+        try (Shared nodes = new Shared()) {
+            final SessionId session = SessionId.generate();
+            bash(nodes.a.mainTurn(session, ALICE), "true");
+            nodes.idleClose(session);
+            final ExecutionEnvironment onA = nodes.a.mainTurn(session, ALICE);
+            bash(onA, "true");
+            assertThat(onA.drainNotices()).containsExactly(SandboxWorkspaceManager.RESET_NOTICE);
+            assertThat(nodes.backgroundA.queued()).as("A's acknowledgement is late").isOne();
+
+            nodes.idleClose(session);
+            bash(nodes.b.mainTurn(session, ALICE), "true", HOOK);
+            final UnannouncedReset keptByB = nodes.a.sessionOptions.find(session).orElseThrow().unannouncedReset()
+                    .orElseThrow();
+            nodes.backgroundA.runAll();
+
+            assertThat(nodes.a.sessionOptions.find(session).orElseThrow().unannouncedReset()).contains(keptByB);
+        }
     }
 }

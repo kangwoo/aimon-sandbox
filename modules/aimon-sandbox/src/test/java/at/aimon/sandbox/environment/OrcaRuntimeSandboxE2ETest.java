@@ -539,6 +539,44 @@ class OrcaRuntimeSandboxE2ETest {
         assertThat(text.split("/workspace was reset", -1)).hasSize(2);
     }
 
+    /** Registers the {@code onStop} hooks of a skill parsed with core's shell-capable hook parser. */
+    private void onStopWith(String hooksYaml) {
+        final MarkdownSkillParser parser = new MarkdownSkillParser(new ShellArgumentTokenizer(),
+                new SkillHookSetParser(new DefaultShellActionExecutor()));
+        final Skill skill = parser.parse("stopper",
+                "---\nname: stopper\ndescription: runs at turn end\nhooks:\n  onStop:\n" + hooksYaml + "---\n\nStop.");
+        assertThat(skill.getMetadata().getHooks().getOnStopHooks()).isNotEmpty();
+        skill.getMetadata().getHooks().getOnStopHooks()
+                .forEach(hook -> hookRegistry.register(HookEventType.ON_STOP, hook));
+    }
+
+    @Test
+    @DisplayName("#28: a text-only turn whose onStop hook resets the sandbox — the next turn's first Read hears it once")
+    void aStopHooksResetReachesTheNextTurnOnce() throws Exception {
+        final SessionId session = SessionId.generate();
+        runBash(runtime(), session, "echo before > kept.txt");
+        idleClose(session);
+        onStopWith("    - action: { type: shell, command: \"true\" }\n");
+
+        llm.respond(LlmResponse.text("Nothing to do."));
+        final OrcaAgentExecutionResult quiet = executor.execute(runtime(), OrcaAgentExecutionRequest.builder()
+                .userInput("hi").sessionId(session).principal(SandboxHarness.ALICE).build());
+        assertThat(quiet.isSuccess()).as(quiet.getErrorMessage()).isTrue();
+        assertThat(harness.record(session).state()).as("the onStop hook reopened the workspace")
+                .isEqualTo(at.aimon.sandbox.workspace.WorkspaceState.OPEN);
+        assertThat(harness.sessionOptions.find(session).orElseThrow().unannouncedReset()).isPresent();
+
+        final OrcaAgentExecutionResult result = runReads(session, "r1", "r2");
+
+        assertThat(result.isSuccess()).as(result.getErrorMessage()).isTrue();
+        assertThat(llm.resultsById.get("r1")).startsWith(EnvironmentNotices.PREFIX + "/workspace was reset at ");
+        assertThat(llm.resultsById.get("r1").split("/workspace was reset", -1)).hasSize(2);
+        assertThat(llm.resultsById.get("r2")).doesNotContain(EnvironmentNotices.PREFIX);
+        assertThat(harness.sessionOptions.find(session)).isEmpty();
+        runReads(session, "r3");
+        assertThat(llm.resultsById.get("r3")).doesNotContain(EnvironmentNotices.PREFIX);
+    }
+
     private Path managedPath(SandboxWorkspaceId id, String sandboxPath) {
         final ProviderSandboxRef ref = harness.store.find(id).orElseThrow().slot("primary").orElseThrow().providerRef()
                 .orElseThrow();

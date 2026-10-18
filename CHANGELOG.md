@@ -59,6 +59,16 @@ which `scripts/release.sh` refuses to release
   or its working directory was gone.
 - **A re-creation made by a fork is told to its parent**: each environment remembers the sandbox generation it last
   used and says so when a later call of its own finds a newer one it did not re-create itself.
+- **A reset that a hook, a workflow step or a staging call caused is told on the session's next tool result, even a
+  turn later** (kangwoo/aimon-sandbox#28). Core drains notices only after model-facing tool calls, so such a reset
+  used to die with its environment. A session's root environment now keeps it on the session's options record
+  (`SessionSandboxOptions.unannouncedReset()`) before queueing the notice, and the drain that delivers it clears it;
+  otherwise the next turn tells it once, with the time of the reset. A record holding only that fact is removed with
+  it, and lists as no attachment. Forks keep nothing
+  ([`docs/design/workspace-sandbox-unannounced-reset.md`](docs/design/workspace-sandbox-unannounced-reset.md)).
+- **A failed re-provisioning after a reset** reports the bare reason as the tool error; the reset arrives as an
+  `[environment]` line on the same result instead of the error's "(also: …)" suffix. Callers of the manager outside
+  the environment still read the suffix.
 
 ### Behaviour changes for 0.1.0 hosts and for this cycle's API
 
@@ -68,7 +78,9 @@ which `scripts/release.sh` refuses to release
   leaves on a single-tenant host — or rely on the janitor's sweep.
 - **`CloseCause` has a third constant**: an exhaustive `switch` over it needs a branch for `SESSION_DELETED`. A store
   that persists the enum by name needs nothing.
-- **A custom `SessionOptionsStore` must implement `sessions(...)`**; run the updated contract.
+- **A custom `SessionOptionsStore` must implement `sessions(...)` and persist `unannouncedReset`**; run the
+  updated contract; it keeps the reset's time to at least millisecond precision. A store that drops the field behaves
+  as before #28 for that session.
 - **Code that reads `ShellCommandResult.notices()`** no longer finds environment notices there; they reach the model
   through core.
 - **Non-String `environment.*` execution attributes** set for other purposes now make that turn's environment

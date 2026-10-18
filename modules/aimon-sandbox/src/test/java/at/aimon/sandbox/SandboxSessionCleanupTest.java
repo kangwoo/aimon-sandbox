@@ -20,6 +20,7 @@ import at.aimon.core.agent.session.SessionId;
 import at.aimon.core.agent.session.store.InMemorySessionRecordStore;
 import at.aimon.core.base.Principal;
 import at.aimon.core.environment.ExecutionEnvironment;
+import at.aimon.core.shell.ExecutionOptions;
 import at.aimon.sandbox.binding.SlotChoice;
 import at.aimon.sandbox.binding.UnattachedRule;
 import at.aimon.sandbox.testkit.FaultInjectingSandboxProvider.Operation;
@@ -30,6 +31,7 @@ import at.aimon.sandbox.workspace.InMemorySessionOptionsStore;
 import at.aimon.sandbox.workspace.SandboxEvent;
 import at.aimon.sandbox.workspace.SandboxWorkspace;
 import at.aimon.sandbox.workspace.SandboxWorkspaceId;
+import at.aimon.sandbox.workspace.SandboxWorkspaceManager;
 import at.aimon.sandbox.workspace.SessionSandboxOptions;
 import at.aimon.sandbox.workspace.TenantId;
 import at.aimon.sandbox.workspace.WorkspaceOwner;
@@ -250,6 +252,61 @@ class SandboxSessionCleanupTest {
         background.runAll();
 
         assertThat(harness.sessionOptions.find(session)).isEmpty();
+    }
+
+    /** Idle past {@code closeAfter} and closed; the next connect of {@code ws:{sid}} resets it. */
+    private void idleClosed() throws Exception {
+        records.provision(session, "agent", ALICE);
+        final ExecutionEnvironment turn = harness.mainTurn(session, ALICE);
+        bash(turn, "true");
+        turn.drainNotices();
+        harness.clock.advance(Duration.ofHours(2));
+        harness.sandbox.janitor().runOnce();
+        harness.clock.advance(Duration.ofHours(24));
+        harness.sandbox.janitor().runOnce();
+        background.runAll();
+        assertThat(record().orElseThrow().state()).isEqualTo(WorkspaceState.CLOSED);
+    }
+
+    @Test
+    @DisplayName("unannounced-reset §6.4: the listener deletes a record holding only an unannounced reset")
+    void theListenerDeletesARecordHoldingOnlyAnUnannouncedReset() throws Exception {
+        idleClosed();
+        bash(harness.mainTurn(session, ALICE), "true",
+                ExecutionOptions.builder().timeout(Duration.ofSeconds(20)).hook(true).build());
+        assertThat(harness.sessionOptions.find(session).orElseThrow().unannouncedReset()).isPresent();
+
+        delete();
+        background.runAll();
+
+        assertThat(harness.sessionOptions.find(session)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("unannounced-reset §6.4: an acknowledgement queued behind the deletion creates nothing")
+    void aQueuedAcknowledgementAfterTheDeletionCreatesNothing() throws Exception {
+        idleClosed();
+        final ExecutionEnvironment turn = harness.mainTurn(session, ALICE);
+        bash(turn, "true");
+        assertThat(turn.drainNotices()).containsExactly(SandboxWorkspaceManager.RESET_NOTICE);
+        assertThat(background.queued()).as("the acknowledgement waits").isOne();
+
+        delete();
+        background.runAll();
+
+        assertThat(harness.sessionOptions.find(session)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("unannounced-reset §6.4: a mark for a session core no longer has creates no record")
+    void aMarkForADeletedSessionCreatesNothing() {
+        assertThat(harness.sandbox.manager().markResetUnannounced(session, derived(), "primary", OptionalLong.empty(),
+                Optional.empty(), WorkspaceOwner.of(TenantId.DEFAULT, ALICE))).isEmpty();
+        assertThat(harness.sessionOptions.find(session)).isEmpty();
+
+        records.provision(session, "agent", ALICE);
+        assertThat(harness.sandbox.manager().markResetUnannounced(session, derived(), "primary", OptionalLong.empty(),
+                Optional.empty(), WorkspaceOwner.of(TenantId.DEFAULT, ALICE))).isPresent();
     }
 
     @Test

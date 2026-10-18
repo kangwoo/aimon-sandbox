@@ -238,7 +238,7 @@ OpenSandboxProvider  ──>  OpenSandbox API (/command)  ──>  execd in sand
 `SandboxWorkspace` 는 sandbox id 를 "하나" 갖지 않는다. 초안 두 개가 모두 강조한 점이고 그대로 따른다.
 
 세션을 워크스페이스에 붙이는 **세션 옵션**(`SessionSandboxOptions` — 붙은 워크스페이스, 세션 자신의 unattached 규칙,
-마지막으로 접속한 워크스페이스)은 이 레코드에 두지 않고 `SessionOptionsStore` 에 세션별로 따로 둔다. 한 워크스페이스에
+마지막으로 접속한 워크스페이스, 모델이 아직 듣지 못했을 수 있는 초기화 `unannouncedReset`(§7))은 이 레코드에 두지 않고 `SessionOptionsStore` 에 세션별로 따로 둔다. 한 워크스페이스에
 붙는 세션 수에는 상한이 없고, 워크스페이스 레코드는 가장 자주 CAS 되는 문서라 세션과 함께 자라면 안 된다([관리 설계](workspace-sandbox-management.md) §5.2).
 CAS 규칙은 §5.3 과 같다(지운 뒤 다시 만든 레코드가 옛 version 을 쓰지 않는다).
 
@@ -596,8 +596,8 @@ SDK 의 `SandboxPool`(warm pool)은 SPI 에 올리지 않는다. 풀은 `create`
 | `stage(resource)` | `/workspace/.aimon-staged/{name}/{contentKey}/` 로 materialize. 샌드박스 안의 `.staged` 마커가 있고 **사본의 내용 해시가 `contentKey` 와 맞을 때만** 생략한다. 스테이징 영역은 **파일 도구에 읽기 전용**이다(코어 §4.4, 이 문서 §11.1) |
 | `isolate(branchKey)` | `git worktree add /workspace/.worktrees/{branchKey}` 후 `root` 만 바꾼 환경(§11.2). `root` 가 git 저장소가 아니면(seed 없는 프로파일) 비어 있음을 돌려주고, 코어는 그 워크플로 단계를 거부한다(C30) |
 | `fork()` 가 있는 요청(포크) | 부모와 같은 워크스페이스, shellKey 는 `exec:{executionId}`. 슬롯은 기본적으로 부모와 같고, 바인딩 정책이 `ForkDefinition` 의 속성을 보고 바꿀 수 있다(§8.2). 부모 환경이 없거나, 샌드박스 환경이 아니거나, 사용 불가면 포크도 사용 불가 |
-| `drainNotices()` | 실행 환경 수준의 사실 — idle 뒤의 초기화, 샌드박스 재생성 · 소실, 느린 프로비저닝, 워크스페이스 전환, 이 실행이 마지막으로 쓴 뒤 다른 실행(포크 등)이 만든 새 generation — 을 환경 인스턴스마다 하나인 큐에 쌓아 둔다. 코어가 모델에게 가는 모든 도구 호출 뒤에(PostTool 훅 뒤) 꺼내 그 결과 머리에 `[environment] ` 줄로 한 번 싣는다 — `Read` 만 쓴 턴도 듣는다. 꺼낸 것은 전달된 것으로 친다. 큐는 포크와 나누지 않는다(코어 EE-107) |
-| `ShellCommandResult.notices()` | 그 명령에 대한 사실만 — 명령이 죽어 cd/export 가 반영되지 않았다, 저장한 작업 디렉터리가 없어 다른 곳에서 돌았다. 결과를 담은 예외(`ShellExecutionException` · `ShellTimeoutException` · `ShellCancelledException`)와 `BashOutput` 이 읽는 백그라운드 명령의 결과도 같다. `connect` 실패는 그 사실을 `SandboxUnavailableException` 메시지에 붙인다 — 그 오류가 곧 도구 결과다 |
+| `drainNotices()` | 실행 환경 수준의 사실 — idle 뒤의 초기화, 샌드박스 재생성 · 소실, 느린 프로비저닝, 워크스페이스 전환, 이 실행이 마지막으로 쓴 뒤 다른 실행(포크 등)이 만든 새 generation — 을 환경 인스턴스마다 하나인 큐에 쌓아 둔다. 코어가 모델에게 가는 모든 도구 호출 뒤에(PostTool 훅 뒤) 꺼내 그 결과 머리에 `[environment] ` 줄로 한 번 싣는다 — `Read` 만 쓴 턴도 듣는다. 꺼낸 것은 전달된 것으로 친다. 큐는 포크와 나누지 않는다(코어 EE-107). 세션의 루트 환경은 초기화(idle reopen · 재생성 · 소실)를 큐에 넣기 **전에** 세션 옵션 레코드에 `unannouncedReset` 으로 남기고, 그 notice 를 꺼낸 drain 이 지운다. 훅 · 워크플로 단계 · 스테이징처럼 코어가 꺼내지 않는 경로의 초기화는 그래서 인스턴스와 함께 사라지지 않고, 세션의 다음 루트 실행이 그 슬롯에 처음 접속할 때 시각을 붙여 한 번 다시 알린다([미전달 초기화 설계](workspace-sandbox-unannounced-reset.md)). 포크는 남기지도 지우지도 않는다 |
+| `ShellCommandResult.notices()` | 그 명령에 대한 사실만 — 명령이 죽어 cd/export 가 반영되지 않았다, 저장한 작업 디렉터리가 없어 다른 곳에서 돌았다. 결과를 담은 예외(`ShellExecutionException` · `ShellTimeoutException` · `ShellCancelledException`)와 `BashOutput` 이 읽는 백그라운드 명령의 결과도 같다. 초기화 뒤에 `connect` 가 실패하면 실행 환경은 그 notice 를 큐에 넣고 오류에는 이유만 남긴다 — 모델에게 가는 호출이면 같은 결과에 `[environment]` 줄로, 훅의 호출이면 다음 drain 이나 다음 턴에 실린다([미전달 초기화 설계](workspace-sandbox-unannounced-reset.md) §6.3) |
 | 취소 — `ShellFeature.CANCELLATION` · `ExecutionOptions.getCancellation()` | `SandboxShell` 이 선언한다. 포그라운드와 백그라운드를 가리지 않는다. 신호가 걸리면 `RunningCommand.kill()` 로 그 exec 의 프로세스 그룹을 끝내고, `execute` 는 그때까지의 출력을 실은 `ShellCancelledException` 을 던진다. 걸린 쪽 스레드는 종료 요청을 보내고 돌아온다. 이미 걸린 신호면 명령을 띄우지 않고 프로비저닝도 하지 않는다. 닿는 범위는 프로세스 그룹까지다(§9). 그래서 코어의 `KillShell` 이 샌드박스의 백그라운드 명령을 끝낸다 |
 | `backgroundCommandTimeout()` | 선언한 프로파일의 `backgroundCommandTimeout` 을 돌려준다. 항상 값이 있고, 기본은 24시간이다(§5.3) |
 | `bindRuntime(id)` | 재정의하지 않는다 — 코어의 기본값 `RuntimeBinding.NONE` 을 쓴다. 이 제공자는 런타임 단위로 쥐는 것이 없다. 워크스페이스는 세션·실행 id 로, 연결은 샌드박스로, 셸 락은 샌드박스와 shellKey 로 잡힌다(§3.2). 그래서 핸들을 닫아도 도는 명령이 멈추지 않고, 같은 id 의 다른 바인딩이 쓰는 것을 놓지 않으며, 바인딩하지 않은 id 의 `resolve` 도 답한다. 나중에 런타임 id 로 무언가를 쥐게 되면 그때 `bindRuntime` 을 구현하고, 그 `close()` 는 도는 명령을 건드리지 않는다. 닫는 순서: 코어 스택(또는 런타임)을 먼저, `WorkspaceSandbox` 를 나중에 닫는다 — 스택 종료가 도는 명령에 거는 취소는 이 어셈블리가 쥔 연결로 나간다 |
@@ -1024,8 +1024,9 @@ loop (up to casRetries; StaleVersionException -> re-read and start over):
 이겼으므로 넘겨받은 쪽도 없다. 라벨이 맞지 않는 샌드박스는 우리 것이 아닐 수 있으므로 지우지 않는다.
 
 **`connect` 가 실패로 끝나면 그 호출이 모은 notice 를 에러에 싣는다.** idle reopen 이나 소실 뒤의 재생성이 실패하면 다음
-호출은 TERMINATED 가 아니라 FAILED 슬롯을 보므로 "/workspace 초기화" 를 알릴 근거가 없다 — 모델이 그것을 들을 곳은
-실패한 그 호출의 에러뿐이다. 저장소나 애플리케이션의 admission 이 던진 예외도 `SandboxUnavailableException` 으로 바꿔
+호출은 TERMINATED 가 아니라 FAILED 슬롯을 보므로 "/workspace 초기화" 를 알릴 근거가 없다 — 그것을 아는 것은 실패한 그
+호출뿐이다. 실행 환경 밖의 호출자는 메시지 끝의 "(also: …)" 로 읽고, 실행 환경은 그 notice 를 떼어 큐에 넣고 세션 옵션에
+남긴다(§7, [미전달 초기화 설계](workspace-sandbox-unannounced-reset.md) §6.3). 저장소나 애플리케이션의 admission 이 던진 예외도 `SandboxUnavailableException` 으로 바꿔
 코어 도구가 "사용 불가" 로 보고하게 한다.
 
 **프로바이더 호출 뒤 CAS 가 실패하면 처음부터 다시 판단한다.** `create` 나 `resume` 을 마친 뒤 RUNNING CAS 가 지면
@@ -1829,7 +1830,7 @@ workspace-purged · session-options-set · session-options-cleared)는
 | 프로비저닝·seed 가 오래 걸림 | 명령 타임아웃에 넣지 않는다. `provisionTimeout` 안이면 명령을 실행하고 걸린 시간을 notice 로 붙인다(§10.1) |
 | seed 의 clone 실패 | 슬롯은 RUNNING 이지만 `seeded=false`. 에러에 실패한 단계를 적는다. 늘어나는 backoff 가 지난 뒤의 호출만 seed 를 다시 돈다 — 매 호출이 같은 실패를 되풀이하지 않게. seed 의 검사 실패는 위의 결정적 실패 행이다 |
 | 워크스페이스가 CLOSING · CLOSED(`closeCause=explicit`) | 사용 불가 — "workspace closed". 애플리케이션이 `reopen` 해야 한다(§10.5) |
-| idle close 뒤의 같은 id | 자동 reopen 으로 새 incarnation 에서 실행하고 "/workspace 가 초기화되었다" notice(§10.5). 그 뒤의 재생성이 실패하면 notice 를 그 에러에 싣는다(§10.1) |
+| idle close 뒤의 같은 id | 자동 reopen 으로 새 incarnation 에서 실행하고 "/workspace 가 초기화되었다" notice(§10.5). 그 뒤의 재생성이 실패하면 notice 를 그 에러에 싣고, 실행 환경은 그것을 떼어 큐와 세션 옵션에 넣는다(§10.1). 그 호출이 훅이라 아무도 꺼내지 않으면 다음 턴이 알린다(§7) |
 | `closedRetention` 이 지나 레코드가 지워진 뒤의 같은 id | 새 워크스페이스로 실행한다. notice 없음 — 구별할 레코드가 남지 않는다(§10.5) |
 | 포크의 부모가 없거나 사용 불가 | 포크도 사용 불가. 부모가 있으면 그 원인을 그대로 싣는다(§8.2) |
 | `mustExist` 바인딩의 레코드가 없음(`purge` 뒤, 지운 id 를 이름 붙인 정의) | 사용 불가 — "sandbox workspace <id> does not exist". 레코드를 만들지 않는다(§10.1) |
@@ -1871,7 +1872,7 @@ exec · files 호출에 `SandboxNotFoundException` · `SharedVolumes.delete` 멱
 `find` 가 같음(밀리초 이상의 정밀도) · scan 필터와, 걸러진 레코드가 끼어 있는 페이징 · 툼스톤 보존과 삭제 · owner/origin 필터가 페이지를 넘어 유지됨. 스위트가 JDBC 와 함께 늦게 생기면 `InMemory` 와 의미가 갈린다.
 
 **세션 옵션 저장소 계약 스위트** — `SessionOptionsStoreContract`([관리 설계](workspace-sandbox-management.md) §4.5). 만들기 전용 put 과 CAS put · 지운 뒤 다시 만든
-레코드의 version 재사용 없음 · 돌려준 레코드와 `find` 가 같음 · `byWorkspace` 와 `workspaces` 의 안정된 페이징 · 다른 필드를
+레코드의 version 재사용 없음 · 돌려준 레코드와 `find` 가 같음(`unannouncedReset` 포함) · `byWorkspace` 와 `workspaces` 의 안정된 페이징 · 다른 필드를
 남기는 멱등 `deleteByWorkspace`.
 
 **`LocalProcessSandboxProvider`** — testkit 에만 있는 프로바이더. 임시 디렉터리 + 로컬 프로세스로 계약을
@@ -1949,6 +1950,7 @@ CI 워크플로가 없으므로 "4단계의 첫 CI" 는 아직 오지 않았다(
 | close 도중 노드 종료 | janitor 가 이어서 CLOSED 까지 | 3 |
 | `closeAfter` 로 닫힌 뒤 같은 세션의 다음 턴 | 같은 워크스페이스를 새 incarnation 으로 자동 reopen 해 빈 `/workspace` 에서 실행, "/workspace 초기화" notice (막지 않는 CLOSED(idle) 레코드) | 3 |
 | 그 턴이 `Read` 만 쓴다 | 첫 도구 결과 머리에 `[environment]` notice 가 한 번, 둘째에는 없다(`drainNotices()`) | 코어 0.3.3 |
+| 그 턴이 텍스트만 답하고 `onStop` 훅의 명령만 샌드박스를 쓴다(초기화를 꺼내는 drain 이 없다) → 다음 턴 | 다음 턴의 첫 도구 결과에 "/workspace was reset at …" notice 가 한 번, 그 뒤로는 없다. 같은 턴에 꺼낸 초기화는 다음 턴에 다시 나오지 않는다 | #28 |
 | 포크가 샌드박스를 재생성 → 부모의 다음 호출 | 포크의 큐에 재생성 notice, 부모는 다음 `connect` 에서 "이 실행이 마지막으로 쓴 뒤 재생성되었다" notice 한 번 | 코어 0.3.3 |
 | 세션 삭제(`onDeleted`) → 같은 id 의 새 세션 | 옵션이 지워지고 `ws:{sid}` 는 즉시 CLOSING, 새 세션은 "being removed", 배경 작업 뒤 새 incarnation | 코어 0.3.3 |
 | `default-profile` 을 바꿔 재배포 → 진행 중인 워크스페이스 | 기존 `primary` 슬롯을 계속 쓴다 | 3 |
@@ -2234,9 +2236,26 @@ docker 계층, K8s 에서만 드러나는 것은 k8s 계층 — 는 [`workspace-
 - **지운 세션의 옵션을 쓸어 내는 유예** — janitor 는 코어의 세션 저장소에 없는 세션의 옵션을 `closedRetention`(기본 7일)이 지난
   뒤에 지운다. 첫 submit 전에 쓴 옵션을 지키려는 유예인데, 따로 설정을 둘지 정하지 않았다
   ([코어 0.3.3 이행 설계](workspace-sandbox-core-033.md) §12 Q5)
-- **턴 사이의 재생성 알림** — 실행 안의 재생성(포크가 만든 것 포함)은 generation 비교로 알린다(§7). 그러나 턴과 턴 사이에 다른
-  세션(공유 `wsm:` 워크스페이스)이나 앞 턴의 포크가 재생성하면, 다음 턴의 새 환경은 비교할 기준이 없어 알리지 못한다. 막으려면
-  세션마다 마지막으로 본 generation 을 `lastWorkspaceId` 옆에 기록해야 한다([코어 0.3.3 이행 설계](workspace-sandbox-core-033.md) §6.5)
+- ~~**코어가 꺼내지 않는 경로의 초기화 notice**~~ *(#28 로 닫았다)* — 훅(`onStop` 등) · 워크플로 스크립트의 도구 호출 · 마지막
+  도구 뒤의 스테이징이 idle reopen 이나 재생성을 일으키면 그 notice 는 꺼내지지 않은 채 환경 인스턴스와 함께 사라졌고, 다음 턴은
+  RUNNING 슬롯을 만나 아무것도 알리지 못했다. 이제 세션의 루트 환경이 초기화를 세션 옵션 레코드의 `unannouncedReset` 으로 남기고,
+  그것을 꺼낸 drain 이 지우며, 남아 있으면 다음 루트 실행이 한 번 다시 알린다(§7, [미전달 초기화 설계](workspace-sandbox-unannounced-reset.md)). 대가로 확인 쓰기가 늦거나 잃어버리면
+  (배경 실행기가 거부 · 포화, 저장소 장애) 이미 들은 초기화를 다음 턴에 한 번 더 듣는다 — 그 사이 모델이 만든 파일까지 사라졌다고
+  읽지 않도록 다시 알릴 때는 초기화 시각을 붙인다([미전달 초기화 설계](workspace-sandbox-unannounced-reset.md) §12). 워크스페이스 전환을
+  꺼낸 뒤 같은 환경이 초기화를 남기면 그 쓰기에 `lastWorkspaceId` 도 함께 적는다 — 그러지 않으면 초기화 쓰기가 레코드 버전을 먼저 올려
+  늦게 도는 전환 기록이 CAS 에 지고, 다음 턴이 같은 전환을 다시 듣는다(같은 설계 §12)
+- **턴 사이의 재생성 알림** — 실행 안의 재생성(포크가 만든 것 포함)은 generation 비교로 알린다(§7). 세션 **자신의** 루트 실행이 일으키고
+  전달하지 못한 초기화는 #28 로 닫았다(위). 남은 것은 다른 주체가 일으킨 재생성이다 — 다른 세션(공유 `wsm:` 워크스페이스), 부모가 그
+  턴에 다시 접속하지 않은 포크(포크는 `unannouncedReset` 을 남기지 않는다. 부모가 자기 뒤의 파일과 포크의 초기화를 가릴 수 없어
+  거짓 notice 가 되기 때문이다), 관리자의 `reopen` 이나 슬롯 terminate 뒤의 `provisionSlot` 처럼 세션이 아닌 경로의 재생성. 다음 턴의
+  새 환경은 비교할 기준이 없어 이것들을 알리지 못한다. 막으려면 세션마다 마지막으로 본 generation 을 `lastWorkspaceId` 옆에 기록해야
+  한다 — 보통 경로에도 쓰기가 생기고 세션마다 레코드가 남으며, 공유 워크스페이스에서 남의 재생성을 알릴지는 제품 판단이다
+  ([코어 0.3.3 이행 설계](workspace-sandbox-core-033.md) §6.5, [미전달 초기화 설계](workspace-sandbox-unannounced-reset.md) §11 Q2 · Q3)
+- **청소 없는 호스트에 남는 `unannouncedReset` 레코드** — 수명 리스너도 `sessionRecords(...)` 도 없는 호스트에서는 마지막 초기화를
+  전달하지 못한 채 지워진 세션의 작은 레코드가 영원히 남는다(`lastWorkspaceId` 레코드와 같다). `closed-retention` 같은 만료를 둘지
+  정하지 않았다([미전달 초기화 설계](workspace-sandbox-unannounced-reset.md) §11 Q7)
+- **관리 화면에 보이지 않는 `unannouncedReset`** — `SessionOptionsView` 와 관리 API 는 아직 전달되지 않은 초기화를 보이지 않는다.
+  "모델이 파일을 잃었다" 는 보고를 볼 때 쓸모가 있어 보일지 정하지 않았다([미전달 초기화 설계](workspace-sandbox-unannounced-reset.md) §11 Q5)
 - **지운 세션이 관리형 워크스페이스에 남긴 셸 상태** — `/workspace/.aimon-shell/session-{sid}` 는 지우지 않는다. 지우려면
   리스너가 짧게 끝나야 하는 자리에서 `connect`(프로비저닝)를 해야 한다. 같은 워크스페이스에서 같은 id 로 다시 만든 세션은 그
   cwd 와 export 에서 시작한다. 배경 단계에서 RUNNING 슬롯이 있을 때만 지우는 방법이 있다
@@ -2318,6 +2337,7 @@ docker 계층, K8s 에서만 드러나는 것은 k8s 계층 — 는 [`workspace-
 - [`workspace-sandbox-core-031.md`](workspace-sandbox-core-031.md) — aimon-core 0.3.1 을 따라간 변경(셸 취소 · 백그라운드 상한 · 런타임 바인딩)의 설계, 열린 질문(§9)과 구현이 벗어난 점(§10)
 - [`workspace-sandbox-management.md`](workspace-sandbox-management.md) — 워크스페이스 관리(만들기 · 세션 옵션 · 관리 API)의 설계와 구현이 벗어난 점(§15, §16), 코어 0.3.3 이후 바뀐 점(§17)
 - [`workspace-sandbox-core-033.md`](workspace-sandbox-core-033.md) — aimon-core 0.3.3 의 세 이음매(요청 속성 · 세션 소유자와 삭제 이벤트 · 실행 환경 notice)를 따라간 변경의 설계, 열린 질문(§12)과 구현이 벗어난 점(§14)
+- [`workspace-sandbox-unannounced-reset.md`](workspace-sandbox-unannounced-reset.md) — 코어가 꺼내지 않는 경로(훅 · 워크플로 단계 · 스테이징)의 초기화 notice 를 세션 옵션에 남겨 다음 턴에 알리는 변경(#28)의 설계, 열린 질문(§11)과 구현이 벗어난 점(§12)
 - [`opensandbox-spike.md`](opensandbox-spike.md) — 2단계(OpenSandbox 스파이크)의 결과와 근거
 - [`sandbox.md` @ `704013c`](https://github.com/kangwoo/aimon-sandbox/blob/704013c02cb14f16ec37ebf8c07f90d7e107db73/docs/design/sandbox.md) — 이 설계가 대체한 identifier 기반 설계(삭제됨)
 - [`scope-model.md`](https://github.com/kangwoo/aimon-core/blob/main/docs/overview/scope-model.md) — 수명과 소멸 책임

@@ -170,8 +170,7 @@ final class SandboxShell implements VirtualShell {
             // Before connect: a command that is not to run provisions nothing and records no activity.
             throw cancelledBeforeStart();
         }
-        final ConnectedSlot slot = manager.connect(binding);
-        pending.addAll(slot);
+        final ConnectedSlot slot = pending.connect(manager, binding);
         slot.activity().record(false);
         if (options.isBackground() || options.isHook()) {
             // Neither may hold the session's shell: a background command outlives the call, and a hook runs on behalf

@@ -271,13 +271,15 @@ public final class SandboxWorkspaceManager {
         /**
          * The error with this call's notices appended. A reset notice (idle reopen, a lost or terminated sandbox) is
          * otherwise lost when the recreate that follows it fails: the next call finds the slot FAILED, not
-         * TERMINATED, and has nothing to tell (§15).
+         * TERMINATED, and has nothing to tell (§15). The execution environment takes the parts apart again and queues
+         * the notices for core's drain (docs/design/workspace-sandbox-unannounced-reset.md §6.3).
          */
         private SandboxUnavailableException withNotices(SandboxUnavailableException e) {
             if (notices.isEmpty()) {
                 return e;
             }
-            return new SandboxUnavailableException(e.getMessage() + " (also: " + String.join("; ", notices) + ")", e);
+            return new SandboxUnavailableWithNoticesException(e.getMessage(), notices, reset, binding.workspaceId(),
+                    binding.slot(), e);
         }
 
         /** @return the connected slot, or {@code null} to go round again */
@@ -1194,7 +1196,8 @@ public final class SandboxWorkspaceManager {
 
     /**
      * Clears a session's attachment and rule, keeping its {@code lastWorkspaceId} so its next turn hears that it moved
-     * (§6.4); a record with nothing left is deleted. The same rights as {@link #setSessionOptions}.
+     * (§6.4), and its unannounced reset; a record with nothing left is deleted. The same rights as
+     * {@link #setSessionOptions}.
      *
      * <p>
      * <b>Internal.</b> Public only for use across this library's packages: not supported API, and it may change in
@@ -1226,11 +1229,12 @@ public final class SandboxWorkspaceManager {
             // although the model was last told it runs here.
             final Optional<SandboxWorkspaceId> last = record.lastWorkspaceId().or(record::workspace);
             try {
-                if (last.isEmpty()) {
+                if (last.isEmpty() && record.unannouncedReset().isEmpty()) {
                     sessionOptions.delete(session, record.version());
                 } else {
-                    sessionOptions.put(record.toBuilder().setBy(who).workspace(null).unattached(null)
-                            .lastWorkspaceId(last.get()).updatedAt(clock.instant()).build(),
+                    sessionOptions.put(
+                            record.toBuilder().setBy(who).workspace(null).unattached(null)
+                                    .lastWorkspaceId(last.orElse(null)).updatedAt(clock.instant()).build(),
                             OptionalLong.of(record.version()));
                 }
                 emitSession(SandboxEvent.Type.SESSION_OPTIONS_CLEARED, session, record.workspace().orElse(null),
@@ -1245,11 +1249,11 @@ public final class SandboxWorkspaceManager {
     }
 
     /**
-     * Deletes a session's options record outright, {@code lastWorkspaceId} included: the administrator's cleanup for a
-     * session deleted outside core's router, which fires no {@code SessionLifecycleListener}. Such a session may be
-     * unknown to every owner source by now, and a single-tenant host has none at all — yet a request attribute can
-     * still leave a {@code lastWorkspaceId} record behind there — so the owner only names the event: unknown, the
-     * event names the record's {@code setBy}.
+     * Deletes a session's options record outright, {@code lastWorkspaceId} and unannounced reset included: the
+     * administrator's cleanup for a session deleted outside core's router, which fires no
+     * {@code SessionLifecycleListener}. Such a session may be unknown to every owner source by now, and a single-tenant
+     * host has none at all — yet a request attribute can still leave a {@code lastWorkspaceId} record behind there —
+     * so the owner only names the event: unknown, the event names the record's {@code setBy}.
      */
     private void deleteSessionOptions(SessionId session, Acting acting) {
         Objects.requireNonNull(session, "session must not be null");
@@ -1290,9 +1294,88 @@ public final class SandboxWorkspaceManager {
     }
 
     /**
-     * Records where a session last connected (§6.4) on the background executor, so that core's
-     * {@code drainNotices()}, which triggers it, never waits on the store (core-033 design §6.4). A refused submission
-     * is logged; the worst case is the switch notice repeating once.
+     * Keeps a reset of a session's sandbox on its options record until a drain delivers it
+     * (docs/design/workspace-sandbox-unannounced-reset.md §2.1, §6.1). Called by the root environment whose
+     * {@code connect} reset the slot, synchronously and before the reset notice is queued — so no drain can return the
+     * notice before it is durable — on a path that is provisioning a sandbox anyway. A newer reset replaces an older
+     * one: both say that the files from before are gone.
+     *
+     * <p>
+     * Best effort and never throws: on a store error or {@code casRetries} lost CASes it logs a WARN and returns empty,
+     * and only a reset that is also never drained is lost, as before. A session with no record gets one holding only
+     * the reset, unless core's session store is wired and no longer knows the session. Like a {@code lastWorkspaceId}
+     * record it grants nothing and lists as no attachment.
+     *
+     * <p>
+     * A switch the same environment already delivered, whose asynchronous {@link #acknowledgeLater} may still be
+     * queued, is written along with the reset, under the same strict version CAS: otherwise this write would move the
+     * record past {@code switchVersion} first and that acknowledgement would lose its CAS, so the next turn would hear
+     * the switch again (design §12).
+     *
+     * <p>
+     * <b>Internal.</b> Public only for use across this library's packages: not supported API, and it may change in
+     * any release.
+     *
+     * @param session
+     *            the session
+     * @param workspace
+     *            the workspace whose slot was reset
+     * @param slot
+     *            the slot
+     * @param switchVersion
+     *            the version that acknowledgement expects; empty when the session had no record
+     * @param lastWorkspace
+     *            the delivered switch's target, or empty when no switch acknowledgement may be pending
+     * @param setBy
+     *            the executing caller, recorded on a record this creates
+     * @return the stored record — its version and its reset as the store keeps them — or empty when nothing was
+     *         stored
+     */
+    public Optional<SessionSandboxOptions> markResetUnannounced(SessionId session, SandboxWorkspaceId workspace,
+            String slot, OptionalLong switchVersion, Optional<SandboxWorkspaceId> lastWorkspace, WorkspaceOwner setBy) {
+        final UnannouncedReset reset = UnannouncedReset.of(workspace, slot, clock.instant());
+        try {
+            for (int attempt = 0; attempt <= settings.casRetries(); attempt++) {
+                final Optional<SessionSandboxOptions> current = sessionOptions.find(session);
+                try {
+                    if (current.isPresent()) {
+                        final SessionSandboxOptions.Builder next = current.get().toBuilder().unannouncedReset(reset);
+                        if (lastWorkspace.isPresent() && switchVersion.isPresent()
+                                && current.get().version() == switchVersion.getAsLong()) {
+                            next.lastWorkspaceId(lastWorkspace.get());
+                        }
+                        return Optional.of(sessionOptions.put(next.build(), OptionalLong.of(current.get().version())));
+                    }
+                    final Optional<SessionRecordStore> records = sessionRecords();
+                    if (records.isPresent() && !records.get().exists(session)) {
+                        log.debug("Session {} no longer exists; its reset is not kept", session.value());
+                        return Optional.empty();
+                    }
+                    return Optional
+                            .of(sessionOptions.put(
+                                    SessionSandboxOptions.builder().session(session).setBy(setBy)
+                                            .lastWorkspaceId(
+                                                    switchVersion.isEmpty() ? lastWorkspace.orElse(null) : null)
+                                            .unannouncedReset(reset).updatedAt(clock.instant()).build(),
+                                    OptionalLong.empty()));
+                } catch (StaleVersionException e) {
+                    log.debug("CAS conflict on the options of session {} (attempt {}); re-reading", session.value(),
+                            attempt + 1);
+                }
+            }
+            log.warn("The options of session {} kept changing; its reset is told only if this execution's notices are "
+                    + "drained", session.value());
+        } catch (RuntimeException e) {
+            log.warn("Keeping the reset of session {} failed; it is told only if this execution's notices are "
+                    + "drained: {}", session.value(), e.getMessage());
+        }
+        return Optional.empty();
+    }
+
+    /**
+     * Records on the background executor what a drain delivered, so that core's {@code drainNotices()}, which triggers
+     * it, never waits on the store (core-033 design §6.4, docs/design/workspace-sandbox-unannounced-reset.md §6.2). A
+     * refused submission is logged; the worst case is the switch notice, or a reset, told once more.
      *
      * <p>
      * <b>Internal.</b> Public only for use across this library's packages: not supported API, and it may change in
@@ -1301,48 +1384,93 @@ public final class SandboxWorkspaceManager {
      * @param session
      *            the session
      * @param expectedVersion
-     *            the version the binding policy read; empty when the session had no options record
-     * @param workspace
-     *            where it connected
+     *            the version of the options record the environment knows — the one the binding policy read, or its
+     *            own mark's; empty when the session had no record
+     * @param lastWorkspace
+     *            where the session connected, when a switch was delivered (or recorded silently)
+     * @param delivered
+     *            the unannounced reset the drained notices covered
      * @param setBy
      *            the executing caller, recorded on a record this creates
      */
-    public void recordLastWorkspaceLater(SessionId session, OptionalLong expectedVersion, SandboxWorkspaceId workspace,
-            WorkspaceOwner setBy) {
-        runInBackground("recording the last workspace of session " + session.value(),
-                () -> recordLastWorkspace(session, expectedVersion, workspace, setBy));
+    public void acknowledgeLater(SessionId session, OptionalLong expectedVersion,
+            Optional<SandboxWorkspaceId> lastWorkspace, Optional<UnannouncedReset> delivered, WorkspaceOwner setBy) {
+        runInBackground("recording the delivered notices of session " + session.value(),
+                () -> acknowledge(session, expectedVersion, lastWorkspace, delivered, setBy));
     }
 
     /**
-     * Records where a session last connected (§6.4), best effort: a lost CAS or a store error is logged, and the worst
-     * case is the switch notice repeating once. With no {@code expectedVersion} the session had no record and one is
-     * created holding only {@code lastWorkspaceId} — unless core's session store is wired and no longer knows the
-     * session: a write queued behind a deletion must not bring the deleted session's state back.
+     * Records what a drain delivered, best effort: a store error or {@code casRetries} lost CASes are logged.
      *
-     * <p>
-     * A record created here grants nothing: {@code setBy} is the executing caller, who need not be the session's
-     * owner, and every right over the session is checked against the owner source. It has no {@code workspace}, so no
-     * listing shows it as an attachment.
+     * <ul>
+     * <li>{@code lastWorkspace} is written only while the record is still at {@code expectedVersion} — a CAS on what
+     * the binding read, so a re-attach since is never overwritten; the worst case is the switch notice repeating once
+     * (§6.4). With no {@code expectedVersion} the session had no record and one is created holding only
+     * {@code lastWorkspaceId} — unless core's session store is wired and no longer knows the session: a write queued
+     * behind a deletion must not bring the deleted session's state back.</li>
+     * <li>{@code delivered} is cleared only while the record still holds exactly that reset: a newer one, written since
+     * by another execution of the session, is left for its own delivery. Nothing is created for it.</li>
+     * </ul>
+     *
+     * A record left with nothing in it is deleted. A record created here grants nothing: {@code setBy} is the executing
+     * caller, who need not be the session's owner, and every right over the session is checked against the owner
+     * source. It has no {@code workspace}, so no listing shows it as an attachment.
      */
-    void recordLastWorkspace(SessionId session, OptionalLong expectedVersion, SandboxWorkspaceId workspace,
-            WorkspaceOwner setBy) {
+    void acknowledge(SessionId session, OptionalLong expectedVersion, Optional<SandboxWorkspaceId> lastWorkspace,
+            Optional<UnannouncedReset> delivered, WorkspaceOwner setBy) {
         try {
-            if (expectedVersion.isEmpty()) {
-                final Optional<SessionRecordStore> records = sessionRecords();
-                if (records.isPresent() && !records.get().exists(session)) {
-                    log.debug("Session {} no longer exists; its last workspace is not recorded", session.value());
+            for (int attempt = 0; attempt <= settings.casRetries(); attempt++) {
+                final Optional<SessionSandboxOptions> current = sessionOptions.find(session);
+                try {
+                    if (current.isEmpty()) {
+                        if (lastWorkspace.isPresent() && expectedVersion.isEmpty()) {
+                            final Optional<SessionRecordStore> records = sessionRecords();
+                            if (records.isPresent() && !records.get().exists(session)) {
+                                log.debug("Session {} no longer exists; its last workspace is not recorded",
+                                        session.value());
+                                return;
+                            }
+                            sessionOptions.put(
+                                    SessionSandboxOptions.builder().session(session).setBy(setBy)
+                                            .lastWorkspaceId(lastWorkspace.get()).updatedAt(clock.instant()).build(),
+                                    OptionalLong.empty());
+                        }
+                        return;
+                    }
+                    final SessionSandboxOptions record = current.get();
+                    final SessionSandboxOptions.Builder next = record.toBuilder();
+                    boolean changed = false;
+                    if (lastWorkspace.isPresent() && expectedVersion.isPresent()
+                            && record.version() == expectedVersion.getAsLong()) {
+                        next.lastWorkspaceId(lastWorkspace.get());
+                        changed = true;
+                    }
+                    if (delivered.isPresent() && record.unannouncedReset().equals(delivered)) {
+                        next.unannouncedReset(null);
+                        changed = true;
+                    }
+                    if (!changed) {
+                        return;
+                    }
+                    final SessionSandboxOptions updated = next.build();
+                    if (updated.workspace().isEmpty() && updated.unattached().isEmpty()
+                            && updated.lastWorkspaceId().isEmpty() && updated.unannouncedReset().isEmpty()) {
+                        sessionOptions.delete(session, record.version());
+                    } else {
+                        sessionOptions.put(updated, OptionalLong.of(record.version()));
+                    }
                     return;
+                } catch (StaleVersionException e) {
+                    // Re-read: the switch part then no longer matches its version and drops out, as it always did;
+                    // the clear compares the value and still applies.
+                    log.debug("CAS conflict on the options of session {} (attempt {}); re-reading", session.value(),
+                            attempt + 1);
                 }
-                sessionOptions.put(SessionSandboxOptions.builder().session(session).setBy(setBy)
-                        .lastWorkspaceId(workspace).updatedAt(clock.instant()).build(), OptionalLong.empty());
-                return;
             }
-            final long expected = expectedVersion.getAsLong();
-            sessionOptions.find(session).filter(current -> current.version() == expected)
-                    .ifPresent(current -> sessionOptions.put(current.toBuilder().lastWorkspaceId(workspace).build(),
-                            OptionalLong.of(expected)));
+            log.debug("The options of session {} kept changing; a delivered notice may be told once more",
+                    session.value());
         } catch (RuntimeException e) {
-            log.debug("Recording the last workspace of session {} failed; the switch notice may repeat once: {}",
+            log.debug("Recording the delivered notices of session {} failed; one may be told once more: {}",
                     session.value(), e.getMessage());
         }
     }
@@ -1356,7 +1484,7 @@ public final class SandboxWorkspaceManager {
      * the session's lease, so it does store reads and CAS writes only and no provider call:
      *
      * <ol>
-     * <li>the session's options record is deleted;</li>
+     * <li>the session's options record is deleted — an unannounced reset goes with it: the session is gone;</li>
      * <li>its derived workspace {@code ws:{sessionId}} is marked {@link CloseCause#SESSION_DELETED} — OPEN becomes
      * CLOSING, a CLOSING or CLOSED record keeps its state — so that from now on {@code connect} refuses it and a new
      * session with the same id never reaches the deleted one's sandbox. A managed workspace the session was attached to

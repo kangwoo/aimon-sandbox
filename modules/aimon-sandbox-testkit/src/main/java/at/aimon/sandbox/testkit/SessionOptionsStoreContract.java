@@ -3,6 +3,7 @@ package at.aimon.sandbox.testkit;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -26,13 +27,15 @@ import at.aimon.sandbox.workspace.SessionOptionsStore;
 import at.aimon.sandbox.workspace.SessionSandboxOptions;
 import at.aimon.sandbox.workspace.StaleVersionException;
 import at.aimon.sandbox.workspace.TenantId;
+import at.aimon.sandbox.workspace.UnannouncedReset;
 import at.aimon.sandbox.workspace.WorkspaceOwner;
 
 /**
  * The contract every {@link SessionOptionsStore} must pass (docs/design/workspace-sandbox-management.md §4.5, §5.2):
  * create-only and CAS puts, {@link StaleVersionException} for a stale, absent or deleted CAS, no version reuse after
  * delete, records that read back exactly as returned, stable {@code byWorkspace}, {@code workspaces} and
- * {@code sessions} paging, and an idempotent {@code deleteByWorkspace} that keeps every other field.
+ * {@code sessions} paging, and an idempotent {@code deleteByWorkspace} that keeps every other field. Every field
+ * round-trips, the unannounced reset included (docs/design/workspace-sandbox-unannounced-reset.md §3.4).
  * {@code InMemorySessionOptionsStore} passes it; a persistent store (step 6) must pass the same suite.
  *
  * <p>
@@ -44,6 +47,7 @@ public abstract class SessionOptionsStoreContract {
     private static final WorkspaceOwner OWNER = WorkspaceOwner.of(TenantId.of("t"), Principal.user("alice"));
     private static final SandboxWorkspaceId A = SandboxWorkspaceId.of("wsm:a");
     private static final SandboxWorkspaceId B = SandboxWorkspaceId.of("wsm:b");
+    private static final UnannouncedReset RESET = UnannouncedReset.of(A, "primary", T0.plusSeconds(1));
 
     private SessionOptionsStore store;
 
@@ -86,6 +90,32 @@ public abstract class SessionOptionsStoreContract {
         assertThat(created.workspace()).contains(A);
         assertThat(created.unattached()).contains(UnattachedRule.REJECT);
         assertThat(created.lastWorkspaceId()).contains(B);
+        assertThat(created.unannouncedReset()).isEmpty();
+    }
+
+    @Test
+    void theUnannouncedResetRoundTripsIsReplacedAndCleared() {
+        final SessionSandboxOptions created = store.put(options("s1", null).toBuilder().unannouncedReset(RESET).build(),
+                OptionalLong.empty());
+        assertThat(created.unannouncedReset()).contains(RESET);
+        assertThat(store.find(SessionId.of("s1"))).contains(created);
+
+        // Nanoseconds that a store may round (§3.1 of the design keeps the stored value, not the written one): whatever
+        // it keeps, find must answer the same as the write returned, to at least millisecond precision.
+        final Instant precise = T0.plusNanos(1_234_567_891L);
+        final SessionSandboxOptions replaced = store.put(
+                created.toBuilder().unannouncedReset(UnannouncedReset.of(B, "exp-a", precise)).build(),
+                OptionalLong.of(created.version()));
+        assertThat(store.find(SessionId.of("s1"))).contains(replaced);
+        final UnannouncedReset kept = replaced.unannouncedReset().orElseThrow();
+        assertThat(kept.isOf(B, "exp-a")).isTrue();
+        assertThat(Duration.between(kept.at(), precise).abs()).as("kept to at least millisecond precision")
+                .isLessThan(Duration.ofMillis(1));
+
+        final SessionSandboxOptions cleared = store.put(replaced.toBuilder().unannouncedReset(null).build(),
+                OptionalLong.of(replaced.version()));
+        assertThat(cleared.unannouncedReset()).isEmpty();
+        assertThat(store.find(SessionId.of("s1"))).contains(cleared);
     }
 
     @Test
@@ -227,10 +257,16 @@ public abstract class SessionOptionsStoreContract {
         final List<String> expected = new ArrayList<>();
         for (int i = 0; i < 11; i++) {
             final String session = String.format("s%03d", i);
-            // Attached or not, and a record that only remembers where its session last ran: sessions lists them all.
-            final SessionSandboxOptions record = i % 3 == 0
-                    ? options(session, null).toBuilder().lastWorkspaceId(A).build()
-                    : options(session, i % 2 == 0 ? A : null);
+            // Attached or not, a record that only remembers where its session last ran, and one that only holds an
+            // unannounced reset: sessions lists them all.
+            final SessionSandboxOptions record;
+            if (i % 3 == 0) {
+                record = options(session, null).toBuilder().lastWorkspaceId(A).build();
+            } else if (i % 5 == 1) {
+                record = options(session, null).toBuilder().unannouncedReset(RESET).build();
+            } else {
+                record = options(session, i % 2 == 0 ? A : null);
+            }
             store.put(record, OptionalLong.empty());
             expected.add(session);
         }
@@ -260,9 +296,8 @@ public abstract class SessionOptionsStoreContract {
 
     @Test
     void deleteByWorkspaceClearsTheAttachmentKeepsTheRestAndIsIdempotent() {
-        final SessionSandboxOptions attached = store.put(
-                options("s1", A).toBuilder().unattached(UnattachedRule.REJECT).lastWorkspaceId(A).build(),
-                OptionalLong.empty());
+        final SessionSandboxOptions attached = store.put(options("s1", A).toBuilder().unattached(UnattachedRule.REJECT)
+                .lastWorkspaceId(A).unannouncedReset(RESET).build(), OptionalLong.empty());
         final SessionSandboxOptions other = create("s2", B);
 
         assertThat(store.deleteByWorkspace(A)).isEqualTo(1);
@@ -272,6 +307,7 @@ public abstract class SessionOptionsStoreContract {
         assertThat(cleared.workspace()).isEmpty();
         assertThat(cleared.unattached()).contains(UnattachedRule.REJECT);
         assertThat(cleared.lastWorkspaceId()).contains(A);
+        assertThat(cleared.unannouncedReset()).contains(RESET);
         assertThat(cleared.version()).as("a CAS holding the attached record must lose")
                 .isGreaterThan(attached.version());
         assertThat(store.find(SessionId.of("s2"))).contains(other);

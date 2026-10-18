@@ -63,7 +63,8 @@ import at.aimon.sandbox.workspace.WorkspaceView;
  * two sessions of one owner share its files but not their cwd, an explicit close answers "closed" and a purge "does
  * not exist" — and, as documented behaviour of a shared workspace (§6.5), one session can read another's shell state.
  * The core 0.3.3 seams on the same server (docs/design/workspace-sandbox-core-033.md §9): a turn placed by request
- * attribute, and a deleted session's {@code ws:{sid}} closed by the lifecycle listener.
+ * attribute, and a deleted session's {@code ws:{sid}} closed by the lifecycle listener. A reset caused by a hook's
+ * command is told on the session's next turn (docs/design/workspace-sandbox-unannounced-reset.md §9).
  */
 @Tag("docker")
 class ManagedWorkspaceSandboxIT {
@@ -257,5 +258,35 @@ class ManagedWorkspaceSandboxIT {
 
         assertThat(provider.status(ref)).isEmpty();
         assertThat(assembly.store().find(derived)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("#28: a hook-only turn resets the real sandbox after an idle close; the next turn hears it once")
+    void aHookOnlyTurnsResetIsToldOnTheNextTurn() throws Exception {
+        final SessionId session = SessionId.generate();
+        final SandboxWorkspaceId derived = SandboxWorkspaceId.of("ws:" + session.value());
+        bash(mainTurn(session), "echo before > /workspace/repo/kept.txt");
+        clock.advance(Duration.ofHours(2));
+        assembly.janitor().runOnce();
+        clock.advance(Duration.ofHours(24));
+        assembly.janitor().runOnce();
+        assertThat(assembly.store().find(derived).orElseThrow().state()).isEqualTo(WorkspaceState.CLOSED);
+
+        // A Stop hook's command: it reopens the workspace and nothing drains its notices.
+        mainTurn(session).shell().execute(() -> "true",
+                ExecutionOptions.builder().timeout(Duration.ofSeconds(60)).hook(true).build());
+        assertThat(sessionOptions.find(session).orElseThrow().unannouncedReset()).isPresent();
+
+        final ExecutionEnvironment next = mainTurn(session);
+        assertThat(bash(next, "ls -a /workspace/repo").stdout()).doesNotContain("kept.txt");
+        assertThat(next.drainNotices()).singleElement().asString().startsWith("/workspace was reset at ");
+        assertThat(next.drainNotices()).isEmpty();
+        // The acknowledgement runs on the single background thread: whatever was queued before this has run.
+        background.submit(() -> {
+        }).get(60, TimeUnit.SECONDS);
+        assertThat(sessionOptions.find(session)).isEmpty();
+        final ExecutionEnvironment after = mainTurn(session);
+        bash(after, "true");
+        assertThat(after.drainNotices()).isEmpty();
     }
 }

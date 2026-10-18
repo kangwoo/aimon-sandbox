@@ -85,7 +85,11 @@ SessionSpec.builder().lifecycleListener(sandbox.sessionLifecycleListener());   /
   with the same id in the same workspace starts from its cwd and exports.
 - **Notices reach every tool result.** A reset, a re-created sandbox or a workspace move is told to the model at the
   head of the next tool result of any kind — a `Read` too — once, as an `[environment]` line. `ShellCommandResult
-  .notices()` now carries only what is true of that command (it was killed; its working directory was gone).
+  .notices()` now carries only what is true of that command (it was killed; its working directory was gone). A reset
+  caused where core drains nothing — a Stop hook's command, a workflow step, a staging call — is kept on the session's
+  options and told on the session's next tool result, a turn later if need be, so a custom `SessionOptionsStore` must
+  persist `unannouncedReset`
+  ([`docs/design/workspace-sandbox-unannounced-reset.md`](docs/design/workspace-sandbox-unannounced-reset.md)).
 
 - **Use `shared(...)`, not `provider(Supplier)`.** The host owns the `WorkspaceSandbox` and closes it; the stack
   must not. `ExecutionEnvironmentSpec.factory` no longer exists in aimon-core 0.3.1.

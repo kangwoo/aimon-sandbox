@@ -151,10 +151,13 @@ public final class SandboxExecutionEnvironmentProvider implements ExecutionEnvir
         // whether that caller may use the parent's workspace (§8.2, §8.3). It never inherits the parent's caller.
         final WorkspaceOwner caller = callers.callerOf(request.principal());
         // A fork inherits mustExist (it must not create what its parent may not) but never the parent's switch: the
-        // parent's environment announces and records it.
+        // parent's environment announces and records it. Nor the session's bookkeeping: a fork never keeps a reset on
+        // the session's record, since the parent, which read that record at its bind, could not tell its own later
+        // files from the fork's reset and the next turn would hear a false one
+        // (docs/design/workspace-sandbox-unannounced-reset.md §2.2).
         return parentBinding.toBuilder().caller(caller).slot(choice.slot())
                 .requiredProfile(choice.requiredProfile().orElse(null)).shellKey(ShellKey.execution(executionId))
-                .root(root).workspaceSwitch(null).build();
+                .root(root).workspaceSwitch(null).sessionBookkeeping(null).build();
     }
 
     /**

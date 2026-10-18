@@ -9,8 +9,9 @@ import at.aimon.sandbox.binding.UnattachedRule;
 
 /**
  * One session's sandbox options (docs/design/workspace-sandbox-management.md §5.2): the managed workspace its turns
- * are attached to, its own unattached rule, and the workspace it last connected to — kept apart from the workspace
- * record, which must not grow with its sessions. Changed only by version CAS through {@link SessionOptionsStore}.
+ * are attached to, its own unattached rule, the workspace it last connected to, and a reset of its sandbox the model
+ * may not have heard of (docs/design/workspace-sandbox-unannounced-reset.md) — kept apart from the workspace record,
+ * which must not grow with its sessions. Changed only by version CAS through {@link SessionOptionsStore}.
  *
  * <p>
  * Immutable; {@link #toBuilder()} returns a copy. {@link #version()} is assigned by the store.
@@ -22,6 +23,7 @@ public final class SessionSandboxOptions {
     private final SandboxWorkspaceId workspace;
     private final UnattachedRule unattached;
     private final SandboxWorkspaceId lastWorkspaceId;
+    private final UnannouncedReset unannouncedReset;
     private final Instant updatedAt;
     private final long version;
 
@@ -31,6 +33,7 @@ public final class SessionSandboxOptions {
         this.workspace = builder.workspace;
         this.unattached = builder.unattached;
         this.lastWorkspaceId = builder.lastWorkspaceId;
+        this.unannouncedReset = builder.unannouncedReset;
         this.updatedAt = Objects.requireNonNull(builder.updatedAt, "updatedAt must not be null");
         this.version = builder.version;
     }
@@ -43,7 +46,8 @@ public final class SessionSandboxOptions {
     /** @return a builder holding these values */
     public Builder toBuilder() {
         return new Builder().session(session).setBy(setBy).workspace(workspace).unattached(unattached)
-                .lastWorkspaceId(lastWorkspaceId).updatedAt(updatedAt).version(version);
+                .lastWorkspaceId(lastWorkspaceId).unannouncedReset(unannouncedReset).updatedAt(updatedAt)
+                .version(version);
     }
 
     /** @return the session */
@@ -71,6 +75,14 @@ public final class SessionSandboxOptions {
         return Optional.ofNullable(lastWorkspaceId);
     }
 
+    /**
+     * @return a reset of the session's sandbox that no drain has delivered yet, told again at the session's next root
+     *         execution that connects that slot (docs/design/workspace-sandbox-unannounced-reset.md)
+     */
+    public Optional<UnannouncedReset> unannouncedReset() {
+        return Optional.ofNullable(unannouncedReset);
+    }
+
     /** @return when the record was last written */
     public Instant updatedAt() {
         return updatedAt;
@@ -91,7 +103,8 @@ public final class SessionSandboxOptions {
         }
         return version == that.version && session.equals(that.session) && setBy.equals(that.setBy)
                 && Objects.equals(workspace, that.workspace) && unattached == that.unattached
-                && Objects.equals(lastWorkspaceId, that.lastWorkspaceId) && updatedAt.equals(that.updatedAt);
+                && Objects.equals(lastWorkspaceId, that.lastWorkspaceId)
+                && Objects.equals(unannouncedReset, that.unannouncedReset) && updatedAt.equals(that.updatedAt);
     }
 
     @Override
@@ -102,12 +115,14 @@ public final class SessionSandboxOptions {
     @Override
     public String toString() {
         return "SessionSandboxOptions{" + session + ", workspace=" + workspace + ", unattached=" + unattached
-                + ", lastWorkspaceId=" + lastWorkspaceId + ", version=" + version + '}';
+                + ", lastWorkspaceId=" + lastWorkspaceId
+                + (unannouncedReset != null ? ", unannouncedReset=" + unannouncedReset : "") + ", version=" + version
+                + '}';
     }
 
     /**
      * What {@code setSessionOptions} writes: the attachment and the session's unattached rule. Both fields are
-     * replaced — an absent one is cleared — and the record's {@code lastWorkspaceId} is kept.
+     * replaced — an absent one is cleared — and the record's {@code lastWorkspaceId} and unannounced reset are kept.
      */
     public static final class Update {
 
@@ -166,6 +181,7 @@ public final class SessionSandboxOptions {
         private SandboxWorkspaceId workspace;
         private UnattachedRule unattached;
         private SandboxWorkspaceId lastWorkspaceId;
+        private UnannouncedReset unannouncedReset;
         private Instant updatedAt;
         private long version;
 
@@ -194,6 +210,11 @@ public final class SessionSandboxOptions {
 
         public Builder lastWorkspaceId(SandboxWorkspaceId lastWorkspaceId) {
             this.lastWorkspaceId = lastWorkspaceId;
+            return this;
+        }
+
+        public Builder unannouncedReset(UnannouncedReset unannouncedReset) {
+            this.unannouncedReset = unannouncedReset;
             return this;
         }
 
