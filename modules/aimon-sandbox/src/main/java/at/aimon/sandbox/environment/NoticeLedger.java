@@ -18,7 +18,7 @@ interface NoticeLedger {
     NoticeLedger NONE = new NoticeLedger() {
         @Override
         public Optional<SessionSandboxOptions> markResetUnannounced(SessionId session, SandboxWorkspaceId workspace,
-                String slot) {
+                String slot, OptionalLong switchVersion, Optional<SandboxWorkspaceId> lastWorkspace) {
             return Optional.empty();
         }
 
@@ -37,9 +37,15 @@ interface NoticeLedger {
      *            the workspace whose slot was reset
      * @param slot
      *            the slot
+     * @param switchVersion
+     *            the record version a delivered switch's acknowledgement expects
+     * @param lastWorkspace
+     *            that switch's target, written along when the record is still at {@code switchVersion}; empty when no
+     *            switch acknowledgement may be pending
      * @return the stored record, or empty when nothing was stored
      */
-    Optional<SessionSandboxOptions> markResetUnannounced(SessionId session, SandboxWorkspaceId workspace, String slot);
+    Optional<SessionSandboxOptions> markResetUnannounced(SessionId session, SandboxWorkspaceId workspace, String slot,
+            OptionalLong switchVersion, Optional<SandboxWorkspaceId> lastWorkspace);
 
     /**
      * Records what a drain delivered; must not block on remote I/O.

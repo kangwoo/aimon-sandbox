@@ -1307,6 +1307,12 @@ public final class SandboxWorkspaceManager {
      * record it grants nothing and lists as no attachment.
      *
      * <p>
+     * A switch the same environment already delivered, whose asynchronous {@link #acknowledgeLater} may still be
+     * queued, is written along with the reset, under the same strict version CAS: otherwise this write would move the
+     * record past {@code switchVersion} first and that acknowledgement would lose its CAS, so the next turn would hear
+     * the switch again (design §12).
+     *
+     * <p>
      * <b>Internal.</b> Public only for use across this library's packages: not supported API, and it may change in
      * any release.
      *
@@ -1316,29 +1322,42 @@ public final class SandboxWorkspaceManager {
      *            the workspace whose slot was reset
      * @param slot
      *            the slot
+     * @param switchVersion
+     *            the version that acknowledgement expects; empty when the session had no record
+     * @param lastWorkspace
+     *            the delivered switch's target, or empty when no switch acknowledgement may be pending
      * @param setBy
      *            the executing caller, recorded on a record this creates
      * @return the stored record — its version and its reset as the store keeps them — or empty when nothing was
      *         stored
      */
     public Optional<SessionSandboxOptions> markResetUnannounced(SessionId session, SandboxWorkspaceId workspace,
-            String slot, WorkspaceOwner setBy) {
+            String slot, OptionalLong switchVersion, Optional<SandboxWorkspaceId> lastWorkspace, WorkspaceOwner setBy) {
         final UnannouncedReset reset = UnannouncedReset.of(workspace, slot, clock.instant());
         try {
             for (int attempt = 0; attempt <= settings.casRetries(); attempt++) {
                 final Optional<SessionSandboxOptions> current = sessionOptions.find(session);
                 try {
                     if (current.isPresent()) {
-                        return Optional.of(sessionOptions.put(current.get().toBuilder().unannouncedReset(reset).build(),
-                                OptionalLong.of(current.get().version())));
+                        final SessionSandboxOptions.Builder next = current.get().toBuilder().unannouncedReset(reset);
+                        if (lastWorkspace.isPresent() && switchVersion.isPresent()
+                                && current.get().version() == switchVersion.getAsLong()) {
+                            next.lastWorkspaceId(lastWorkspace.get());
+                        }
+                        return Optional.of(sessionOptions.put(next.build(), OptionalLong.of(current.get().version())));
                     }
                     final Optional<SessionRecordStore> records = sessionRecords();
                     if (records.isPresent() && !records.get().exists(session)) {
                         log.debug("Session {} no longer exists; its reset is not kept", session.value());
                         return Optional.empty();
                     }
-                    return Optional.of(sessionOptions.put(SessionSandboxOptions.builder().session(session).setBy(setBy)
-                            .unannouncedReset(reset).updatedAt(clock.instant()).build(), OptionalLong.empty()));
+                    return Optional
+                            .of(sessionOptions.put(
+                                    SessionSandboxOptions.builder().session(session).setBy(setBy)
+                                            .lastWorkspaceId(
+                                                    switchVersion.isEmpty() ? lastWorkspace.orElse(null) : null)
+                                            .unannouncedReset(reset).updatedAt(clock.instant()).build(),
+                                    OptionalLong.empty()));
                 } catch (StaleVersionException e) {
                     log.debug("CAS conflict on the options of session {} (attempt {}); re-reading", session.value(),
                             attempt + 1);

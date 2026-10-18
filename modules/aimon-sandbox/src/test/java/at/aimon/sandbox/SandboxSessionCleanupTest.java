@@ -300,13 +300,13 @@ class SandboxSessionCleanupTest {
     @Test
     @DisplayName("unannounced-reset §6.4: a mark for a session core no longer has creates no record")
     void aMarkForADeletedSessionCreatesNothing() {
-        assertThat(harness.sandbox.manager().markResetUnannounced(session, derived(), "primary",
-                WorkspaceOwner.of(TenantId.DEFAULT, ALICE))).isEmpty();
+        assertThat(harness.sandbox.manager().markResetUnannounced(session, derived(), "primary", OptionalLong.empty(),
+                Optional.empty(), WorkspaceOwner.of(TenantId.DEFAULT, ALICE))).isEmpty();
         assertThat(harness.sessionOptions.find(session)).isEmpty();
 
         records.provision(session, "agent", ALICE);
-        assertThat(harness.sandbox.manager().markResetUnannounced(session, derived(), "primary",
-                WorkspaceOwner.of(TenantId.DEFAULT, ALICE))).isPresent();
+        assertThat(harness.sandbox.manager().markResetUnannounced(session, derived(), "primary", OptionalLong.empty(),
+                Optional.empty(), WorkspaceOwner.of(TenantId.DEFAULT, ALICE))).isPresent();
     }
 
     @Test

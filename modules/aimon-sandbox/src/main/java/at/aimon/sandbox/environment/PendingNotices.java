@@ -35,7 +35,9 @@ import at.aimon.sandbox.workspace.UnannouncedReset;
  * It carries the binding's {@link WorkspaceSwitch} (docs/design/workspace-sandbox-management.md §6.4): the first
  * successful connect queues the switch notice ahead of the connect's own, and the {@link #drain} that returns it has
  * the switch recorded, since core treats what a drain returns as delivered. A silent switch is recorded at that first
- * connect.
+ * connect. That record is written asynchronously, under a CAS on the version this instance knows; a reset this
+ * instance keeps afterwards writes the switch along, so that its own write cannot make the record lose its CAS
+ * (docs/design/workspace-sandbox-unannounced-reset.md §12).
  *
  * <p>
  * It also tracks the slot this instance last connected (docs/design/workspace-sandbox-core-033.md §6.5). When a later
@@ -79,6 +81,12 @@ final class PendingNotices {
     private UnannouncedReset replayable;
     /** The replay notice while it is still queued; {@code null} when none is. */
     private String replayNotice;
+    /**
+     * The version the last switch acknowledgement expects, while it may still be queued on the manager's background
+     * executor; {@code null} when none may be. A mark of this instance's own writes the switch along with the reset, so
+     * it cannot make that acknowledgement lose its CAS.
+     */
+    private OptionalLong switchInFlight;
 
     PendingNotices() {
         this(null, null, NoticeLedger.NONE);
@@ -193,6 +201,9 @@ final class PendingNotices {
             connected = true;
             recorded |= recordNow;
             version = knownVersion;
+            if (recordNow) {
+                switchInFlight = version;
+            }
             pending.addAll(notices);
         }
         if (recordNow) {
@@ -233,16 +244,34 @@ final class PendingNotices {
         if (bookkeeping == null) {
             return null;
         }
-        final Optional<SessionSandboxOptions> stored = ledger.markResetUnannounced(bookkeeping.session(), workspace,
-                slot);
+        final OptionalLong switchVersion;
         synchronized (this) {
-            if (stored.isPresent()) {
-                knownVersion = OptionalLong.of(stored.get().version());
-                durable = stored.get().unannouncedReset().orElse(null);
-                return durable;
-            }
-            return durable != null && durable.isOf(workspace, slot) ? durable : null;
+            switchVersion = switchInFlight;
         }
+        final Optional<SessionSandboxOptions> stored = ledger.markResetUnannounced(bookkeeping.session(), workspace,
+                slot, switchVersion != null ? switchVersion : OptionalLong.empty(),
+                switchVersion != null ? Optional.of(workspaceSwitch.to()) : Optional.empty());
+        if (stored.isEmpty()) {
+            synchronized (this) {
+                return durable != null && durable.isOf(workspace, slot) ? durable : null;
+            }
+        }
+        final boolean reacknowledge;
+        final UnannouncedReset covered;
+        synchronized (this) {
+            // Written along, or the acknowledgement landed first and moved the version on: either way done — unless a
+            // parallel drain delivered the switch during this write, with the version from before it.
+            reacknowledge = switchVersion == null && switchInFlight != null;
+            switchInFlight = null;
+            knownVersion = OptionalLong.of(stored.get().version());
+            durable = stored.get().unannouncedReset().orElse(null);
+            covered = durable;
+        }
+        if (reacknowledge) {
+            ledger.acknowledge(bookkeeping.session(), OptionalLong.of(stored.get().version()),
+                    Optional.of(workspaceSwitch.to()), Optional.empty());
+        }
+        return covered;
     }
 
     /**
@@ -299,6 +328,9 @@ final class PendingNotices {
             resetDue = ackDue;
             ackDue = null;
             version = knownVersion;
+            if (switchDue) {
+                switchInFlight = version;
+            }
         }
         if (switchDue || resetDue != null) {
             ledger.acknowledge(bookkeeping != null ? bookkeeping.session() : workspaceSwitch.session(), version,

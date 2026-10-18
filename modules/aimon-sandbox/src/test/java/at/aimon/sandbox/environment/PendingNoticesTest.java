@@ -284,6 +284,67 @@ class PendingNoticesTest {
     }
 
     @Test
+    @DisplayName("§12: a reset after the drain that delivered the switch writes the switch along, once")
+    void aResetAfterADeliveredSwitchWritesItAlong() {
+        final FakeLedger ledger = new FakeLedger();
+        final PendingNotices pending = new PendingNotices(
+                WorkspaceSwitch.announced(SESSION, OTHER, TO, OptionalLong.of(4)), bookkeeping(4, null), ledger);
+        add(pending, "i1", 1, false, List.of());
+        assertThat(pending.drain()).hasSize(1);
+        assertThat(ledger.acks).containsExactly(new Ack(OptionalLong.of(4), TO, null));
+
+        add(pending, "i1", 2, true, List.of(RESET));
+        add(pending, "i1", 3, true, List.of("the sandbox was recreated (generation 3)"));
+
+        assertThat(ledger.marksSwitch).containsExactly(OptionalLong.of(4) + "/" + TO, "-");
+        pending.drain();
+        assertThat(ledger.acks).as("the switch is not acknowledged twice").last()
+                .isEqualTo(new Ack(OptionalLong.of(6), null, ledger.stored(1)));
+    }
+
+    @Test
+    @DisplayName("§12: a drain that delivers the switch during a parallel mark is acknowledged again at the mark's version")
+    void aSwitchDeliveredDuringAMarkIsAcknowledgedAgain() {
+        final FakeLedger ledger = new FakeLedger();
+        final PendingNotices pending = new PendingNotices(
+                WorkspaceSwitch.announced(SESSION, OTHER, TO, OptionalLong.of(4)), bookkeeping(4, null), ledger);
+        add(pending, "i1", 1, false, List.of());
+        ledger.duringMark = () -> assertThat(pending.drain()).as("the switch, delivered mid-mark").hasSize(1);
+
+        add(pending, "i1", 2, true, List.of(RESET));
+
+        assertThat(ledger.marksSwitch).containsExactly("-");
+        assertThat(ledger.acks).containsExactly(new Ack(OptionalLong.of(4), TO, null),
+                new Ack(OptionalLong.of(5), TO, null));
+    }
+
+    @Test
+    @DisplayName("§12: a silent switch recorded at the first connect is written along by a later mark")
+    void aSilentSwitchIsWrittenAlongByALaterMark() {
+        final FakeLedger ledger = new FakeLedger();
+        final PendingNotices pending = new PendingNotices(WorkspaceSwitch.silent(SESSION, TO, OptionalLong.empty()),
+                SessionBookkeeping.of(SESSION, Optional.empty()), ledger);
+        add(pending, "i1", 1, false, List.of());
+        assertThat(ledger.acks).containsExactly(new Ack(OptionalLong.empty(), TO, null));
+
+        add(pending, "i1", 2, true, List.of(RESET));
+
+        assertThat(ledger.marksSwitch).containsExactly(OptionalLong.empty() + "/" + TO);
+    }
+
+    @Test
+    @DisplayName("§5.2: a mark before the switch is delivered carries no switch: the drain's acknowledgement does")
+    void aMarkBeforeTheDrainCarriesNoSwitch() {
+        final FakeLedger ledger = new FakeLedger();
+        final PendingNotices pending = new PendingNotices(
+                WorkspaceSwitch.announced(SESSION, OTHER, TO, OptionalLong.of(4)), bookkeeping(4, null), ledger);
+
+        add(pending, "i1", 1, true, List.of(RESET));
+
+        assertThat(ledger.marksSwitch).containsExactly("-");
+    }
+
+    @Test
     @DisplayName("§3.3: a queue without bookkeeping — a fork, a routine — never writes the session's record")
     void withoutBookkeepingNothingIsWritten() {
         final FakeLedger ledger = new FakeLedger();
@@ -375,6 +436,8 @@ class PendingNoticesTest {
     /** Stores each mark at the next version, one second later than the last; records every acknowledgement. */
     private static class FakeLedger implements NoticeLedger {
         final List<String> marks = Collections.synchronizedList(new ArrayList<>());
+        /** The switch each mark was asked to write along: {@code "<version>/<target>"}, or {@code "-"}. */
+        final List<String> marksSwitch = Collections.synchronizedList(new ArrayList<>());
         final List<Ack> acks = Collections.synchronizedList(new ArrayList<>());
         private final List<UnannouncedReset> stored = Collections.synchronizedList(new ArrayList<>());
         boolean failMarks;
@@ -387,8 +450,10 @@ class PendingNoticesTest {
 
         @Override
         public synchronized Optional<SessionSandboxOptions> markResetUnannounced(SessionId session,
-                SandboxWorkspaceId workspace, String slot) {
+                SandboxWorkspaceId workspace, String slot, OptionalLong switchVersion,
+                Optional<SandboxWorkspaceId> lastWorkspace) {
             marks.add(workspace + "/" + slot);
+            marksSwitch.add(lastWorkspace.map(to -> switchVersion + "/" + to).orElse("-"));
             duringMark.run();
             if (failMarks) {
                 return Optional.empty();

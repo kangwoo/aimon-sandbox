@@ -183,6 +183,31 @@ class UnannouncedResetIT {
     }
 
     @Test
+    @DisplayName("§12: a reset after the drain that delivered a switch does not make its queued acknowledgement lose")
+    void aResetAfterADeliveredSwitchKeepsTheSwitchRecorded() throws Exception {
+        final QueueingExecutor background = new QueueingExecutor();
+        harness.close();
+        harness = SandboxHarness.builder().background(background).build();
+        harness.sessionOptions.put(SessionSandboxOptions.builder().session(session).setBy(ALICES)
+                .lastWorkspaceId(SandboxWorkspaceId.of("wsm:elsewhere")).updatedAt(harness.clock.instant()).build(),
+                OptionalLong.empty());
+        final ExecutionEnvironment turn = harness.mainTurn(session, ALICE);
+        final String moved = ((SandboxExecutionEnvironment) turn).binding().workspaceSwitch().orElseThrow().notice();
+        bash(turn, "true");
+        assertThat(turn.drainNotices()).containsExactly(moved);
+        assertThat(background.queued()).as("the switch's acknowledgement waits").isOne();
+
+        idleClose();
+        bash(turn, "true");
+        assertThat(options().orElseThrow().lastWorkspaceId()).as("written along with the reset").contains(derived());
+        assertThat(turn.drainNotices()).containsExactly(SandboxWorkspaceManager.RESET_NOTICE);
+        background.runAll();
+
+        assertThat(modelFacingTurn("true")).as("the switch is not told again").isEmpty();
+        assertThat(options().orElseThrow().unannouncedReset()).isEmpty();
+    }
+
+    @Test
     @DisplayName("§2.2: a fork's reset is told to the fork only and never kept on the session's record")
     void aForksResetIsNeverKept() throws Exception {
         final ExecutionEnvironment parent = harness.mainTurn(session, ALICE);
@@ -238,6 +263,31 @@ class UnannouncedResetIT {
         manager.acknowledgeLater(session, OptionalLong.of(stored.version() - 1), Optional.of(elsewhere),
                 Optional.of(newer), ALICES);
         assertThat(options()).as("cleared despite the stale version; no switch written; nothing left").isEmpty();
+    }
+
+    @Test
+    @DisplayName("§12: the mark writes a pending switch along only at the version its acknowledgement expects")
+    void theMarkWritesTheSwitchOnlyAtItsVersion() {
+        final SandboxWorkspaceManager manager = harness.sandbox.manager();
+        final SandboxWorkspaceId elsewhere = SandboxWorkspaceId.of("wsm:elsewhere");
+        final SessionSandboxOptions stored = harness.sessionOptions.put(SessionSandboxOptions.builder().session(session)
+                .setBy(ALICES).lastWorkspaceId(elsewhere).updatedAt(harness.clock.instant()).build(),
+                OptionalLong.empty());
+
+        final SessionSandboxOptions stale = manager.markResetUnannounced(session, derived(), "primary",
+                OptionalLong.of(stored.version() - 1), Optional.of(derived()), ALICES).orElseThrow();
+        assertThat(stale.lastWorkspaceId()).as("moved on since: P13 keeps it").contains(elsewhere);
+
+        final SessionSandboxOptions current = manager.markResetUnannounced(session, derived(), "primary",
+                OptionalLong.of(stale.version()), Optional.of(derived()), ALICES).orElseThrow();
+        assertThat(current.lastWorkspaceId()).contains(derived());
+        assertThat(current.unannouncedReset()).isPresent();
+
+        final SessionId fresh = SessionId.generate();
+        assertThat(manager
+                .markResetUnannounced(fresh, derived(), "primary", OptionalLong.empty(), Optional.of(derived()), ALICES)
+                .orElseThrow().lastWorkspaceId()).as("no record at bind: created with it, as the acknowledgement would")
+                .contains(derived());
     }
 
     @Test

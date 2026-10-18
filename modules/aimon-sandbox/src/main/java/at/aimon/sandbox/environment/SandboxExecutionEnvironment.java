@@ -62,8 +62,10 @@ public final class SandboxExecutionEnvironment implements ExecutionEnvironment {
                 binding.sessionBookkeeping().orElse(null), new NoticeLedger() {
                     @Override
                     public Optional<SessionSandboxOptions> markResetUnannounced(SessionId session,
-                            SandboxWorkspaceId workspace, String slot) {
-                        return manager.markResetUnannounced(session, workspace, slot, binding.caller());
+                            SandboxWorkspaceId workspace, String slot, OptionalLong switchVersion,
+                            Optional<SandboxWorkspaceId> lastWorkspace) {
+                        return manager.markResetUnannounced(session, workspace, slot, switchVersion, lastWorkspace,
+                                binding.caller());
                     }
 
                     @Override
