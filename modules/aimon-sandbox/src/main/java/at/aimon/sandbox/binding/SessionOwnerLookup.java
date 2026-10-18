@@ -6,7 +6,6 @@ import java.util.function.Supplier;
 
 import at.aimon.core.agent.session.SessionId;
 import at.aimon.core.agent.session.store.SessionRecordStore;
-import at.aimon.core.agent.session.store.SessionRecordView;
 import at.aimon.core.base.Principal;
 
 /**
@@ -38,8 +37,8 @@ public interface SessionOwnerLookup {
     Optional<Principal> ownerOf(SessionId sessionId);
 
     /**
-     * The owner core recorded for the session ({@code SessionRecordView.getOwner()}). Each call loads the whole
-     * record — core has no narrower read yet — and a store failure propagates.
+     * The owner core recorded for the session, read with {@code SessionRecordStore.loadOwner} (kangwoo/aimon-core#262):
+     * the owner alone, not the record and its transcript. A store failure propagates.
      *
      * @param records
      *            core's session store
@@ -61,7 +60,7 @@ public interface SessionOwnerLookup {
     static SessionOwnerLookup recorded(Supplier<? extends SessionRecordStore> records) {
         Objects.requireNonNull(records, "records must not be null");
         return sessionId -> Objects.requireNonNull(records.get(), "the session record store is not available yet")
-                .load(sessionId).flatMap(SessionRecordView::getOwner);
+                .loadOwner(sessionId);
     }
 
     /**

@@ -2225,9 +2225,10 @@ docker 계층, K8s 에서만 드러나는 것은 k8s 계층 — 는 [`workspace-
   그때마다 샌드박스를 잃고, 다시 만든 세션의 첫 턴은 옛 샌드박스가 사라질 때까지(보통 최대 `close-wait`, 배경 닫기가 버려지면 janitor 가 이어받는 `close-resume-after` 와 순회 한 번 더) "being removed" 로 도구가
   실패한다. 옵션만 지우고 닫기는 선택으로 둘지(`sessionLifecycleListener(boolean closeDerived)`) 정해야 한다
   ([코어 0.3.3 이행 설계](workspace-sandbox-core-033.md) §12 Q1, §14)
-- **세션 소유자 읽기의 비용** — `sessionRecords(...)` 를 주면 메인 턴의 바인딩마다 세션 레코드 전체(대화 기록 포함)를 한 번
-  읽는다. 코어에 좁은 읽기가 생길 때까지 받아들인다. 노드 로컬 캐시는 같은 id 의 재생성(다른 노드는 삭제를 듣지 못한다)에서
-  옛 owner 를 새 `ws:{sid}` 에 굳혀 버리므로 두지 않았다(코어 SO-5, [코어 0.3.3 이행 설계](workspace-sandbox-core-033.md) §12 Q3)
+- ~~**세션 소유자 읽기의 비용**~~ — 해결(2026-10-18). `sessionRecords(...)` 의 소유자 확인은 이제 코어의
+  `SessionRecordStore.loadOwner` 로 소유자만 읽는다(kangwoo/aimon-core#262, 코어 SO-5 · SO-8). 레코드 전체(대화 기록 포함)를
+  읽던 비용은 사라졌다. 노드 로컬 캐시는 여전히 두지 않는다 — 같은 id 의 재생성(다른 노드는 삭제를 듣지 못한다)에서 옛 owner 를
+  새 `ws:{sid}` 에 굳혀 버리기 때문이다([코어 0.3.3 이행 설계](workspace-sandbox-core-033.md) §12 Q3)
 - **소유자 없는 세션과 `require-principal`** — 어느 출처도 소유자를 모르는 세션은 샌드박스를 받지 못한다. `SubmitRequest.owner`
   를 싣기 전에 만든 세션이 남은 호스트는 그 세션이 사라질 때까지 `SessionOwnerLookup` 을 대체 경로로 둔다. 이 엄격함을 유지할지
   확인이 필요하다. 같은 이유로 `sessionRecords(...)` 만 준 배포는 첫 submit 전에 세션 옵션을 정할 수 없다 — 첫 턴을 요청 속성으로

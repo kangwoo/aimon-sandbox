@@ -9,6 +9,12 @@ Requires aimon-core **0.3.3**. Until core releases it, `main` pins `0.3.3-SNAPSH
 which `scripts/release.sh` refuses to release
 ([`docs/design/workspace-sandbox-core-033.md`](docs/design/workspace-sandbox-core-033.md)).
 
+### Changed: the session owner is read alone (kangwoo/aimon-core#262)
+
+- `SessionOwnerLookup.recorded(...)` (and so `WorkspaceSandbox.Builder.sessionRecords(...)`) reads the owner with core's
+  `SessionRecordStore.loadOwner` instead of loading the whole session record. A main-turn bind's owner check no longer
+  costs a transcript read (core backlog SO-5 · SO-8).
+
 ### Added: per-execution workspace and rule (kangwoo/aimon-core#252)
 
 - **Request attributes place one execution.** A host sets `environment.sandbox.workspace` on a turn
