@@ -1,7 +1,8 @@
 # Design — durable "unannounced reset" per session (kangwoo/aimon-sandbox#28)
 
 > Status: **IMPLEMENTED**. The body below is the design as approved (r1; review 1 passed it with non-blocking items,
-> answered in §12). Where the code departed from it, §12 says so and why. The architecture document
+> answered in §12). Where the code departed from it, §12 says so and why — including what the review of the pull
+> request (#29) changed. The architecture document
 > [`workspace-sandbox.md`](workspace-sandbox.md) has absorbed the change (§5.1, §7, §10.1, §15, §16), its §20 carries the
 > open questions of §11 that outlive it, and [`workspace-sandbox-management.md`](workspace-sandbox-management.md) §17
 > says where its §5.2 and §6.4 no longer describe the code.
@@ -531,7 +532,27 @@ in WS §20, each pointing back here. Q1, Q4, Q6 and Q8 are answered below.
 | A parent whose turn's only model-facing work runs in a fork leaves its replay undrained, and the next turn's replay then also covers the fork's later files | The parent never connected, so nothing was queued; the field waits for its next connect. The replay's time is what keeps that notice true: the fork's files are from after it |
 | Q8: whether the scripted runtime fires `onStop` for a text-only turn | It does: `OrcaRuntimeSandboxE2ETest.aStopHooksResetReachesTheNextTurnOnce` runs the issue's scenario through `OrcaAgentExecutor` with a skill's `onStop` shell hook |
 
+### Pull request review 1 — what was done with its items
+
+| Item | Done |
+|---|---|
+| The store contract demanded nanosecond precision for `UnannouncedReset.at`, although §3.1 keeps the *stored* value and `SandboxWorkspaceStoreContract` accepts millisecond precision | `SessionOptionsStoreContract.theUnannouncedResetRoundTripsIsReplacedAndCleared` now asserts that `find` answers what the write returned, the workspace and slot exactly, and `at` to within a millisecond. A store on a microsecond column passes |
+| A second trigger for a repeated switch notice: the drain that delivered a switch submits its `lastWorkspaceId` write at version V; a later call of the same instance resets the slot and its synchronous mark moves the record to V+1 first; the write loses its CAS and the next turn announces the switch again. §5.2 claimed only the opposite order, a mark *before* the drain, and §7 had no row | Fixed, not just documented — see "A reset writes a pending switch along" below. §5.2's claim now holds in both orders. `PendingNoticesTest.aResetAfterADeliveredSwitchWritesItAlong`, `aSilentSwitchIsWrittenAlongByALaterMark`, `aMarkBeforeTheDrainCarriesNoSwitch`, `aSwitchDeliveredDuringAMarkIsAcknowledgedAgain`; `UnannouncedResetIT.aResetAfterADeliveredSwitchKeepsTheSwitchRecorded` (the reviewer's sequence end to end, with the acknowledgement held on a queueing executor) and `theMarkWritesTheSwitchOnlyAtItsVersion` |
+| `SandboxResetUnavailableException` reads as if a reset were always involved | Renamed `SandboxUnavailableWithNoticesException` (internal API, never released). `reset()` still says whether the notices report a reset |
+| (handoff) the replay's timestamp does not say UTC | No change: `Instant.toString()` ends in `Z`, the ISO-8601 UTC designator, e.g. `2026-10-18T04:00:00Z` |
+
 ### Where the code differs from the design
+
+- **A reset writes a pending switch along (pull request review 1).** A switch's `lastWorkspaceId` write is
+  asynchronous and keeps its strict version CAS (§5.3, C033 §6.4). Once a drain has delivered the switch, or the
+  first connect has recorded a silent one, `PendingNotices` remembers the version that write expects until the
+  instance's next stored mark. That mark passes it to `markResetUnannounced(session, workspace, slot, switchVersion,
+  lastWorkspace, setBy)`, which writes `lastWorkspaceId` along with the reset when the record is still at that version
+  — or creates the record with it when there was none at bind, as the acknowledgement would. Whichever lands second
+  finds the switch already written (the acknowledgement's CAS then fails harmlessly) or the version moved on by a
+  re-attach (both skip it: P13 as before). If a parallel call's drain delivers the switch while a mark is already in
+  flight with nothing to write along, the mark acknowledges the switch again at the version it stored. The mark of a
+  reset is synchronous anyway, so the hot path gains no I/O; the extra acknowledgement happens only in that race.
 
 - **Replay latch (found while building).** §6.1 queues the replay at the first *successful* connect when that connect
   did not reset. After a failed connect that reset the slot (§6.3), the next connect usually succeeds without a reset
@@ -544,14 +565,17 @@ in WS §20, each pointing back here. Q1, Q4, Q6 and Q8 are answered below.
 - **No `Acknowledgement` type (§5.3).** `SandboxWorkspaceManager.acknowledgeLater(session, expectedVersion,
   lastWorkspace, delivered, setBy)` takes the five values as parameters, like `recordLastWorkspaceLater` did; the
   package-private `acknowledge` does the work as §5.3's pseudo-code says, with `casRetries` re-reads.
-- **`markResetUnannounced(session, workspace, slot, setBy)`** stamps `at` from the manager's clock, so `NoticeLedger`
-  takes `(session, workspace, slot)` and `PendingNotices` needs no clock. On an existing record it leaves `updatedAt`
-  alone, as `recordLastWorkspace` did; a record it creates gets the current time.
+- **`markResetUnannounced(session, workspace, slot, switchVersion, lastWorkspace, setBy)`** stamps `at` from the
+  manager's clock, so `NoticeLedger` takes `(session, workspace, slot, switchVersion, lastWorkspace)` and
+  `PendingNotices` needs no clock. The two switch values are the pending switch above; both empty when none is. On
+  an existing record it leaves `updatedAt` alone, as `recordLastWorkspace` did; a record it creates gets the current
+  time.
 - **`PendingNotices` entry points.** `connect(manager, binding)` is the one call the four sites make (§3.3); it hands
   what `connect` returned or threw to package-private `connected(...)` and `failed(...)`, which take plain values so
   `PendingNoticesTest` can drive them with a fake ledger (`ConnectedSlot` and the new exception have
   package-private constructors). The old `addAll` overloads are gone.
-- **`SandboxResetUnavailableException`** is `final` with a package-private constructor. It is built whenever a failed
+- **`SandboxUnavailableWithNoticesException`** (§3.1 (g)'s exception, renamed after pull request review 1) is
+  `final` with a package-private constructor. It is built whenever a failed
   `connect` gathered notices — in practice only reset notices are gathered before a failure — and `PendingNotices`
   marks only when `reset()` is true. The rethrown `SandboxUnavailableException` keeps it as the cause.
 - **`SessionBookkeeping.of(session, record)`** builds the value from the record the policy read; `UnannouncedReset`
@@ -566,7 +590,8 @@ in WS §20, each pointing back here. Q1, Q4, Q6 and Q8 are answered below.
 - **`UnannouncedResetIT`** (new, `at.aimon.sandbox`, unit tier) holds the acceptance scenario and its variants rather
   than `SandboxEnvironmentProviderTest` / `ManagedSessionsIT`: the hook-only turn, a staging call, a hook whose
   re-provisioning fails, the ordinary path, a delayed acknowledgement, a fork, set/clear keeping the field, the
-  acknowledgement's compare-and-clear against a stale switch version, and a mark retrying a lost CAS. The
+  acknowledgement's compare-and-clear against a stale switch version, a mark retrying a lost CAS, and (pull request
+  review 1) a reset after a delivered switch and the mark's version check for the switch it writes along. The
   `withSwitch` case is asserted inside the acceptance test (the next turn's binding has no switch, and the record is
   gone after the drain) and in `SessionOptionsBindingPolicyTest`.
 - **Deletion** cases are in `SandboxSessionCleanupTest` as planned; the "mark after deletion" case calls
@@ -575,7 +600,7 @@ in WS §20, each pointing back here. Q1, Q4, Q6 and Q8 are answered below.
 - **Multi-node** cases are in `MultiNodeScenariosTest`, with two harnesses sharing the workspace store, the options
   store and the provider.
 - **`SandboxWorkspaceManagerTest`**'s two "notice rides on the error" tests now check the two halves: a direct
-  `connect` still carries the notices in the message (and as `SandboxResetUnavailableException` parts), and an
+  `connect` still carries the notices in the message (and as `SandboxUnavailableWithNoticesException` parts), and an
   environment's call reports the bare reason with the notice drained.
 - **Docker tier** — `ManagedWorkspaceSandboxIT.aHookOnlyTurnsResetIsToldOnTheNextTurn` runs the three-turn scenario on
   a real OpenSandbox server; the janitor's idle close works there with the manual clock, so no explicit close was

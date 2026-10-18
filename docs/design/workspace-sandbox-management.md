@@ -714,5 +714,5 @@ Later, kangwoo/aimon-sandbox#28 ([`workspace-sandbox-unannounced-reset.md`](work
 | Where | Was | Now | UR |
 |---|---|---|---|
 | §5.2 — `SessionSandboxOptions` | `workspace`, `unattached`, `lastWorkspaceId` | also `unannouncedReset()`: a reset of the session's sandbox that no drain has delivered yet, written by the session's root environment before it queues the reset notice and cleared by the drain that delivers it. `clearSessionOptions` keeps it, and a record holding only it is no attachment and no move (§6.4's switch ignores it). The listener, the operator's delete and the janitor's sweep remove it with the record. A store must persist it | §2.1, §3, §6 |
-| §6.4 — the `lastWorkspaceId` write | its own asynchronous write after the drain | folded into one asynchronous acknowledgement per drain with the reset's clear, a CAS on the version the environment knows (the policy's read, or its own reset write's) | §5.3, §6.2 |
+| §6.4 — the `lastWorkspaceId` write | its own asynchronous write after the drain | folded into one asynchronous acknowledgement per drain with the reset's clear, a CAS on the version the environment knows (the policy's read, or its own reset write's). A reset write of the same environment that follows the drain writes the switch along, so it cannot make that acknowledgement lose its CAS | §5.3, §6.2, §12 |
 
