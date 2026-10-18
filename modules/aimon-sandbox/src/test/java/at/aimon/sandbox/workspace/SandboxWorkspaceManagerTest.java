@@ -286,16 +286,16 @@ class SandboxWorkspaceManagerTest {
         // The next call finds the slot FAILED, not TERMINATED, and has no reset to report: this call is the only one
         // that knows /workspace was reset. A caller outside the environment reads it in the error.
         final SandboxBinding binding = ((SandboxExecutionEnvironment) harness.mainTurn(session, ALICE)).binding();
-        assertThatThrownBy(() -> manager().connect(binding)).isInstanceOf(SandboxResetUnavailableException.class)
+        assertThatThrownBy(() -> manager().connect(binding)).isInstanceOf(SandboxUnavailableWithNoticesException.class)
                 .hasMessageContaining("could not be provisioned")
                 .hasMessageContaining(SandboxWorkspaceManager.RESET_NOTICE).satisfies(e -> {
-                    final SandboxResetUnavailableException reset = (SandboxResetUnavailableException) e;
-                    assertThat(reset.reason()).startsWith("the sandbox (profile 'standard') could not be provisioned")
+                    final SandboxUnavailableWithNoticesException failure = (SandboxUnavailableWithNoticesException) e;
+                    assertThat(failure.reason()).startsWith("the sandbox (profile 'standard') could not be provisioned")
                             .doesNotContain(SandboxWorkspaceManager.RESET_NOTICE);
-                    assertThat(reset.notices()).containsExactly(SandboxWorkspaceManager.RESET_NOTICE);
-                    assertThat(reset.reset()).isTrue();
-                    assertThat(reset.workspaceId()).isEqualTo(harness.record(session).id());
-                    assertThat(reset.slot()).isEqualTo("primary");
+                    assertThat(failure.notices()).containsExactly(SandboxWorkspaceManager.RESET_NOTICE);
+                    assertThat(failure.reset()).isTrue();
+                    assertThat(failure.workspaceId()).isEqualTo(harness.record(session).id());
+                    assertThat(failure.slot()).isEqualTo("primary");
                 });
     }
 

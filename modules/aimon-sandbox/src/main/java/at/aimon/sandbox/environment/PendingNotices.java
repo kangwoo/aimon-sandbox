@@ -13,8 +13,8 @@ import at.aimon.sandbox.binding.SandboxBinding;
 import at.aimon.sandbox.binding.SessionBookkeeping;
 import at.aimon.sandbox.binding.WorkspaceSwitch;
 import at.aimon.sandbox.workspace.ConnectedSlot;
-import at.aimon.sandbox.workspace.SandboxResetUnavailableException;
 import at.aimon.sandbox.workspace.SandboxUnavailableException;
+import at.aimon.sandbox.workspace.SandboxUnavailableWithNoticesException;
 import at.aimon.sandbox.workspace.SandboxWorkspaceId;
 import at.aimon.sandbox.workspace.SandboxWorkspaceManager;
 import at.aimon.sandbox.workspace.SessionSandboxOptions;
@@ -121,7 +121,7 @@ final class PendingNotices {
         final ConnectedSlot slot;
         try {
             slot = manager.connect(binding);
-        } catch (SandboxResetUnavailableException e) {
+        } catch (SandboxUnavailableWithNoticesException e) {
             failed(e.workspaceId(), e.slot(), e.reset(), e.notices());
             throw new SandboxUnavailableException(e.reason(), e);
         }

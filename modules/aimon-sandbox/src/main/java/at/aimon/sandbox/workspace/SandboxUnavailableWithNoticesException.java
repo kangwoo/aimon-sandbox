@@ -15,7 +15,7 @@ import java.util.Objects;
  * <b>Internal.</b> Public only for use across this library's packages: not supported API, and it may change in any
  * release.
  */
-public final class SandboxResetUnavailableException extends SandboxUnavailableException {
+public final class SandboxUnavailableWithNoticesException extends SandboxUnavailableException {
 
     @Serial
     private static final long serialVersionUID = 4127755604918436123L;
@@ -26,8 +26,8 @@ public final class SandboxResetUnavailableException extends SandboxUnavailableEx
     private final SandboxWorkspaceId workspaceId;
     private final String slot;
 
-    SandboxResetUnavailableException(String reason, List<String> notices, boolean reset, SandboxWorkspaceId workspaceId,
-            String slot, Throwable cause) {
+    SandboxUnavailableWithNoticesException(String reason, List<String> notices, boolean reset,
+            SandboxWorkspaceId workspaceId, String slot, Throwable cause) {
         super(reason + " (also: " + String.join("; ", notices) + ")", cause);
         this.reason = Objects.requireNonNull(reason, "reason must not be null");
         this.notices = List.copyOf(notices);

@@ -278,7 +278,7 @@ public final class SandboxWorkspaceManager {
             if (notices.isEmpty()) {
                 return e;
             }
-            return new SandboxResetUnavailableException(e.getMessage(), notices, reset, binding.workspaceId(),
+            return new SandboxUnavailableWithNoticesException(e.getMessage(), notices, reset, binding.workspaceId(),
                     binding.slot(), e);
         }
 
