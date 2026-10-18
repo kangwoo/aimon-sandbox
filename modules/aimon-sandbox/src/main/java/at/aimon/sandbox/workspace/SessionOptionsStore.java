@@ -12,7 +12,9 @@ import at.aimon.core.agent.session.SessionId;
  *
  * <p>
  * The CAS rules are {@link SandboxWorkspaceStore}'s, including its no-ABA rule: a record created again after
- * {@link #delete} never reuses a version the deleted one had. What a store returns is what it keeps.
+ * {@link #delete} never reuses a version the deleted one had. What a store returns is what it keeps — every field,
+ * {@link SessionSandboxOptions#unannouncedReset()} included: a store that drops it loses the reset notice of a
+ * session whose reset happened on a path core never drains.
  *
  * <p>
  * <b>Options are deleted with their sessions</b> by registering {@code WorkspaceSandbox.sessionLifecycleListener()} on
@@ -90,8 +92,8 @@ public interface SessionOptionsStore {
     Page<SessionSandboxOptions, SessionId> sessions(Optional<SessionId> after, int limit);
 
     /**
-     * Clears {@code workspace} on every record attached to {@code id}, keeping each record's other fields; each changed
-     * record gets a new version. Idempotent.
+     * Clears {@code workspace} on every record attached to {@code id}, keeping each record's other fields — its
+     * {@code lastWorkspaceId} and unannounced reset among them; each changed record gets a new version. Idempotent.
      *
      * @param id
      *            the workspace, typically just purged

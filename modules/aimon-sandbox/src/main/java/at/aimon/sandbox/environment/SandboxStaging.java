@@ -92,8 +92,7 @@ final class SandboxStaging {
             return ownFileSystem.resolve(resource.getSourceDir());
         }
         checkShape(resource);
-        final ConnectedSlot slot = manager.connect(binding);
-        pending.addAll(slot);
+        final ConnectedSlot slot = pending.connect(manager, binding);
         slot.activity().record(false);
         final String target = STAGING_ROOT + "/" + resource.getName() + "/" + resource.getContentKey();
         try (SandboxConnectionCache.Lease lease = connections.lockStaging(slot.ref(), target)) {

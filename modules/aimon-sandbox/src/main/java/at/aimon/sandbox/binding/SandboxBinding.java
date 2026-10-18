@@ -16,7 +16,7 @@ import at.aimon.sandbox.workspace.WorkspaceOwner;
  * A binding that names a workspace it did not derive — a session's attachment, an agent default — is
  * {@link #mustExist()}: {@code connect} never creates its record (docs/design/workspace-sandbox-management.md §5.3).
  * {@link #toBuilder()} copies it, so the environment provider's rebuilds keep it and forks inherit it. It copies the
- * {@link #workspaceSwitch()} too; the provider drops that one for forks.
+ * {@link #workspaceSwitch()} and the {@link #sessionBookkeeping()} too; the provider drops both for forks.
  */
 public final class SandboxBinding {
 
@@ -35,6 +35,7 @@ public final class SandboxBinding {
     private final String root;
     private final boolean mustExist;
     private final WorkspaceSwitch workspaceSwitch;
+    private final SessionBookkeeping sessionBookkeeping;
 
     private SandboxBinding(Builder builder) {
         this.workspaceId = Objects.requireNonNull(builder.workspaceId, "workspaceId must not be null");
@@ -46,6 +47,7 @@ public final class SandboxBinding {
         this.root = Objects.requireNonNull(builder.root, "root must not be null");
         this.mustExist = builder.mustExist;
         this.workspaceSwitch = builder.workspaceSwitch;
+        this.sessionBookkeeping = builder.sessionBookkeeping;
     }
 
     /** @return a new builder ({@code slot = primary}, {@code root = /workspace/repo}) */
@@ -57,7 +59,7 @@ public final class SandboxBinding {
     public Builder toBuilder() {
         return new Builder().workspaceId(workspaceId).owner(owner).caller(caller).slot(slot)
                 .requiredProfile(requiredProfile).shellKey(shellKey).root(root).mustExist(mustExist)
-                .workspaceSwitch(workspaceSwitch);
+                .workspaceSwitch(workspaceSwitch).sessionBookkeeping(sessionBookkeeping);
     }
 
     /** @return the workspace */
@@ -108,6 +110,15 @@ public final class SandboxBinding {
         return Optional.ofNullable(workspaceSwitch);
     }
 
+    /**
+     * @return what the session's options record held when this root binding was made, set by
+     *         {@link SessionOptionsBindingPolicy} — a custom policy leaves it alone, and a fork never has it
+     *         (docs/design/workspace-sandbox-unannounced-reset.md §5.2)
+     */
+    public Optional<SessionBookkeeping> sessionBookkeeping() {
+        return Optional.ofNullable(sessionBookkeeping);
+    }
+
     @Override
     public String toString() {
         return "SandboxBinding{" + workspaceId + ", slot=" + slot + ", shellKey=" + shellKey + ", root=" + root
@@ -126,6 +137,7 @@ public final class SandboxBinding {
         private String root = DEFAULT_ROOT;
         private boolean mustExist;
         private WorkspaceSwitch workspaceSwitch;
+        private SessionBookkeeping sessionBookkeeping;
 
         private Builder() {
         }
@@ -172,6 +184,11 @@ public final class SandboxBinding {
 
         public Builder workspaceSwitch(WorkspaceSwitch workspaceSwitch) {
             this.workspaceSwitch = workspaceSwitch;
+            return this;
+        }
+
+        public Builder sessionBookkeeping(SessionBookkeeping sessionBookkeeping) {
+            this.sessionBookkeeping = sessionBookkeeping;
             return this;
         }
 

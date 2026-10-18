@@ -31,6 +31,7 @@ import at.aimon.sandbox.workspace.SandboxWorkspaceId;
 import at.aimon.sandbox.workspace.SessionOptionsStore;
 import at.aimon.sandbox.workspace.SessionSandboxOptions;
 import at.aimon.sandbox.workspace.TenantId;
+import at.aimon.sandbox.workspace.UnannouncedReset;
 import at.aimon.sandbox.workspace.WorkspaceOwner;
 
 /**
@@ -394,5 +395,49 @@ class SessionOptionsBindingPolicyTest {
                 .extract(SandboxRequestAttributes.unattached(UnattachedRule.REJECT)))
                 .as("what core forwards, the policy parses")
                 .containsExactly(Map.entry(SlotChoice.UNATTACHED_ATTRIBUTE, "reject"));
+    }
+
+    // ----------------------------------------------------------------------------------------------------------------
+    // session bookkeeping (docs/design/workspace-sandbox-unannounced-reset.md §3.2)
+    // ----------------------------------------------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("unannounced-reset §3.2: every session bind carries what the record held; a routine's carries none")
+    void aSessionBindCarriesItsBookkeeping() {
+        final UnannouncedReset reset = UnannouncedReset.of(ATTACHED, "primary", Instant.EPOCH);
+        final SessionSandboxOptions record = store
+                .put(options(ATTACHED, null, ATTACHED).toBuilder().unannouncedReset(reset).build(), OptionalLong.of(1));
+
+        final SessionBookkeeping bookkeeping = policy(UnattachedRule.PER_SESSION).bind(turn(Map.of()))
+                .sessionBookkeeping().orElseThrow();
+        final SandboxBinding routine = policy(UnattachedRule.PER_SESSION).bind(
+                context(null, ExecutionId.generate(), attributes(SlotChoice.WORKSPACE_ATTRIBUTE, DEFAULT.value())));
+
+        assertThat(bookkeeping.session()).isEqualTo(session);
+        assertThat(bookkeeping.optionsVersion()).hasValue(record.version());
+        assertThat(bookkeeping.unannouncedReset()).contains(reset);
+        assertThat(routine.sessionBookkeeping()).isEmpty();
+        store.delete(session, record.version());
+        assertThat(policy(UnattachedRule.PER_SESSION).bind(turn(Map.of())).sessionBookkeeping().orElseThrow()
+                .optionsVersion()).as("no record").isEmpty();
+    }
+
+    @Test
+    @DisplayName("unannounced-reset §3.2: a record holding only an unannounced reset is no move — no switch, silent or not")
+    void aRecordHoldingOnlyAResetIsNoSwitch() {
+        store.put(SessionSandboxOptions.builder().session(session).setBy(WorkspaceOwner.of(TenantId.DEFAULT, ALICE))
+                .unannouncedReset(
+                        UnannouncedReset.of(SandboxWorkspaceId.of("ws:" + session.value()), "primary", Instant.EPOCH))
+                .updatedAt(Instant.EPOCH).build(), OptionalLong.empty());
+
+        final SandboxBinding binding = policy(UnattachedRule.PER_SESSION).bind(turn(Map.of()));
+        final SandboxBinding redirected = policy(UnattachedRule.PER_SESSION)
+                .bind(requested(session, null, Map.of(), Map.of(SlotChoice.WORKSPACE_ATTRIBUTE, REQUESTED.value())));
+
+        assertThat(binding.workspaceSwitch()).isEmpty();
+        assertThat(redirected.workspaceSwitch()).as("row 0 is still announced").hasValueSatisfying(change -> {
+            assertThat(change.isSilent()).isFalse();
+            assertThat(change.from()).isEmpty();
+        });
     }
 }

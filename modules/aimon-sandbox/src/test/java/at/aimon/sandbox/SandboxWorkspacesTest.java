@@ -360,9 +360,9 @@ class SandboxWorkspacesTest {
         assertThat(set.unattached()).isEmpty();
         assertThat(set.setBy()).isEqualTo(WorkspaceOwner.of(TenantId.DEFAULT, ALICE));
 
-        harness.sandbox.manager().recordLastWorkspaceLater(session,
-                OptionalLong.of(harness.sessionOptions.find(session).orElseThrow().version()), view.id(),
-                WorkspaceOwner.of(TenantId.DEFAULT, ALICE));
+        harness.sandbox.manager().acknowledgeLater(session,
+                OptionalLong.of(harness.sessionOptions.find(session).orElseThrow().version()), Optional.of(view.id()),
+                Optional.empty(), WorkspaceOwner.of(TenantId.DEFAULT, ALICE));
         workspaces().clearSessionOptions(session, ALICE);
         final SessionSandboxOptions cleared = harness.sessionOptions.find(session).orElseThrow();
         assertThat(cleared.workspace()).isEmpty();

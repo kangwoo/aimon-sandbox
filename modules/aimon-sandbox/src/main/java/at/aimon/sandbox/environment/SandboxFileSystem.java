@@ -63,8 +63,7 @@ final class SandboxFileSystem implements VirtualFileSystem {
     }
 
     private ConnectedSlot connect() {
-        final ConnectedSlot slot = manager.connect(binding);
-        pending.addAll(slot);
+        final ConnectedSlot slot = pending.connect(manager, binding);
         slot.activity().record(false);
         return slot;
     }

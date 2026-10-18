@@ -26,6 +26,8 @@ import at.aimon.core.shell.ShellCommandResult;
 import at.aimon.sandbox.DelegatingProvider;
 import at.aimon.sandbox.DelegatingStore;
 import at.aimon.sandbox.SandboxHarness;
+import at.aimon.sandbox.binding.SandboxBinding;
+import at.aimon.sandbox.environment.SandboxExecutionEnvironment;
 import at.aimon.sandbox.provider.CreateSpec;
 import at.aimon.sandbox.provider.ProviderSandbox;
 import at.aimon.sandbox.provider.ProviderSandboxRef;
@@ -281,11 +283,38 @@ class SandboxWorkspaceManagerTest {
         assertThat(harness.record(session).closeCause()).contains(CloseCause.IDLE);
         harness.faults.injectOnce(Operation.CREATE, Fault.fail(SandboxProviderException.Kind.TRANSIENT));
 
-        // The next call finds the slot FAILED, not TERMINATED, and has no reset to report: this error is the only
-        // place the model hears that /workspace was reset.
-        assertThatThrownBy(() -> bash(harness.mainTurn(session, ALICE), "true"))
-                .isInstanceOf(SandboxUnavailableException.class).hasMessageContaining("could not be provisioned")
-                .hasMessageContaining(SandboxWorkspaceManager.RESET_NOTICE);
+        // The next call finds the slot FAILED, not TERMINATED, and has no reset to report: this call is the only one
+        // that knows /workspace was reset. A caller outside the environment reads it in the error.
+        final SandboxBinding binding = ((SandboxExecutionEnvironment) harness.mainTurn(session, ALICE)).binding();
+        assertThatThrownBy(() -> manager().connect(binding)).isInstanceOf(SandboxResetUnavailableException.class)
+                .hasMessageContaining("could not be provisioned")
+                .hasMessageContaining(SandboxWorkspaceManager.RESET_NOTICE).satisfies(e -> {
+                    final SandboxResetUnavailableException reset = (SandboxResetUnavailableException) e;
+                    assertThat(reset.reason()).startsWith("the sandbox (profile 'standard') could not be provisioned")
+                            .doesNotContain(SandboxWorkspaceManager.RESET_NOTICE);
+                    assertThat(reset.notices()).containsExactly(SandboxWorkspaceManager.RESET_NOTICE);
+                    assertThat(reset.reset()).isTrue();
+                    assertThat(reset.workspaceId()).isEqualTo(harness.record(session).id());
+                    assertThat(reset.slot()).isEqualTo("primary");
+                });
+    }
+
+    @Test
+    @DisplayName("unannounced-reset §6.3: in the environment, the error is the bare reason and the reset a drained notice")
+    void anEnvironmentsFailedRecreateAfterAnIdleCloseQueuesTheReset() throws Exception {
+        final SessionId session = SessionId.generate();
+        bash(harness.mainTurn(session, ALICE), "true");
+        harness.clock.advance(Duration.ofHours(2));
+        harness.sandbox.janitor().runOnce();
+        harness.clock.advance(Duration.ofHours(24));
+        harness.sandbox.janitor().runOnce();
+        harness.faults.injectOnce(Operation.CREATE, Fault.fail(SandboxProviderException.Kind.TRANSIENT));
+        final ExecutionEnvironment turn = harness.mainTurn(session, ALICE);
+
+        assertThatThrownBy(() -> bash(turn, "true")).isExactlyInstanceOf(SandboxUnavailableException.class)
+                .hasMessageContaining("could not be provisioned").message().doesNotContain("also:");
+        assertThat(turn.drainNotices()).containsExactly(SandboxWorkspaceManager.RESET_NOTICE);
+        assertThat(turn.drainNotices()).isEmpty();
     }
 
     @Test
@@ -296,9 +325,11 @@ class SandboxWorkspaceManagerTest {
         harness.sandbox.janitor().runOnce();
         assertThat(harness.primary(session).state()).isEqualTo(SlotState.TERMINATED);
         harness.faults.injectOnce(Operation.CREATE, Fault.fail(SandboxProviderException.Kind.TRANSIENT));
+        final ExecutionEnvironment turn = harness.mainTurn(session, ALICE);
 
-        assertThatThrownBy(() -> bash(harness.mainTurn(session, ALICE), "true"))
-                .isInstanceOf(SandboxUnavailableException.class).hasMessageContaining("the sandbox was recreated");
+        assertThatThrownBy(() -> bash(turn, "true")).isInstanceOf(SandboxUnavailableException.class).message()
+                .doesNotContain("the sandbox was recreated");
+        assertThat(turn.drainNotices()).singleElement().asString().contains("the sandbox was recreated");
     }
 
     @Test

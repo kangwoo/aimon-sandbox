@@ -43,8 +43,9 @@ import at.aimon.sandbox.workspace.WorkspaceOwner;
  * Every root request with a session reads the options store once. A failing store fails the bind rather than falling
  * back to {@code per-session}, which would put an attached session in a different workspace — also when row 0
  * applies, since the switch notice needs the record. A session that lands in another workspace than it last connected
- * to carries a {@link WorkspaceSwitch}. Forks are unchanged: they inherit their parent's binding, row 0 included, and
- * never reach this policy's {@code bind}.
+ * to carries a {@link WorkspaceSwitch}, and every session's binding the {@link SessionBookkeeping} of the record it
+ * read — no second read (docs/design/workspace-sandbox-unannounced-reset.md §3.2). Forks are unchanged: they inherit
+ * their parent's binding, row 0 included, and never reach this policy's {@code bind}.
  */
 public final class SessionOptionsBindingPolicy implements SandboxBindingPolicy {
 
@@ -123,7 +124,8 @@ public final class SessionOptionsBindingPolicy implements SandboxBindingPolicy {
             }
             binding = delegate.bind(context);
         }
-        return session.map(id -> withSwitch(binding, id, record, requested.isPresent())).orElse(binding);
+        return session.map(id -> withSwitch(binding, id, record, requested.isPresent()).toBuilder()
+                .sessionBookkeeping(SessionBookkeeping.of(id, record)).build()).orElse(binding);
     }
 
     @Override
@@ -228,10 +230,15 @@ public final class SessionOptionsBindingPolicy implements SandboxBindingPolicy {
      * ({@code lastWorkspaceId} and {@code workspace} both empty — it only set a rule) is recorded silently when
      * rows 1–3 bound it: the session ran where it runs now, under the delegate or the agent default, before the record
      * existed. Row 0 with no {@code lastWorkspaceId} is always announced (core-033 design §6.4).
+     *
+     * <p>
+     * A record holding nothing but an unannounced reset counts as none here: the environment created it as bookkeeping
+     * for a derived-workspace session that never moved, which must not turn into a switch, nor leave a
+     * {@code lastWorkspaceId} record behind (docs/design/workspace-sandbox-unannounced-reset.md §3.2).
      */
     private static SandboxBinding withSwitch(SandboxBinding binding, SessionId session,
             Optional<SessionSandboxOptions> record, boolean requested) {
-        if (record.isEmpty() && !requested) {
+        if ((record.isEmpty() || onlyAReset(record.get())) && !requested) {
             return binding;
         }
         final SandboxWorkspaceId to = binding.workspaceId();
@@ -244,5 +251,9 @@ public final class SessionOptionsBindingPolicy implements SandboxBindingPolicy {
                 ? WorkspaceSwitch.silent(session, to, version)
                 : WorkspaceSwitch.announced(session, from.orElse(null), to, version);
         return binding.toBuilder().workspaceSwitch(change).build();
+    }
+
+    private static boolean onlyAReset(SessionSandboxOptions record) {
+        return record.workspace().isEmpty() && record.unattached().isEmpty() && record.lastWorkspaceId().isEmpty();
     }
 }
