@@ -3,6 +3,7 @@ package at.aimon.sandbox.testkit;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -99,11 +100,17 @@ public abstract class SessionOptionsStoreContract {
         assertThat(created.unannouncedReset()).contains(RESET);
         assertThat(store.find(SessionId.of("s1"))).contains(created);
 
-        final UnannouncedReset newer = UnannouncedReset.of(B, "exp-a", T0.plusNanos(1_234_567_891L));
-        final SessionSandboxOptions replaced = store.put(created.toBuilder().unannouncedReset(newer).build(),
+        // Nanoseconds that a store may round (§3.1 of the design keeps the stored value, not the written one): whatever
+        // it keeps, find must answer the same as the write returned, to at least millisecond precision.
+        final Instant precise = T0.plusNanos(1_234_567_891L);
+        final SessionSandboxOptions replaced = store.put(
+                created.toBuilder().unannouncedReset(UnannouncedReset.of(B, "exp-a", precise)).build(),
                 OptionalLong.of(created.version()));
-        assertThat(replaced.unannouncedReset()).contains(newer);
         assertThat(store.find(SessionId.of("s1"))).contains(replaced);
+        final UnannouncedReset kept = replaced.unannouncedReset().orElseThrow();
+        assertThat(kept.isOf(B, "exp-a")).isTrue();
+        assertThat(Duration.between(kept.at(), precise).abs()).as("kept to at least millisecond precision")
+                .isLessThan(Duration.ofMillis(1));
 
         final SessionSandboxOptions cleared = store.put(replaced.toBuilder().unannouncedReset(null).build(),
                 OptionalLong.of(replaced.version()));

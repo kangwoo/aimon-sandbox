@@ -79,7 +79,8 @@ which `scripts/release.sh` refuses to release
 - **`CloseCause` has a third constant**: an exhaustive `switch` over it needs a branch for `SESSION_DELETED`. A store
   that persists the enum by name needs nothing.
 - **A custom `SessionOptionsStore` must implement `sessions(...)` and persist `unannouncedReset`**; run the
-  updated contract. A store that drops the field behaves as before #28 for that session.
+  updated contract; it keeps the reset's time to at least millisecond precision. A store that drops the field behaves
+  as before #28 for that session.
 - **Code that reads `ShellCommandResult.notices()`** no longer finds environment notices there; they reach the model
   through core.
 - **Non-String `environment.*` execution attributes** set for other purposes now make that turn's environment
