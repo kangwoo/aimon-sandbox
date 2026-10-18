@@ -98,8 +98,10 @@ final class ShellWrapper {
 
     /**
      * The inner bash. {@code $1} state directory, {@code $2} run-file prefix (the command is in {@code $2.cmd}),
-     * {@code $3} {@code fg|bg}, {@code $4} root (where a new shell starts, and the fallback when the saved cwd is
+     * {@code $3} {@code fg|bg|iso}, {@code $4} root (where a new shell starts, and the fallback when the saved cwd is
      * gone), {@code $5} per-command working directory (may be empty), then {@code NAME=value} per-command variables.
+     * {@code iso} starts as a new shell would: it does not read the state file, so no cwd or export the session's
+     * commands left behind reaches the command, and like {@code bg} it saves none.
      * A cwd fallback writes {@code 1} (ran in the root) or {@code 2} (the root is gone too: ran in {@code /workspace})
      * to {@code $2.cwd}. When the exec environment names a CA bundle in {@code SSL_CERT_FILE} — OpenSandbox's execd
      * does,
@@ -120,7 +122,7 @@ final class ShellWrapper {
               if builtin cd -- "$__aimon_root" 2>/dev/null; then builtin printf 1 > "$__aimon_run.cwd"
               else builtin cd /workspace; builtin printf 2 > "$__aimon_run.cwd"; fi
             }
-            if [ -r "$__aimon_dir/state" ]; then . "$__aimon_dir/state"
+            if [ "$__aimon_mode" != iso ] && [ -r "$__aimon_dir/state" ]; then . "$__aimon_dir/state"
             else builtin cd -- "$__aimon_root" 2>/dev/null || __aimon_fallback; fi
             readonly __aimon_dir __aimon_run __aimon_base __aimon_mode __aimon_root __aimon_wd
             __aimon_nosave=0
@@ -337,6 +339,27 @@ final class ShellWrapper {
             appendWatchdog(s, in, "");
         }
         appendInner(s, in, "bg", "");
+        if (in.timeout != null) {
+            appendWatchdogStop(s);
+        }
+        return epilogue(s, in);
+    }
+
+    /**
+     * The script of an isolated command ({@code ExecutionOptions.isIsolated()}, an operator's {@code hooks.json}
+     * command): the hook's script, but the inner bash starts as a new shell would — in the root, with only the exec
+     * environment and the per-command variables — instead of from the session's state file.
+     *
+     * @param in
+     *            the invocation
+     * @return the script
+     */
+    static String isolated(Invocation in) {
+        final StringBuilder s = prologue(in);
+        if (in.timeout != null) {
+            appendWatchdog(s, in, "");
+        }
+        appendInner(s, in, "iso", "");
         if (in.timeout != null) {
             appendWatchdogStop(s);
         }

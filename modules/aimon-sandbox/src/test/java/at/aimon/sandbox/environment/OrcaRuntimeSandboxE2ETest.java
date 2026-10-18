@@ -49,6 +49,8 @@ import at.aimon.core.skill.SkillContent;
 import at.aimon.core.skill.SkillMetadata;
 import at.aimon.core.skill.SkillRegistry;
 import at.aimon.core.skill.hook.declarative.DefaultShellActionExecutor;
+import at.aimon.core.skill.hook.declarative.IsolatedShellActionExecutor;
+import at.aimon.core.skill.hook.declarative.ShellActionExecutor;
 import at.aimon.core.skill.parser.MarkdownSkillParser;
 import at.aimon.core.skill.parser.SkillHookSetParser;
 import at.aimon.core.skill.render.ShellArgumentTokenizer;
@@ -253,8 +255,12 @@ class OrcaRuntimeSandboxE2ETest {
      * skill's fork would get, without the fork around it.
      */
     private void guardWith(String hooksYaml) {
+        guardWith(hooksYaml, new DefaultShellActionExecutor());
+    }
+
+    private void guardWith(String hooksYaml, ShellActionExecutor actions) {
         final MarkdownSkillParser parser = new MarkdownSkillParser(new ShellArgumentTokenizer(),
-                new SkillHookSetParser(new DefaultShellActionExecutor()));
+                new SkillHookSetParser(actions));
         final Skill skill = parser.parse("guard",
                 "---\nname: guard\ndescription: guards Bash\nhooks:\n  preTool:\n" + hooksYaml + "---\n\nGuard.");
         assertThat(skill.getMetadata().getHooks().getPreToolHooks()).isNotEmpty();
@@ -300,6 +306,32 @@ class OrcaRuntimeSandboxE2ETest {
         assertThat(recorder.runs).filteredOn(spec -> spec.command().contains("FROM_HOOK=$FROM_HOOK")).singleElement()
                 .matches(spec -> spec.command().contains("flock"));
         assertThat(llm.toolResults).anyMatch(text -> text.contains("/workspace/repo/src\nFROM_HOOK=\n"));
+    }
+
+    @Test
+    @DisplayName("§12.1: a hooks.json guard (core's isolated executor) runs in the sandbox without the model's state")
+    void isolatedShellHookRunsWithoutTheModelsShellState() throws Exception {
+        // The executor core's hooks.json path (HookRegistryApplier) gives an environment-placed command.
+        guardWith("    - action: { type: shell, command: \"echo \\\"[$FROM_MODEL]\\\" >> hook-saw.txt\" }\n",
+                new IsolatedShellActionExecutor());
+        llm.respond(LlmResponse.tools(
+                List.of(ToolUse.of("t1", "Bash", Map.of("command", "mkdir -p src; cd src; export FROM_MODEL=1")))));
+        llm.respond(
+                LlmResponse.tools(List.of(ToolUse.of("t2", "Bash", Map.of("command", "pwd; echo \"[$FROM_MODEL]\"")))));
+        llm.respond(LlmResponse.text("Done."));
+        final SessionId session = SessionId.generate();
+
+        final OrcaAgentExecutionResult result = executor.execute(runtime(), OrcaAgentExecutionRequest.builder()
+                .userInput("go").sessionId(session).principal(SandboxHarness.ALICE).build());
+
+        assertThat(result.isSuccess()).as(result.getErrorMessage()).isTrue();
+        assertThat(llm.toolResults).noneMatch(text -> text.contains("Blocked"))
+                .anyMatch(text -> text.contains("/workspace/repo/src\n[1]\n"));
+        // Both runs of the guard, the second after the model's cd/export: neither saw them, both wrote in the root.
+        assertThat(harness.hostFile(session, "/workspace/repo/hook-saw.txt")).isEqualTo("[]\n[]\n");
+        assertThat(harness.host(session, "/workspace/repo/src/hook-saw.txt")).doesNotExist();
+        assertThat(recorder.runs).filteredOn(spec -> spec.command().contains("hook-saw.txt")).hasSize(2)
+                .allMatch(spec -> !spec.command().contains("flock") && spec.command().contains("\" iso '"));
     }
 
     @Test

@@ -30,6 +30,7 @@ import at.aimon.core.environment.ExecutionEnvironment;
 import at.aimon.core.environment.ExecutionEnvironments;
 import at.aimon.core.shell.ExecutionOptions;
 import at.aimon.core.shell.ShellCommandResult;
+import at.aimon.core.shell.ShellFeature;
 import at.aimon.sandbox.SandboxAdministration;
 import at.aimon.sandbox.SandboxSettings;
 import at.aimon.sandbox.SandboxWorkspaces;
@@ -258,6 +259,22 @@ class ManagedWorkspaceSandboxIT {
 
         assertThat(provider.status(ref)).isEmpty();
         assertThat(assembly.store().find(derived)).isEmpty();
+    }
+
+    @Test
+    @DisplayName("#31: an isolated command (a hooks.json guard) sees none of the session's cd/export and saves none")
+    void anIsolatedCommandStartsAsANewShellInARealSandbox() throws Exception {
+        final ExecutionEnvironment turn = mainTurn(SessionId.generate());
+        bash(turn, "mkdir -p /workspace/repo/src && cd /workspace/repo/src && export SEEN=yes BASH_ENV=/tmp/evil");
+
+        final ShellCommandResult isolated = turn.shell().execute(
+                () -> "pwd; echo \"[$SEEN] [${BASH_ENV-}]\"; export ISO=1; cd /tmp",
+                ExecutionOptions.builder().timeout(Duration.ofSeconds(60)).hook(true).isolated(true).build());
+
+        assertThat(turn.shell().supports(ShellFeature.ISOLATED_EXECUTION)).isTrue();
+        assertThat(isolated.stdout()).isEqualTo("/workspace/repo\n[] []\n");
+        assertThat(bash(turn, "pwd; echo \"SEEN=$SEEN ISO=$ISO\"").stdout())
+                .isEqualTo("/workspace/repo/src\nSEEN=yes ISO=\n");
     }
 
     @Test

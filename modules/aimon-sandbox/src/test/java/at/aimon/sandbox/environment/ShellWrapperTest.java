@@ -91,6 +91,21 @@ class ShellWrapperTest {
     }
 
     @Test
+    void anIsolatedCommandTakesNoLockKeepsTheWatchdogAndRunsTheInnerBashAsANewShell() {
+        final String script = ShellWrapper.isolated(invocation("true"));
+
+        assertThat(script).doesNotContain("flock").contains("\" iso '/workspace/repo'").contains("sleep 2.500 & w=$!")
+                .contains("  kill -KILL 0 ) </dev/null").contains("\"$r.timedout\"\n");
+        assertThat(ShellWrapper.isolated(invocation("true").timeout(null))).doesNotContain("kill -KILL 0")
+                .doesNotContain("$r.timedout");
+        // iso never reads the state file and, not being fg, installs no save trap.
+        assertThat(ShellWrapper.INNER).contains(
+                "if [ \"$__aimon_mode\" != iso ] && [ -r \"$__aimon_dir/state\" ]; then . \"$__aimon_dir/state\"\n"
+                        + "else builtin cd -- \"$__aimon_root\" 2>/dev/null || __aimon_fallback; fi")
+                .contains("if [ \"$__aimon_mode\" = fg ]; then\n  trap");
+    }
+
+    @Test
     void optionsBecomeQuotedArgumentsAndStreamsCanMerge() {
         final String script = ShellWrapper.foreground(invocation("true").workingDirectory("/tmp/it's")
                 .environment(Map.of("K", "v'1")).redirectErrorStream(true).stdinPath("/workspace/in"));
