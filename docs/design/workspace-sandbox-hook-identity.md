@@ -1,7 +1,9 @@
 # Record — aimon-sandbox#34: policy-hook execs under a separate uid (core EE-113)
 
 Status: **record, not implemented.** This page fixes what is known and what is still blocked, so that the work can start
-from here once the blockers clear. Nothing in this repository changes behaviour because of it.
+from here once the blockers clear. The main blocker is now upstream, not here: on OpenSandbox as shipped the agent's
+uid can reach execd's root API, so core §7 condition 1 does not hold until OpenSandbox changes (§5 Q1). Nothing in this
+repository changes behaviour because of this page.
 
 Base: sandbox `main` `4255a44`. Core `main` `c8cbfc22`: EE-113 is open, and the SPI is proposed in
 [kangwoo/aimon-core#287](https://github.com/kangwoo/aimon-core/issues/287). OpenSandbox
@@ -46,28 +48,33 @@ The work stays parked until it does, or until the maintainer decides to do it ah
 
 | | Today | With a hook identity |
 | --- | --- | --- |
-| execd | uid 1000, the container's `runAsUser` | **root**, `no_new_privs`, every capability dropped except `SETUID` · `SETGID` |
+| execd | uid 1000, the container's `runAsUser` | **root**, `no_new_privs`, every capability dropped except `SETUID` · `SETGID` · `KILL` |
 | Model's commands (`SandboxShell` foreground/background, seed, staging) | execd's uid, no `uid` argument | `uid=A, gid=A` on every `/command` call |
 | Model's file tools (`OpenSandboxFiles`) | `/files/*`, `/directories/*` as execd | `/v1/filesystem/A/A/...` |
 | `hooks.json` execs (`isIsolated` + the core flag) | as the model | `uid=H, gid=H` |
 | Run directory (`RUN_DIRECTORY`) | `mktemp -d` under `/workspace/.aimon-shell/.run.*`, as A | `mktemp -d` under the H-owned directory (§4), as H; uploads through `/v1/filesystem/H/H/...` into it |
-| Skill hooks (`isHook`, not isolated) | as the model | unchanged: they run as A, from the session's state (R4) |
+| Skill hooks (`isHook`, not isolated) | as the model | unchanged: they run as A, from the session's state (core R4) |
 
 Why execd must be root: a non-root execd gets capabilities only through file or ambient capabilities, and the
 container's `no_new_privs` disables file capabilities. Container-level `no_new_privs` does not stop a holder of
-`CAP_SETUID` from dropping to a lower uid. After the drop the child has no capabilities. Both points are inferred from
-Linux semantics and **not tested** against OpenSandbox.
+`CAP_SETUID` from dropping to a lower uid, and after the drop the child has no capabilities — confirmed in a local run
+(a `/command` child with `uid=A` reported `CapEff: 0` and `NoNewPrivs: 1`). `CAP_KILL` is in the set because execd
+stops a command's process group with `kill(-pgid)` (`command.go:319,328,480`, `bash_session.go:405,631`) and also
+signals the filesystem-identity workers; a root execd signalling an A- or H-owned process group needs it, or timeouts
+and `kill()` fail with `EPERM`.
 
 The uid and gid must always be sent together. If the uid is missing from `/etc/passwd` and no gid is given, execd
-gives the child **gid 0** (`buildCredential`). `/command` also sets no `HOME` or `USER`: the child inherits execd's
-environment overlaid with the request's `envs`. The wrapper must therefore set `HOME`, `USER` and `LOGNAME` itself, or
-the model's shell starts with root's `HOME`.
+gives the child **gid 0** (`buildCredential`). `gid` is a group id, not a repeat of the uid number: it must be the
+account's own primary group (`id -g`). `/command` also sets no `HOME` or `USER`: the child inherits execd's
+environment overlaid with the request's `envs` (`command_argv.go:52-66`; confirmed in a local run, where a `/command`
+child's `HOME` was `/root`). The wrapper must therefore set `HOME`, `USER` and `LOGNAME` itself, or the model's shell
+starts with root's `HOME`.
 
 ## 3. Core's conditions against this topology
 
 | # | Condition (core design §7) | Status |
 | --- | --- | --- |
-| 1 | A is not root and cannot become H or root | **Open — the main blocker.** A runs as 1000 with no capabilities after the drop, but A's processes share the container's network namespace with a root execd, and execd's API runs commands as any uid, root included. The boundary therefore rests on execd's access token, which A must not be able to read (§5 Q1). setuid binaries that reach H or root (`sudo`, `su`) must be absent from the image — a seed check (§4). |
+| 1 | A is not root and cannot become H or root | **Does not hold on OpenSandbox today — the blocker (§5 Q1).** A runs as 1000 with no capabilities after the drop, but it shares the container's network namespace with a root execd whose API runs commands as any uid, and that API is reachable from A over localhost. Two unauthenticated paths to root were confirmed by reading HEAD and in a local run: `/internal/init` and (with the hardening launcher off) the env-delivered token (§5 Q1). Both need an upstream fix. Core §7 writes this as `runAsNonRoot`; this topology cannot satisfy that at pod level (execd is root), so the condition is restated per process (every exec carries `uid=A`/`uid=H`, and nothing reachable by A escalates). `no_new_privs` already makes any setuid/setgid binary inert on exec, so the seed's setuid scan (§4) is defence in depth, not the barrier. |
 | 2 | Hook execs run as H ≠ A | Available: `/command` `uid`/`gid`, with execd as root (§2). |
 | 3 | Hook and run files, and their parents, H-owned and not A-writable | Image contract (§4). The run directory moves out of `/workspace`. |
 | 4 | File tools as A, run-directory uploads as H | Available from `release-1.1.1` (§1). Also raises the execd floor for the K8s chart, which defaults to `release-1.1.1-rc.1` (§5 Q4). |
@@ -82,72 +89,101 @@ This adds to `workspace-sandbox.md` §13.3. It applies only to a profile that de
 images stay valid.
 
 - A user **H** with its own uid and primary group. The name is declared by the profile; the suggestion is
-  `aimon-hook`. Its uid must not be 0, and must not be A's.
+  `aimon-hook`. Its uid must not be 0, and must not be A's, and A must not be a member of H's primary group (or A could
+  write H's files whatever the owner is).
 - `/opt/aimon` owned by root, mode `0755`. `/opt/aimon/hooks` owned by H, mode `0700`. No parent of either may be
   writable by A.
-- No `sudo`, `su` or other setuid/setgid binary reachable by A that can lead to H or root. Exactly which binaries to
-  allow (`passwd`, `mount` and so on) is §5 Q3.
+- Defence in depth: no `sudo`, `su` or other setuid/setgid binary reachable by A that can lead to H or root. Because
+  the topology keeps `no_new_privs`, execve already ignores setuid/setgid bits, so this is a second line, not the
+  barrier. Whether the seed refuses every such binary or allows a fixed harmless list is §5 Q3.
 - `sha256sum` and `base64` in `/usr/bin`, as today.
 
 The seed would run its checks **as A** (with `uid=A` on its exec), so that "A cannot write there" is tested by A itself.
-The following script is a sketch: names are illustrative, and `fail` and the variables follow `SandboxSeeder`'s style.
+The following script is a sketch: `1000` is A's uid from the image contract, the names are illustrative, and `fail`
+and the variables follow `SandboxSeeder`'s style.
 
 ```sh
 hook_user='aimon-hook'                       # quoted from the profile, like declared_platform
+grep -q '^NoNewPrivs:[[:space:]]*1' /proc/self/status || fail hook-identity "no_new_privs is not set"
 [ "$(id -u)" = 1000 ] || fail hook-identity "the seed must run as uid 1000 (it runs as $(id -u))"
 h=$(id -u "$hook_user" 2>/dev/null) || fail hook-identity "the image lacks the user $hook_user"
 [ "$h" != 0 ] && [ "$h" != 1000 ] || fail hook-identity "$hook_user must not be uid 0 or 1000"
+id -G "$hook_user" | tr ' ' '\n' | grep -qx "$(id -g)" && \
+  fail hook-identity "the agent is a member of $hook_user's group"
+[ -d /opt/aimon/hooks ] || fail hook-identity "/opt/aimon/hooks is missing"
 for d in /opt/aimon/hooks /opt/aimon /opt /; do
   [ ! -w "$d" ] || fail hook-identity "$d is writable by the agent"
 done
+[ "$(stat -c %u /opt/aimon)" = 0 ] || fail hook-identity "/opt/aimon is not owned by root"
 [ "$(stat -c %u /opt/aimon/hooks)" = "$h" ] || fail hook-identity "/opt/aimon/hooks is not owned by $hook_user"
-s=$(find / -xdev \( -perm -4000 -o -perm -2000 \) -type f 2>/dev/null | head -n 20)
-[ -z "$s" ] || fail hook-identity "setuid/setgid binaries present: $s"    # allow-list: §5 Q3
+# Defence in depth (NNP already makes these inert, §5 Q3); -xdev/2>/dev/null hide other mounts and unreadable dirs.
+s=$(find / -xdev \( -perm -4000 -o -perm -2000 \) -type f 2>/dev/null | head -n 20 | tr '\n' ' ')
+[ -z "$s" ] || fail hook-identity "setuid/setgid binaries present: $s"
 ```
 
-A second check runs **as H**, through one exec with `uid=H`. It confirms that the switch works at all: `id -u` prints
-H, `/opt/aimon/hooks` is writable, and a `mktemp -d` there succeeds. A failure there means execd cannot switch
-identity. It is a permanent seed failure in a new step, `hook-identity`.
+A second check runs **as H**, through one exec with `uid=H gid=$(id -g aimon-hook)`. It confirms that the switch works
+at all: `id -u` prints H, `/opt/aimon/hooks` is writable, and a `mktemp -d` there succeeds. A failure there means execd
+cannot switch identity. It is a permanent seed failure in a new step, `hook-identity`.
 
-The seed's present root check (`id -u` ≠ 0, skipped when `HARDENED_SECURITY_CONTEXT` is waived) keeps its meaning,
-because it now runs as A. The K8s hardening it stands for changes, though. The container no longer runs as
-`runAsUser: 1000` with every capability dropped: it runs as root, keeps `SETUID`/`SETGID`, and keeps `no_new_privs`.
-How `HARDENED_SECURITY_CONTEXT` is declared and checked for such a profile is §5 Q2.
+The seed's present root check (`id -u` ≠ 0, skipped when `HARDENED_SECURITY_CONTEXT` is waived) no longer detects
+anything once the seed's own exec carries `uid=A`: `id -u` is then always 1000. For this topology the meaningful checks
+are the `NoNewPrivs` line and the capability bounding set read **as A** (`CapBnd`/`CapEff` in `/proc/self/status` —
+A must hold none), which replace it. The K8s hardening the old check stood for also changes: the container no longer
+runs as `runAsUser: 1000` with every capability dropped; it runs as root, keeps `SETUID`/`SETGID`/`KILL`, and keeps
+`no_new_privs`. How `HARDENED_SECURITY_CONTEXT` is declared and checked for such a profile is §5 Q2.
 
 ## 5. Open questions
 
-- **Q1 — execd's API is reachable from A.** This decides whether a boundary exists at all, and nothing on the sandbox
-  side can answer it.
-  - execd listens on every interface. A shares its network namespace, so `curl localhost:44772/command` with `uid=0`
-    is a root shell unless the token check stops it.
-  - The spike found that the Docker runtime did not check the token in `v1.1.0` (`opensandbox-spike.md` §4, item 5).
-  - At HEAD, `accessTokenMiddleware` (`pkg/web/router.go:190-231`) checks a token hash delivered through
-    `/internal/init`, and falls back to `EXECD_ACCESS_TOKEN`. When neither is set, every request passes. The same
-    variable is stripped from the environment of user processes (`pkg/runtime/env.go:288-321`,
-    `pkg/isolation/config.go:56-64`).
-  - To verify: that both runtimes always deliver a token; that the token never appears on execd's command line
-    (`/proc/<pid>/cmdline` is world-readable — the `--access-token` flag exists, `pkg/flag/parser.go:71`); and that
-    `/internal/init` cannot be re-run by A to replace the binding.
-  - If any of these fails, condition 1 cannot hold on OpenSandbox. The question then goes upstream, for example a Unix
-    socket only root can open, or a privileged helper in OSEP-0018's launcher.
+- **Q1 — execd's API is reachable from A, and that defeats the boundary on OpenSandbox today.** This decides whether a
+  boundary exists at all, and the sandbox side cannot fix it. execd listens on `:44772` on every interface and A shares
+  its network namespace, so a request to `localhost` naming `uid=0` runs as root unless the token check stops it. Two
+  ways past the token were confirmed by reading HEAD (`0548e18f`) and in a local run of `execd:release-1.1.1` as root:
+  - **`/internal/init` is unauthenticated and re-runnable.** It is in `preInitPaths` (`pkg/web/router.go:36-40`), which
+    `accessTokenMiddleware` skips (`:197`), and the manager is installed unconditionally (`main.go:190`). `Apply` has
+    no generation or "already initialised" guard; with `preserveRuntimeState:true` it swaps in the caller's
+    `accessTokenHash` and marks ready (`init_runtime.go:218-227`, `binding.go`). So A can replace the binding with a
+    token hash it chose, and a full (non-preserving) init also runs the request's `lifecycle` preStart as root execd.
+    This path is present from `release-1.1.0` on. A local run reproduced the binding swap; no exploit steps are
+    recorded here.
+  - **`/command` children inherit the env-delivered token when the hardening launcher is off.** The blacklist that
+    strips `EXECD_ACCESS_TOKEN` (`pkg/runtime/env.go:288-321`) is used only for PTY, session and lifecycle processes
+    (`bash_session.go`), not for `/command`, which builds its child environment from an unfiltered `os.Environ()`
+    (`command_argv.go:52-66`). It is scrubbed for `/command` only under the OSEP-0018 hardening launcher
+    (`hardening_linux.go`), and `[hardening] enabled` defaults to off. So where the operator delivers the token through
+    `EXECD_ACCESS_TOKEN` (rather than only an init token hash), A's own commands read it. A local run confirmed a
+    `/command` child saw `EXECD_ACCESS_TOKEN`.
+  - Related surface for the same threat list: `/pty`, `/session` and `/code` take **no** uid argument, so they always
+    run as root execd — only `/command` and `/v1/isolated` carry `uid`/`gid`. The egress sidecar (`components/egress/`)
+    shares the network namespace and exposes its own control surface, whose authentication must be checked before
+    relying on it. A Jupyter kernel, if the image runs one, is reachable over localhost. Upstream's own docs say the
+    filesystem-identity routes "do not provide … a tenant isolation boundary" and that API credentials belong in the
+    trusted backend (`docs/architecture/data-plane/execd.md:89`, at the OpenSandbox repo root) — the same caution
+    applies to running hooks as H.
+  - **Conclusion:** condition 1 cannot hold on OpenSandbox as shipped. A real boundary needs an upstream change — for
+    example `/internal/init` accepted once or only from the control plane, a token never placed in execd's environment,
+    and execd's API bound to a path only root can open (a Unix socket, or the OSEP-0018 launcher as a privileged
+    helper). These are OpenSandbox-side and should be raised with upstream through its private security-advisory
+    channel (`SECURITY.md`), not a public issue.
 - **Q2 — `HARDENED_SECURITY_CONTEXT` for a root execd.** Today it means `runAsUser: 1000`, `runAsNonRoot` and every
   capability dropped, checked by the seed's `id -u`. With a hook identity it would mean: every exec carries `uid=A` or
   `uid=H`; the container keeps only `SETUID`/`SETGID`; `no_new_privs` is set; there is no service-account token. One
   option is a separate capability, so that the two shapes are not confused. Another is OSEP-0018's hardening floor
   (`pkg/runtime/hardening_linux.go`): its launcher trims capabilities, sets `no_new_privs`, and applies Landlock and
-  seccomp per launch. Its default target is execd's own uid (`:411`), so it would still need the per-request uid
-  (`:529-541`).
-- **Q3 — setuid allow-list.** Whether the seed refuses every setuid/setgid binary, or allows a fixed list that cannot
-  reach H or root. The full `find` costs seconds on a large image; it could run only at the first provisioning of an
-  image digest.
+  seccomp per launch. Its default target is execd's own uid (`:411`) but it maps a request's `Credential` into the
+  launcher policy (`:528-539`), so a `/command` `uid` already works under it — and, per Q1, turning it on also scrubs
+  the token from `/command` children. Enabling the floor is therefore part of the answer, not a conflict with it.
+- **Q3 — setuid handling.** With `no_new_privs` set, execve ignores setuid/setgid bits, so the scan is defence in
+  depth. The seed can keep the cheap `/proc/self/status` checks (`NoNewPrivs`, `CapBnd`/`CapEff` as A, §4) as the real
+  test and either skip the `find` or run it only at the first provisioning of an image digest (it costs seconds on a
+  large image).
 - **Q4 — version floor.** Identity file routes need execd `release-1.1.1`. The docker tier pins `v1.1.0` and the chart
   defaults to `release-1.1.1-rc.1`. The provider would advertise the feature only after probing the route (a `404`
   means unsupported), not from a version string.
 - **Q5 — existing workspaces.** `/workspace` stays A-owned, so nothing there moves. The old run-directory location
   (`/workspace/.aimon-shell/.run.*`) stays in use for skill hooks and for profiles without a hook identity.
-- **Q6 — run-directory digests.** When uploads go as H straight into an H-only directory, the digest check of
-  `RUN_DIRECTORY` item 3 is no longer needed against A. The suggestion is to keep it: it costs one `sha256sum` and
-  guards against a mistaken route.
+- **Q6 — run-directory digests.** When uploads go as H straight into an H-only directory, the digest check of core's
+  `ShellFeature.RUN_DIRECTORY` step 3 is no longer needed against A. The suggestion is to keep it: it costs one
+  `sha256sum` and guards against a mistaken route.
 
 ## 6. What the implementation would touch
 
