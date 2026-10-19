@@ -229,8 +229,8 @@ Script changes:
     `ShellExecutionException("a hook file path is not a relative path inside the run directory: …")`;
   - no path contains `\n` → `ShellExecutionException("a hook file name contains a newline, which the sandbox cannot
     place")`; also refuse `\r` the same way (a normalizing provider never sees it, but `sha256sum` line parsing would);
-  - `run.getTotalBytes() <= MAX_RUN_DIRECTORY_BYTES` (new constant, **8 MiB**: core caps at 4 MiB, slack for a core
-    raise), else `ShellExecutionException` (never the integrity exception).
+  - `run.getTotalBytes() <= MAX_RUN_DIRECTORY_BYTES` (new constant, **8 MiB**: core caps at 4 MiB, slack for a core raise;
+    since core #283 it is `RunDirectory.MAX_TOTAL_BYTES`), else `ShellExecutionException` (never the integrity exception).
 - **Plan the script before connecting** (new private static `plan(...)` → the filled `Invocation` plus the list of
   uploads to do): generate `runPrefix`, `nonce` and `P` here (they depend only on the binding), read each file's
   bytes once with `run.getContent(...)`, compute digests in the JVM, then:
@@ -379,7 +379,7 @@ text — at the end of the build run, by the orchestrator, not by code.
 | `SandboxShell.supports` | PIPE, REDIRECTION, CANCELLATION, ISOLATED_EXECUTION | + `RUN_DIRECTORY` |
 | Exceptions from `execute` | `ShellExecutionException` family | + `RunDirectoryIntegrityException` (exit 73, no trailer) |
 | `ShellWrapper` constants | 70, 71, 75; 64 KiB / 32 KiB caps | + `RUN_FILES_TAMPERED_EXIT=73`, `INLINE_RUN_FILES_LIMIT=16 KiB`, `ARGUMENT_BUDGET=120 KiB`, `PRIVATE_PREFIX` |
-| `SandboxShell` constants | — | + `MAX_RUN_DIRECTORY_BYTES = 8 MiB` |
+| `SandboxShell` constants | — | + `MAX_RUN_DIRECTORY_BYTES = 8 MiB` (now `RunDirectory.MAX_TOTAL_BYTES`) |
 | `INNER` positionals | `$1 dir $2 runprefix $3 fg|bg|iso $4 root $5 wd`, then `K=V…` | `hook` mode word added; for `iso`/`hook` `$6` = command, `$2` = `P/r`; `VAR=P/d` last |
 | Hook/iso trailer | `\n{nonce} exit=N out=B err=B cwd=C` | `\n{nonce} exit=N cwd=C` |
 | Files in sandbox, hook/iso | `.aimon-shell/<h>/run-*.{cmd,in,out,err,cwd,timedout}` | none under `<h>/` unless uploads (`run-*.files/`, `run-*.in`, removed by the wrapper right after copying); `.aimon-shell/.run.<hex>/{d/…,.stdin,r.cwd}` during the run |
@@ -396,9 +396,9 @@ No public API of this library changes.
 
 | Failure | Where detected | Result | Core's mapping |
 |---|---|---|---|
-| Invalid variable / unconfined path / newline in a path / total > 8 MiB / hook command > 64 KiB / script over budget | `execute`, before connect | `ShellExecutionException`; nothing provisioned | `EXECUTION_FAILED` (`failOpen` passes) |
+| Invalid variable / unconfined path / newline in a path / total > 8 MiB (since core #283 core's builder refuses the path and size cases first, 4 MiB) / hook command > 64 KiB / script over budget | `execute`, before connect | `ShellExecutionException`; nothing provisioned | `EXECUTION_FAILED` (`failOpen` passes) |
 | Upload fails (disk full, provider error) | `upload` | `ShellExecutionException` / `SandboxUnavailableException` (as today) | `EXECUTION_FAILED` / unavailable |
-| `P` exists (`mkdir` fails), `mkdir`/decode/copy fails, two paths the FS merges (noclobber), `a` and `a/b` both present | wrapper, exit 70 + stderr line | generic wrapper failure with the message; command not run; JVM `cleanUp` | `EXECUTION_FAILED` |
+| `P` exists (`mkdir` fails), `mkdir`/decode/copy fails, two paths the FS merges (noclobber), `a` and `a/b` both present (unreachable since core #283; the builder refuses it) | wrapper, exit 70 + stderr line | generic wrapper failure with the message; command not run; JVM `cleanUp` | `EXECUTION_FAILED` |
 | Placed bytes ≠ digest, extra/missing entry, uploaded stdin ≠ digest | wrapper, exit 73 | `RunDirectoryIntegrityException`; `P` removed by trap + JVM | `HOOK_FILES_TAMPERED` (blocks whatever `failOpen`) |
 | Hook timeout | watchdog kills group (137), no trailer, elapsed ≥ timeout | `ShellTimeoutException` with streamed partial output; JVM removes `P` | `TIMEOUT` |
 | No timeout, backstop | provider `timedOut()` | `ShellTimeoutException` | `TIMEOUT` |
@@ -471,11 +471,13 @@ boundary at exactly `INLINE_RUN_FILES_LIMIT` and one byte over; stdin moves to u
    (macOS APFS dev hosts) → `ShellExecutionException`, not the integrity exception, command not run (pins contract
    rule 2). CI (GitHub Actions, Linux ext4) exercises the "both verify" branch; macOS dev hosts the refusal branch.
    The refusal branch is also pinned on Linux by #22 (a file and a directory of the same name), which collides on any
-   filesystem.
+   filesystem. (Since core #283 the builder refuses #22's input, so a vanished upload, #22b, pins it on Linux
+   instead.)
 8. `스크립트.sh` through both transports.
 9. Boundary: exactly `INLINE_RUN_FILES_LIMIT` inline (no `.files` upload observed via a spying provider), one over
    uploads.
-10. Newline in a path → `ShellExecutionException`, provider never connected (spy / fault provider counts `connect`).
+10. Newline in a path → `ShellExecutionException`, provider never connected (spy / fault provider counts `connect`). Since core #283:
+    core's builder refuses it first (`IllegalArgumentException`).
 11. During isolated and hook runs, `ls -A /workspace/.aimon-shell/*/ 2>/dev/null | grep run- || true` → empty; the same
     probe in a foreground command lists its own `run-*` (the probe works).
 12. Background writer loop forging `run-*.out` started by a model-facing background command cannot change an isolated
@@ -497,7 +499,8 @@ boundary at exactly `INLINE_RUN_FILES_LIMIT` and one byte over; stdin moves to u
 19. `iso` with the root removed → runs in `/workspace`, cwd notice from `cwd=2`, no `.cwd` file under `<h>/`.
 20. Foreground/background unchanged (existing tests).
 21. Empty `RunDirectory` → variable set, directory exists and is empty during the run, gone after.
-22. A file and a directory of the same name (`lib`, `lib/x`) → not run, `ShellExecutionException`.
+22. A file and a directory of the same name (`lib`, `lib/x`) → not run, `ShellExecutionException`. Since core #283:
+    core's builder refuses it first (`IllegalArgumentException`).
 
 **`SandboxStagingIT`**: `aCopyRewrittenBetweenTwoStagesIsCopiedAgain` (task §3).
 
@@ -559,7 +562,8 @@ survives, as today. Documented in §9 and the CHANGELOG. If the maintainer rejec
 - **F2** `HOOK_FILES_TAMPERED`'s text says "the hook's files changed"; on the sandbox the same exception also covers a
   tampered uploaded stdin payload. Either widen the wording or add a cause.
 - **F3** The 4 MiB cap (`HookRunFiles.MAX_BYTES`) is package-private; a public constant (or a shell-side
-  `maxRunDirectoryBytes` hint) would let the sandbox's ceiling follow it instead of a guessed 8 MiB.
+  `maxRunDirectoryBytes` hint) would let the sandbox's ceiling follow it instead of a guessed 8 MiB. Resolved by
+  kangwoo/aimon-core#283 / aimon-sandbox#36: the sandbox uses `RunDirectory.MAX_TOTAL_BYTES`.
 
 ---
 
@@ -684,6 +688,7 @@ pointing back here. Q-A, Q-F and Q-G are answered below.
 - **Q-A** (base64 stdin, NUL carried) — built as designed (D4); `SandboxShellRunDirectoryIT` #16/17 pin a NUL and an
   ISO-8859-1 byte inline and uploaded. Local to this change.
 - **Q-F** (8 MiB vs 4 MiB) — 8 MiB (`SandboxShell.MAX_RUN_DIRECTORY_BYTES`); following core's constant needs core to
-  publish it (F3).
+  publish it (F3). Resolved by kangwoo/aimon-core#283 / aimon-sandbox#36: the sandbox uses
+  `RunDirectory.MAX_TOTAL_BYTES`.
 - **Q-G** — one IT and the script-shape test; see "Where the code differs" for the subshell consequence.
 - **Q8, Q-B, Q-C, Q-D, Q-E** and the uid boundary — WS §20, each linking here.

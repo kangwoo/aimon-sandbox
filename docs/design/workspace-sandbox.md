@@ -1015,8 +1015,9 @@ INNER:
   빠졌거나 더 있으면 exit 73 → `RunDirectoryIntegrityException`(코어: `HOOK_FILES_TAMPERED`, `failOpen` 과 무관하게
   막는다). 그 밖의 배치 실패(디스크, 없는 도구)는 exit 70 → 일반 `ShellExecutionException` 이다 — 환경 고장을 변조로
   보고하지 않는다. manifest 는 here-document 가 아니라 `printf` 내장 명령의 파이프로 넣는다(here-document 는 `$TMPDIR` 에
-  임시 파일을 쓴다). 디렉터리 경로는 다른 명령별 변수 **뒤에** export 해서 같은 이름을 이긴다. 경로에 줄바꿈(`\n`, `\r`)이
-  있거나 합이 8 MiB 를 넘으면 연결 전에 거부한다(코어는 4 MiB 로 묶는다)
+  임시 파일을 쓴다). 디렉터리 경로는 다른 명령별 변수 **뒤에** export 해서 같은 이름을 이긴다. 경로에 제어 문자가
+  있거나, 파일과 디렉터리가 겹치거나, 합이 `RunDirectory.MAX_TOTAL_BYTES`(4 MiB)를 넘는 실행 디렉터리는 코어 빌더가 만들지
+  않는다(core #283). 셸의 같은 검사는 방어선으로만 남는다
 - **스크립트 하나가 인자 하나다.** Linux 는 인자 하나를 128 KiB 로 묶고, 래퍼 스크립트 전체 — 명령(≤ 64 KiB), 명령별 환경
   (≤ 32 KiB), 인라인 실행 파일(≤ 16 KiB), 인라인 stdin — 가 그 하나다. 스트림 래퍼는 조립한 스크립트의 길이를
   `ARGUMENT_BUDGET`(120 KiB)과 견준다 — stdin 을 먼저 업로드로 돌리고, 그래도 넘으면 실행 파일을(manifest 와 blob 으로), 그래도
@@ -1931,7 +1932,8 @@ workspace-purged · session-options-set · session-options-cleared)는
 | CLOSING 중인 워크스페이스의 `reopen` | 에러 — 닫힌 뒤에 reopen 하라. 첫 읽기 뒤 CAS 사이에 CLOSING 이 되어도 같다 |
 | 명령이 `.aimon-shell` 을 지워 실행 파일이 사라짐 | 포그라운드 · 백그라운드 명령만 — 래퍼 실패 에러, 출력을 잃었다고 적는다. 빈 성공(exit 0)으로 보고하지 않는다. 훅 · 격리 실행에는 실행 파일이 없고, 다음 실행이 셸 루트를 되살린다(§9) |
 | 훅의 실행 파일이나 업로드한 stdin 이 다이제스트와 다름(파일이 바뀌거나 빠지거나 더 있음) | `RunDirectoryIntegrityException`, 명령은 돌지 않는다. 코어는 `HOOK_FILES_TAMPERED` 로 보고 `failOpen` 과 무관하게 막는다(§9) |
-| 훅 명령 64 KiB 초과 · 실행 파일 경로의 줄바꿈 · 실행 파일 8 MiB 초과 · 스크립트가 인자 예산 초과 | 연결 전에 `ShellExecutionException`. 아무것도 프로비저닝하지 않는다(§9) |
+| 훅 명령 64 KiB 초과 · 스크립트가 인자 예산 초과 | 연결 전에 `ShellExecutionException`. 아무것도 프로비저닝하지 않는다(§9) |
+| 실행 파일 경로의 제어 문자 · 파일/디렉터리 겹침 · 4 MiB 초과 | 코어 `RunDirectory.Builder` 가 `IllegalArgumentException` — 셸까지 오지 않는다(core #283) |
 | 작은 파일이 많은 실행 디렉터리(manifest 가 인자 예산을 넘음) | 거부하지 않는다 — manifest 와 blob 두 파일로 올리고 스크립트에는 둘의 다이제스트만 싣는다. 업로드는 파일 수와 상관없이 두 번이다(OpenSandbox 에서 각각 `POST` 와 exec 한 번). 올린 것이 바뀌면 위의 `RunDirectoryIntegrityException`(§9) |
 | 실행 파일을 놓지 못함(파일 시스템이 합치는 두 경로, 디스크, 업로드가 사라짐) | `ShellExecutionException`(exit 70 과 그 이유), 명령은 돌지 않는다. 변조로 보고하지 않는다(§9) |
 | 훅이 남긴 `cmd &` | 트레일러가 오면 exec 의 프로세스 그룹을 kill 한다 — 훅과 함께 끝난다(§9) |
