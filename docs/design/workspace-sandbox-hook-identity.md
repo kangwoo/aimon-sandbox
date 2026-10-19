@@ -56,9 +56,15 @@ The work stays parked until it does, or until the maintainer decides to do it ah
 | Skill hooks (`isHook`, not isolated) | as the model | unchanged: they run as A, from the session's state (core R4) |
 
 Why execd must be root: a non-root execd gets capabilities only through file or ambient capabilities, and the
-container's `no_new_privs` disables file capabilities. Container-level `no_new_privs` does not stop a holder of
-`CAP_SETUID` from dropping to a lower uid, and after the drop the child has no capabilities — confirmed in a local run
-(a `/command` child with `uid=A` reported `CapEff: 0` and `NoNewPrivs: 1`). `CAP_KILL` is in the set because execd
+container's `no_new_privs` disables file capabilities. Ambient capabilities would work in principle, but neither a K8s
+`securityContext` nor Docker's `--cap-add` sets them: for a non-root container the added capabilities land in the
+bounding and permitted sets, and execve clears the effective set (kubernetes/kubernetes#56374; read, not checked in a
+local run). Root is therefore what the deployment tooling can express, not what execd needs: the need is `SETUID`,
+`SETGID` and `KILL`. A non-root execd holding them would not be safer either, since `CAP_SETUID` lets it `setuid(0)`;
+what decides the boundary is who can reach its API (§5 Q1), not execd's own uid.
+
+Container-level `no_new_privs` does not stop a holder of `CAP_SETUID` from dropping to a lower uid, and after the drop
+the child has no capabilities — confirmed in a local run (a `/command` child with `uid=A` reported `CapEff: 0` and `NoNewPrivs: 1`). `CAP_KILL` is in the set because execd
 stops a command's process group with `kill(-pgid)` (`command.go:319,328,480`, `bash_session.go:405,631`) and also
 signals the filesystem-identity workers; a root execd signalling an A- or H-owned process group needs it, or timeouts
 and `kill()` fail with `EPERM`.

@@ -114,11 +114,20 @@ SessionSpec.builder().lifecycleListener(sandbox.sessionLifecycleListener());   /
   `DefaultShellActionExecutor`; a host that installs another executor gets what that one does). When the sandbox is unavailable — the binding
   was refused, provisioning failed, the provider cannot be reached — a tool call guarded by a skill's `preTool`
   shell hook is **blocked** with the reason, and a skill fork with an `onStart` shell guard **does not start**.
-  Give hooks that only observe `failOpen: true`. Hooks from `hooks.json` run on the host shell and do not depend on
-  the sandbox. `OrcaRuntimeSandboxE2ETest` checks this against a real `OrcaAgentExecutor`. To refuse
+  Give hooks that only observe `failOpen: true`. `OrcaRuntimeSandboxE2ETest` checks this against a real
+  `OrcaAgentExecutor`. To refuse
   skill-declared shell hooks altogether, build core's `SkillHookSetParser` with `NoOpShellActionExecutor` (design
   §12.1). A hook's command runs outside the model's shell session: it takes no shell lock, starts from the
   session's cwd and exports, and changes neither (aimon-core 0.3.2's `ExecutionOptions.isHook()`).
+- **`hooks.json` hooks run in the sandbox too; a guard that must hold against the agent goes on the host.** With
+  aimon-core 0.3.3 a `hooks.json` handler on an in-execution event (`preTool`, `postTool`, …) runs in the execution's
+  sandbox as an isolated command: it reads none of the session's shell state, and #33 keeps its command, stdin and
+  output out of files the agent can rewrite. Only a handler with `"shell": "host"`, one that declares `asyncRewake`
+  without `"shell"`, and a firing with no execution run on the host. This narrows tampering; it is not a privilege
+  boundary — the agent runs as the same uid, so its processes can still reach a hook while it runs (aimon-sandbox#34).
+  For a guard that must hold against the agent during its run, give the handler `"shell": "host"` and have it judge
+  only the tool input on stdin: it cannot see the sandbox's files, and a careless guard on the host (one that `eval`s
+  its input, say) runs model-shaped input outside the container (design §12.1).
 
 ## Managing workspaces
 
