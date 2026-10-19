@@ -622,11 +622,11 @@ pointing back here. Q-A, Q-F and Q-G are answered below.
   either. It then reads each path from the manifest and each content from the blob (`read -r` on fd 4, decoded with
   `/usr/bin/base64 -d`), places it under noclobber, and runs `sha256sum -c --strict -` with the manifest and the count.
   A first round uploaded the manifest only, keeping one upload per file. The pinned blob digest also means a decode
-  failure cannot come from tampering. Inline placement is unchanged.
+  failure cannot come from tampering. Inline placement is unchanged. The budget refusal stays as a guard but is not
+  reachable with every part within its cap.
 - **A model's command with a run directory places it after the `flock` (PR review).** §3.1 put the private-directory
   section in the shared prologue, so a foreground run's `P` existed through the lock wait and was placed even when the
-  lock then stayed busy. `foreground()` now appends it after the owner record. The budget refusal stays as a guard but is not reachable with every
-  part within its cap.
+  lock then stayed busy. `foreground()` now appends it after the owner record.
 - **A model's command with a run directory maps exit 73 to the integrity exception too.** §3.3 described the mapping in
   the stream classification; §5's failure table applies it to every run with a run directory. `classify` (foreground,
   background) throws `RunDirectoryIntegrityException` for exit 73 without a trailer when the run has a private
