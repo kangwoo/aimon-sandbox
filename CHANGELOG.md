@@ -17,7 +17,7 @@ which `scripts/release.sh` refuses to release
   Skill hooks get `AIMON_SKILL_DIR` the same way instead of the staged copy under `.aimon-staged`. The files are placed
   for the one run in a fresh private directory, `/workspace/.aimon-shell/.run.{hex}/d` (exclusive `mkdir`, mode 700),
   inline in the exec when they fit and through an upload otherwise, checked against SHA-256 digests that travel only in
-  the exec, counted, exported in the run directory's variable after every other variable, and removed after the run
+  the exec (for an upload, the digest of an uploaded manifest, so a skill with many small files is not refused), counted, exported in the run directory's variable after every other variable, and removed after the run
   whatever its outcome. A digest or count mismatch throws `RunDirectoryIntegrityException` (core: `HOOK_FILES_TAMPERED`,
   which blocks whatever `failOpen` says) and the command does not run; any other placement failure is a plain
   `ShellExecutionException`. A file name with a newline, files over 8 MiB, and a script over the exec's single-argument
@@ -34,7 +34,13 @@ which `scripts/release.sh` refuses to release
   leaves behind would hold the exec open until its backstop. `SandboxShell` kills the exec's process group once the
   hook's trailer has arrived (after a 500 ms drain grace): a `postTool` hook's `notify-send &` is killed when the hook
   ends. A job that left the group (`setsid`, `set -m`) survives, as before.
-- **The image contract adds `base64`** (in `/usr/bin`, from coreutils, like `sha256sum`); the seed checks it.
+- **The image contract adds `base64` and asks for GNU coreutils** (`sha256sum` and `base64` in `/usr/bin`). The seed
+  checks both paths and that `/usr/bin/sha256sum -c --strict -` accepts a manifest: a BusyBox `sha256sum` rejects
+  `--strict`, which would read as tampering on every hook with files.
+- **Testkit: `LocalProcessSandboxProvider`'s shims start at once on macOS.** The `flock`, `rg` and `shasum` shim scripts
+  are written once per host (`$TMPDIR/aimon-sandbox-shims/`, keyed by content) and linked into each provider, and the
+  `sha256sum` shim links the host's binary: a freshly written executable is assessed on its first run, which under load
+  outlasted a seed's timeout.
 - Design record:
   [`docs/design/workspace-sandbox-run-directory.md`](docs/design/workspace-sandbox-run-directory.md).
 

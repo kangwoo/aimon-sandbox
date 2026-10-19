@@ -608,8 +608,18 @@ pointing back here. Q-A, Q-F and Q-G are answered below.
   provider cut it. In the watched case the stderr is the captured head cut to `max`, as §3.3 says. Either source
   suffices; with neither the run has no trailer (§3.3's own wording).
 - **The trailer kill when the trailer beats `run(...)`.** §3.3 had the post-`run(...)` check also look at a "trailer
-  seen" flag. The kill thread instead waits the grace and, if the command is still unknown then, waits for the `await`
-  to return before killing; `await` cannot return before `run(...)` has. One mechanism instead of two.
+  seen" flag. The kill thread instead waits the grace and, if the command is still unknown then, looks for it again
+  every 10 ms until `run(...)` has returned it (or the wait has ended), and kills it then. One mechanism instead of two.
+  (Built first as "wait for `await` to return", which a hook's `cmd &` holds open — the case the kill exists for; the
+  PR review bounded it.)
+- **Uploaded run files carry an uploaded manifest (PR review).** §3.2 always embeds the manifest, at ~67 bytes plus
+  the path per file, so a skill under core's 4 MiB but with roughly 1 200 or more files pushed the script past
+  `ARGUMENT_BUDGET` even with every file uploaded, and was refused (`EXECUTION_FAILED`) where core's fallback used to
+  stage it. Now an upload sends the manifest too (`run-{id}.manifest`) and the script carries only its SHA-256 and the
+  file count: the wrapper copies the manifest into `P`, checks it against that digest (status 1 → 73), then copies the
+  files the checked manifest names and runs `sha256sum -c --strict -` with it. The script no longer grows with the
+  number of files; inline placement is unchanged. The budget refusal stays as a guard but is not reachable with every
+  part within its cap.
 - **A model's command with a run directory maps exit 73 to the integrity exception too.** §3.3 described the mapping in
   the stream classification; §5's failure table applies it to every run with a run directory. `classify` (foreground,
   background) throws `RunDirectoryIntegrityException` for exit 73 without a trailer when the run has a private
@@ -627,8 +637,9 @@ pointing back here. Q-A, Q-F and Q-G are answered below.
 ### Tests placed or shaped differently from §7
 
 - The `SandboxShellIT` cases of §7 are in a class of their own, `SandboxShellRunDirectoryIT` (`SandboxShellIT` is 1300
-  lines); its display names carry §7's numbers. Two cases were added: a script over `ARGUMENT_BUDGET` with stdin and
-  every file uploaded (a long manifest) is refused before connecting; and the Q-G foreground case.
+  lines); its display names carry §7's numbers. Cases added: 1 500 small files whose manifest alone exceeds
+  `ARGUMENT_BUDGET` run through the uploaded manifest (it replaced the build's "refused before connecting" case), a
+  tampered uploaded manifest is an integrity failure, and the Q-G foreground case.
 - §7 #3 and #8 share a test (the upload transport with a non-ASCII name); #8's inline half has its own.
 - §7's tamper tests use `TamperingFiles`, a files-API decorator next to `FailingFiles`, installed through a
   `RecordingProvider` in a harness of their own (the files wrapper applies to connections opened after it is set).
@@ -655,7 +666,7 @@ pointing back here. Q-A, Q-F and Q-G are answered below.
 | `base64: write error` on a hook that never reads its stdin | the decoder's stderr goes to `/dev/null` |
 | Q-C's cost wording | WS §20's entry says the `DELETE` falls on hooks whose exec outlives the grace, i.e. ones that leave a descendant holding the streams |
 | D6 classes an OOM kill or a same-uid `kill -9` after the timeout as a timeout | accepted, harmless (`TIMEOUT` instead of `EXECUTION_FAILED`); recorded here |
-| The seed's `command -v base64` passes an image with only `/bin/base64` | not changed: the seed follows the `sha256sum` precedent (§3.5). Left as a sandbox-side follow-up — an `[ -x /usr/bin/… ]` check would cover `sha256sum` and `base64` together |
+| The seed's `command -v base64` passes an image with only `/bin/base64` | done in the PR review: the seed checks `[ -x /usr/bin/sha256sum ]` and `[ -x /usr/bin/base64 ]`, and that `/usr/bin/sha256sum -c --strict -` accepts a manifest (a BusyBox `sha256sum` rejects `--strict`, and status 1 reads as tampering); WS §13.3 asks for GNU coreutils |
 
 ### Open questions — answers and where they went
 

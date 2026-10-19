@@ -1004,6 +1004,9 @@ INNER:
   `ExecutionOptions.getRunDirectory()` 에 실어 보낸다 — `hooks.json` 의 `AIMON_HOOK_DIR`(격리 실행), 스킬 훅의
   `AIMON_SKILL_DIR`. `SandboxShell` 은 이 기능을 선언한다. 파일은 비공개 디렉터리의 `d/` 에 놓인다. base64 와 manifest 가
   16 KiB 안이면 스크립트에 넣어 `base64 -d` 로 풀고, 넘으면 files API 로 `run-{id}.files/` 에 올렸다가 `cat` 으로 복사한다.
+  올릴 때는 manifest 도 `run-{id}.manifest` 로 올리고 스크립트에는 그 다이제스트와 파일 수만 싣는다 — 스크립트가 파일 수에
+  따라 커지지 않으므로, 작은 파일이 많은 스킬(1 200 개 남짓을 넘으면 manifest 만으로 인자 예산을 넘는다)도 거부되지 않는다.
+  래퍼는 manifest 를 비공개 디렉터리로 복사해 그 다이제스트부터 확인하고, 확인한 manifest 의 줄로 파일을 복사한다
   놓는 동안은 noclobber(`set -C`)다 — 파일 시스템이 하나로 합치는 두 경로(대소문자만 다른 이름이 대소문자를 가리지 않는
   파일 시스템에서, 같은 이름의 파일과 디렉터리)는 오류이고 명령은 돌지 않는다. 어느 쪽이든 JVM 이 바이트에서 계산해
   스크립트에만 실은 SHA-256 manifest 로 `sha256sum -c --strict -` 를 돌리고, 파일 수를 센다. 다이제스트가 다르거나 파일이
@@ -1014,8 +1017,8 @@ INNER:
   있거나 합이 8 MiB 를 넘으면 연결 전에 거부한다(코어는 4 MiB 로 묶는다)
 - **스크립트 하나가 인자 하나다.** Linux 는 인자 하나를 128 KiB 로 묶고, 래퍼 스크립트 전체 — 명령(≤ 64 KiB), 명령별 환경
   (≤ 32 KiB), 인라인 실행 파일(≤ 16 KiB), 인라인 stdin — 가 그 하나다. 스트림 래퍼는 조립한 스크립트의 길이를
-  `ARGUMENT_BUDGET`(120 KiB)과 견준다 — stdin 을 먼저 업로드로 돌리고, 그래도 넘으면 실행 파일을, 그래도 넘으면 연결 전에
-  거부한다
+  `ARGUMENT_BUDGET`(120 KiB)과 견준다 — stdin 을 먼저 업로드로 돌리고, 그래도 넘으면 실행 파일을(manifest 와 함께), 그래도
+  넘으면 연결 전에 거부한다. 다 올린 스크립트는 명령과 환경의 상한 안이므로 마지막 거부는 방어선일 뿐 닿지 않는다
 - **훅이 남긴 작업은 훅과 함께 끝난다(동작 변경).** 스트림 래퍼에서는 exec 의 stdout 이 곧 훅의 stdout 이므로, 훅의
   `cmd &` 가 exec 를 붙잡는다 — OpenSandbox 의 `await` 는 스트림을 쥔 자손이 모두 끝나야 돌아온다. 그래서 `SandboxShell` 은
   exec 가 흐르는 동안 stderr 에서 트레일러를 지켜보다가(`TrailerWatch`), 트레일러가 오면 짧은 유예(500 ms, `await` 가 먼저
@@ -1449,6 +1452,8 @@ provision(slot, gen) seed:                                   (every step idempot
   provider.verify(ref, required) || fail <step>               (egress enforcementMode, vault bindings — §6.1)
   flock /workspace/.aimon-seed.lock for the rest            (two nodes seeding one slot run one at a time)
   command -v git rg flock sha256sum base64 || fail "image contract"   (§13.3; permanent)
+  [ -x /usr/bin/sha256sum ] && [ -x /usr/bin/base64 ] || fail "image contract"
+  /usr/bin/sha256sum -c --strict - accepts an empty file's manifest || fail "image contract"   (GNU, §13.3)
   uname -s matches profile.platform || fail "descriptor mismatch"   (§7; slot -> FAILED)
   [ "$(id -u)" != 0 ] || fail "runs as root"                 (§12.1; slot -> FAILED, unless insecure-allow)
   [ ! -e /var/run/secrets/kubernetes.io/serviceaccount/token ] || fail "service account token mounted"
@@ -1468,7 +1473,8 @@ developer slot:  git push origin HEAD:refs/heads/dev/<topic>
 review slot:     git fetch origin && git checkout dev/<topic>        (no external network needed)
 ```
 
-**3단계의 seed 는 이 절차의 부분집합이다.** 이미지 계약(`command -v git rg flock sha256sum base64`, seed 락보다 먼저 — `flock`
+**3단계의 seed 는 이 절차의 부분집합이다.** 이미지 계약(`command -v git rg flock sha256sum base64` 와 `/usr/bin` 의 GNU
+`sha256sum` · `base64`, seed 락보다 먼저 — `flock`
 이 없는 이미지는 락 오류가 아니라 이미지 계약 위반으로 보고된다), `uname -s` 와 선언한 platform, 선언했을 때만
 `uname -sr` 와 osVersion(글롭으로, `Linux 6.x` 의 `x` 는 `*`), `HARDENED_SECURITY_CONTEXT` 를 면제하지 않았으면 uid 와
 서비스 계정 토큰, `.tmp-*` 정리, `mkdir -p` 까지다. 실패한 검사는 `permanent` 이고 그 샌드박스는 지운다(라벨 대조를
@@ -1807,10 +1813,13 @@ aimon:
 
 ### 13.3 이미지와 배포 계약
 
-샌드박스 이미지가 지켜야 하는 것: `bash` · coreutils(`sha256sum`, `base64` — 둘 다 `/usr/bin` 에, 훅의 실행 파일을
-풀고 확인한다, §9) · util-linux `flock` · `git` · `rg`(ripgrep) · uid 1000
+샌드박스 이미지가 지켜야 하는 것: `bash` · **GNU** coreutils(`sha256sum`, `base64` — 둘 다 `/usr/bin` 에, 훅의 실행
+파일을 풀고 확인한다, §9. BusyBox 의 `sha256sum` 은 `--strict` 를 몰라 status 1 로 끝나고, 래퍼는 status 1 을 변조로
+읽으므로 모든 훅이 `HOOK_FILES_TAMPERED` 가 된다) · util-linux `flock` · `git` · `rg`(ripgrep) · uid 1000
 `sandbox` 사용자 · 그 사용자 소유의 `/workspace`. OpenSandbox 가 execd 를 주입하므로 이미지가 execd 를 포함할 필요는
-없다 — execd 는 Docker 에서는 컨테이너에 복사되고 K8s 에서는 init 컨테이너가 넣는다(스파이크 확인). 계약을 벗어난 이미지는 첫 프로비저닝의 seed 단계에서 `command -v git rg flock sha256sum base64` 검사로 실패시킨다.
+없다 — execd 는 Docker 에서는 컨테이너에 복사되고 K8s 에서는 init 컨테이너가 넣는다(스파이크 확인). 계약을 벗어난 이미지는 첫 프로비저닝의 seed 단계에서 `command -v git rg flock sha256sum base64`, `[ -x /usr/bin/sha256sum ]` ·
+`[ -x /usr/bin/base64 ]`, 그리고 빈 파일(`/dev/null`)의 manifest 를 `/usr/bin/sha256sum -c --strict -` 로 확인하는 검사로
+실패시킨다(step `image-contract`).
 실패를 늦게 발견하면 `Grep` 이 원인 모를 에러를 낸다. `/workspace` 가 없거나 쓸 수 없거나 그 안의 seed 락을 열 수 없는
 것도 같은 계약 위반이다. seed 는 락을 잡기 전에 이를 확인하고 FAILED(영구, step `workspace`)로 끝낸다 — 락 경합(일시
 장애)으로 보고해 매 호출마다 다시 시도하지 않는다.
@@ -1920,6 +1929,7 @@ workspace-purged · session-options-set · session-options-cleared)는
 | 명령이 `.aimon-shell` 을 지워 실행 파일이 사라짐 | 포그라운드 · 백그라운드 명령만 — 래퍼 실패 에러, 출력을 잃었다고 적는다. 빈 성공(exit 0)으로 보고하지 않는다. 훅 · 격리 실행에는 실행 파일이 없고, 다음 실행이 셸 루트를 되살린다(§9) |
 | 훅의 실행 파일이나 업로드한 stdin 이 다이제스트와 다름(파일이 바뀌거나 빠지거나 더 있음) | `RunDirectoryIntegrityException`, 명령은 돌지 않는다. 코어는 `HOOK_FILES_TAMPERED` 로 보고 `failOpen` 과 무관하게 막는다(§9) |
 | 훅 명령 64 KiB 초과 · 실행 파일 경로의 줄바꿈 · 실행 파일 8 MiB 초과 · 스크립트가 인자 예산 초과 | 연결 전에 `ShellExecutionException`. 아무것도 프로비저닝하지 않는다(§9) |
+| 작은 파일이 많은 실행 디렉터리(manifest 가 인자 예산을 넘음) | 거부하지 않는다 — 파일과 manifest 를 올리고 스크립트에는 manifest 의 다이제스트만 싣는다. 올린 manifest 가 바뀌면 위의 `RunDirectoryIntegrityException`(§9) |
 | 실행 파일을 놓지 못함(파일 시스템이 합치는 두 경로, 디스크, 업로드가 사라짐) | `ShellExecutionException`(exit 70 과 그 이유), 명령은 돌지 않는다. 변조로 보고하지 않는다(§9) |
 | 훅이 남긴 `cmd &` | 트레일러가 오면 exec 의 프로세스 그룹을 kill 한다 — 훅과 함께 끝난다(§9) |
 | 슬롯이 이미 다른 프로파일로 있음 | 사용 불가 — 요구한 프로파일과 실제 프로파일을 적는다(§8.3) |
