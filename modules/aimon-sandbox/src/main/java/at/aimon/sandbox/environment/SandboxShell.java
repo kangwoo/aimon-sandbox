@@ -144,6 +144,8 @@ final class SandboxShell implements VirtualShell {
     private static final Pattern STREAM_TRAILER = Pattern.compile("exit=(-?\\d+) cwd=(\\d)\\r?\\n");
     /** How long a stream run's exec lives after its trailer arrived, unless its wait returns first. */
     static final Duration TRAILER_KILL_GRACE = Duration.ofMillis(500);
+    /** How often the trailer's kill looks again for a command that {@code run(...)} has not returned yet. */
+    private static final Duration TRAILER_KILL_POLL = Duration.ofMillis(10);
     /** A run directory's ceiling: core caps one at 4 MiB; the slack is for a core that raises it. */
     static final long MAX_RUN_DIRECTORY_BYTES = 8L * 1024 * 1024;
     /** The exit code of a process group the watchdog killed: 128 + SIGKILL. */
@@ -316,7 +318,6 @@ final class SandboxShell implements VirtualShell {
         final List<Upload> fileUploads = new ArrayList<>();
         boolean filesUploaded = false;
         if (runDirectory.isPresent()) {
-            final StringBuilder manifest = new StringBuilder();
             long inlineBytes = 0;
             for (String relPath : runDirectory.get().getPaths()) {
                 final byte[] content = runDirectory.get().getContent(relPath);
@@ -326,9 +327,12 @@ final class SandboxShell implements VirtualShell {
                 uploadedFiles.add(new ShellWrapper.RunFile(relPath, null, sha256));
                 fileUploads.add(new Upload(runPrefix + ".files/" + relPath, content, "a hook file"));
                 inlineBytes += ShellWrapper.quote(base64).length();
-                manifest.append(sha256).append("  ").append(relPath).append('\n');
             }
-            inlineBytes += ShellWrapper.scriptBytes(ShellWrapper.quote(manifest.toString()));
+            final String manifest = ShellWrapper.manifest(uploadedFiles);
+            // Uploaded, the manifest goes too: the script then carries one digest, whatever the number of files.
+            fileUploads.add(new Upload(runPrefix + ".manifest", manifest.getBytes(StandardCharsets.UTF_8),
+                    "the hook files' manifest"));
+            inlineBytes += ShellWrapper.scriptBytes(ShellWrapper.quote(manifest));
             filesUploaded = inlineBytes > ShellWrapper.INLINE_RUN_FILES_LIMIT;
             invocation.runDirectory(runDirectory.get().getVariable(), filesUploaded ? uploadedFiles : inlineFiles,
                     filesUploaded);
@@ -347,7 +351,7 @@ final class SandboxShell implements VirtualShell {
             invocation.stdinInline(null).stdinUploaded(ShellWrapper.sha256Hex(stdin));
             script = script(mode, invocation);
         }
-        if (runDirectory.isPresent() && !filesUploaded
+        if (runDirectory.isPresent() && !filesUploaded && !uploadedFiles.isEmpty()
                 && ShellWrapper.scriptBytes(script) > ShellWrapper.ARGUMENT_BUDGET) {
             filesUploaded = true;
             invocation.runDirectory(runDirectory.get().getVariable(), uploadedFiles, true);
@@ -500,7 +504,10 @@ final class SandboxShell implements VirtualShell {
         private final Charset charset;
         private final Mode mode;
         private final boolean foreground;
-        /** The wrapper runs a watchdog, which marks a timeout with {@code .timedout}. */
+        /**
+         * The wrapper runs a watchdog when the command has a timeout. A model's command's watchdog marks the timeout
+         * with {@code .timedout}; a stream run's writes nothing, and its timeout is read from the clock.
+         */
         private final boolean watched;
         private final boolean ownWorkingDirectory;
         /** The run's private directory, or {@code null} for a model's command without a run directory. */
@@ -622,14 +629,17 @@ final class SandboxShell implements VirtualShell {
      * Kills the exec of a stream run once its trailer arrived, off the provider's thread (an {@link OutputSink} must
      * not block, and a kill may be a remote call). It waits {@link #TRAILER_KILL_GRACE} first, or until the wait for
      * the exec returned: an exec server that forwards stdout and stderr apart can deliver the trailer before the
-     * command's last stdout lines, which it already holds. The kill is idempotent, so a finished exec costs nothing.
+     * command's last stdout lines, which it already holds. When the trailer arrives before {@code run(...)} has
+     * returned, the kill follows as soon as it returns. The kill is idempotent, so a finished exec costs nothing.
      */
-    private static void killAfterTrailer(AtomicReference<RunningCommand> running, CountDownLatch awaited) {
+    static void killAfterTrailer(AtomicReference<RunningCommand> running, CountDownLatch awaited) {
         final Thread killer = new Thread(() -> {
             try {
-                if (!awaited.await(TRAILER_KILL_GRACE.toMillis(), TimeUnit.MILLISECONDS) && running.get() == null) {
-                    // The trailer came before run(...) returned: the command is there once the wait ends.
-                    awaited.await();
+                boolean ended = awaited.await(TRAILER_KILL_GRACE.toMillis(), TimeUnit.MILLISECONDS);
+                // The trailer came before run(...) returned: kill as soon as there is a command, not when the wait for
+                // it ends — that wait is what a hook's `cmd &` holds open.
+                while (!ended && running.get() == null) {
+                    ended = awaited.await(TRAILER_KILL_POLL.toMillis(), TimeUnit.MILLISECONDS);
                 }
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
@@ -925,6 +935,7 @@ final class SandboxShell implements VirtualShell {
         }
         if (run.uploadedRunFiles) {
             remove(files, run.prefix + ".files", true, false);
+            remove(files, run.prefix + ".manifest", false, false);
         }
         if (run.privateDirectory != null) {
             remove(files, run.privateDirectory, true, true);

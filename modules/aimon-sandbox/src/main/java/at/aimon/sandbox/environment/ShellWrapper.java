@@ -37,8 +37,7 @@ import java.util.regex.Pattern;
  *
  * <p>
  * A model's command reaches the inner bash through the run file {@code run-{id}.cmd}, never as an argument: the outer
- * writes
- * it there with the {@code printf} builtin, or — for a command too large to embed in the exec at all
+ * writes it there with the {@code printf} builtin, or — for a command too large to embed in the exec at all
  * ({@link #INLINE_COMMAND_LIMIT}) — {@code SandboxShell} uploads it through the files API and the script carries no
  * copy. Linux limits one argument to 128 KiB (MAX_ARG_STRLEN), and the exec's own script is one. Per-command
  * variables and the working directory are always embedded; {@code SandboxShell} refuses them over
@@ -54,11 +53,12 @@ import java.util.regex.Pattern;
  * with mode 700 and removed by the outer's epilogue and {@code EXIT} trap. It holds an uploaded stdin after its digest
  * check ({@code .stdin}), the inner's cwd flag ({@code r.cwd}) and, under {@code d/}, the files of a
  * {@code RunDirectory} — the only part a model's own command (foreground, background) gets too, when it carries one.
- * Run files come inline (base64) or, past {@link #INLINE_RUN_FILES_LIMIT}, from an upload; either way they are placed
- * under noclobber, checked with {@code sha256sum -c} against a manifest embedded in the script, and counted. A digest
- * or count mismatch exits {@link #RUN_FILES_TAMPERED_EXIT}; any other placement failure {@link #SETUP_FAILED_EXIT}.
- * The manifests are fed by the {@code printf} builtin through a pipe, never a here-document, whose temp file would need
- * a writable {@code $TMPDIR}.
+ * Run files come inline (base64, with their manifest) or, past {@link #INLINE_RUN_FILES_LIMIT}, from an upload of the
+ * files and their manifest, of which the script carries only the digest — so the script does not grow with the number
+ * of files. Either way they are placed under noclobber, checked with {@code sha256sum -c} against a manifest the script
+ * vouches for, and counted. A digest or count mismatch exits {@link #RUN_FILES_TAMPERED_EXIT}; any other placement
+ * failure {@link #SETUP_FAILED_EXIT}. Manifests are fed by the {@code printf} builtin through a pipe or read from the
+ * private directory, never a here-document, whose temp file would need a writable {@code $TMPDIR}.
  *
  * <p>
  * The inner bash keeps its own state in {@code readonly} variables named {@code __aimon_*}; <b>that prefix is
@@ -139,20 +139,17 @@ final class ShellWrapper {
      * The inner bash. {@code $1} state directory, {@code $2} run-file prefix (the command is in {@code $2.cmd}),
      * {@code $3} {@code fg|bg|hook|iso}, {@code $4} root (where a new shell starts, and the fallback when the saved cwd
      * is gone), {@code $5} per-command working directory (may be empty), for {@code hook} and {@code iso} {@code $6}
-     * the
-     * command itself, then {@code NAME=value} per-command variables. {@code hook} behaves as {@code bg}; it is its own
-     * word only so the command comes from {@code $6}, and its {@code $2} is inside the private directory.
+     * the command itself, then {@code NAME=value} per-command variables. {@code hook} behaves as {@code bg}; it is its
+     * own word only so the command comes from {@code $6}, and its {@code $2} is inside the private directory.
      * {@code iso} starts as a new shell would: it does not read the state file, so no cwd or export the session's
      * commands left behind reaches the command, and like {@code bg} it saves none. It shares the new shell's root
      * fallback on purpose: a missing root makes {@code __aimon_fallback} retry it once, then run in {@code /workspace}
-     * with notice {@code 2}, which is as true for an isolated command as for a new shell.
-     * A cwd fallback writes {@code 1} (ran in the root) or {@code 2} (the root is gone too: ran in {@code /workspace})
-     * to {@code $2.cwd}. When the exec environment names a CA bundle in {@code SSL_CERT_FILE} — OpenSandbox's execd
-     * does,
-     * for the egress proxy that injects credentials (§12.1) — git is pointed at it too: a git built on GnuTLS
-     * (Debian's)
-     * does not read that variable and would fail verification. An explicit {@code GIT_SSL_CAINFO} wins, and the export
-     * is part of the base environment, so it is not saved as shell state.
+     * with notice {@code 2}, which is as true for an isolated command as for a new shell. A cwd fallback writes
+     * {@code 1} (ran in the root) or {@code 2} (the root is gone too: ran in {@code /workspace}) to {@code $2.cwd}.
+     * When the exec environment names a CA bundle in {@code SSL_CERT_FILE} — OpenSandbox's execd does, for the egress
+     * proxy that injects credentials (§12.1) — git is pointed at it too: a git built on GnuTLS (Debian's) does not read
+     * that variable and would fail verification. An explicit {@code GIT_SSL_CAINFO} wins, and the export is part of the
+     * base environment, so it is not saved as shell state.
      */
     static final String INNER = """
             if [ -n "${SSL_CERT_FILE-}" ] && [ -z "${GIT_SSL_CAINFO+x}" ]; then
@@ -353,7 +350,8 @@ final class ShellWrapper {
          * @param files
          *            its files, in the order they are placed (a parent before its children)
          * @param uploaded
-         *            the files are at {@code {runPrefix}.files/{relPath}}, not in the script
+         *            the files are at {@code {runPrefix}.files/{relPath}} and their {@link #manifest} at
+         *            {@code {runPrefix}.manifest}, not in the script, which carries only the manifest's digest
          */
         Invocation runDirectory(String variable, List<RunFile> files, boolean uploaded) {
             this.runVariable = Objects.requireNonNull(variable);
@@ -551,28 +549,10 @@ final class ShellWrapper {
 
     private static void appendRunFiles(StringBuilder s, Invocation in) {
         s.append("mkdir -m 700 -- \"$p/d\" || exit ").append(SETUP_FAILED_EXIT).append('\n');
-        final StringBuilder manifest = new StringBuilder();
-        for (RunFile file : in.runFiles) {
-            final String target = "\"$p/d/\"" + quote(file.relPath);
-            final int slash = file.relPath.lastIndexOf('/');
-            if (slash > 0) {
-                s.append("mkdir -p -- \"$p/d/\"").append(quote(file.relPath.substring(0, slash))).append(" && ");
-            }
-            if (in.runFilesUploaded) {
-                s.append("cat -- \"$r.files/\"").append(quote(file.relPath)).append(" > ").append(target);
-            } else {
-                s.append("printf '%s' ").append(quote(file.base64)).append(" | /usr/bin/base64 -d > ").append(target);
-            }
-            s.append(" \\\n  || { printf 'cannot place %s\\n' ").append(quote(file.relPath)).append(" >&2; exit ")
-                    .append(SETUP_FAILED_EXIT).append("; }\n");
-            manifest.append(file.sha256).append("  ").append(file.relPath).append('\n');
-        }
-        if (in.runFilesUploaded) {
-            s.append("rm -rf -- \"$r.files\"\n");
-        }
-        if (!in.runFiles.isEmpty()) {
-            // GNU sha256sum -c refuses an empty manifest; the count below still holds an empty directory to empty.
-            appendCheck(s, "\"$p/d\"", manifest.toString());
+        if (in.runFilesUploaded && !in.runFiles.isEmpty()) {
+            appendUploadedRunFiles(s, in);
+        } else {
+            appendInlineRunFiles(s, in);
         }
         // The digests cover the listed files; the count catches one added beside them.
         s.append("l=$(cd -- \"$p/d\" && find . ! -type d) || exit ").append(SETUP_FAILED_EXIT).append('\n');
@@ -582,16 +562,69 @@ final class ShellWrapper {
     }
 
     /**
+     * Uploaded run files: the manifest is uploaded too and the script carries only its digest, so the script stays the
+     * same size whatever the number of files. The manifest is copied into {@code $p} and checked first; its lines —
+     * trusted from then on — name the files to copy in and are the {@code sha256sum -c} input.
+     */
+    private static void appendUploadedRunFiles(StringBuilder s, Invocation in) {
+        s.append("cat -- \"$r.manifest\" > \"$p/.manifest\" || exit ").append(SETUP_FAILED_EXIT).append('\n');
+        s.append("rm -f -- \"$r.manifest\"\n");
+        appendCheck(s, "\"$p\"", sha256Hex(manifest(in.runFiles).getBytes(StandardCharsets.UTF_8)) + "  .manifest\n");
+        // A line is 64 hex digits, two spaces and the path: the path starts at offset 66.
+        s.append("while IFS= read -r l; do f=${l:66}\n");
+        s.append("  { case $f in */*) mkdir -p -- \"$p/d/${f%/*}\";; esac &&\n");
+        s.append("    cat -- \"$r.files/$f\" > \"$p/d/$f\"; } \\\n");
+        s.append("    || { printf 'cannot place %s\\n' \"$f\" >&2; exit ").append(SETUP_FAILED_EXIT).append("; }\n");
+        s.append("done < \"$p/.manifest\"\n");
+        s.append("rm -rf -- \"$r.files\"\n");
+        appendCheck(s, "\"$p/d\"", null);
+    }
+
+    private static void appendInlineRunFiles(StringBuilder s, Invocation in) {
+        for (RunFile file : in.runFiles) {
+            final String target = "\"$p/d/\"" + quote(file.relPath);
+            final int slash = file.relPath.lastIndexOf('/');
+            if (slash > 0) {
+                s.append("mkdir -p -- \"$p/d/\"").append(quote(file.relPath.substring(0, slash))).append(" && ");
+            }
+            s.append("printf '%s' ").append(quote(file.base64)).append(" | /usr/bin/base64 -d > ").append(target);
+            s.append(" \\\n  || { printf 'cannot place %s\\n' ").append(quote(file.relPath)).append(" >&2; exit ")
+                    .append(SETUP_FAILED_EXIT).append("; }\n");
+        }
+        if (!in.runFiles.isEmpty()) {
+            // GNU sha256sum -c refuses an empty manifest; the count still holds an empty directory to empty.
+            appendCheck(s, "\"$p/d\"", manifest(in.runFiles));
+        }
+    }
+
+    /**
+     * @param files
+     *            a run directory's files
+     * @return their {@code sha256sum -c} manifest: one {@code sha256  relPath} line each, in order
+     */
+    static String manifest(List<RunFile> files) {
+        final StringBuilder manifest = new StringBuilder();
+        for (RunFile file : files) {
+            manifest.append(file.sha256).append("  ").append(file.relPath).append('\n');
+        }
+        return manifest.toString();
+    }
+
+    /**
      * Checks the files under {@code directory} against {@code manifest} ({@code sha256  relPath} lines). Status 1 —
      * a digest that does not match, or a listed file that is gone — exits {@link #RUN_FILES_TAMPERED_EXIT}; anything
      * else (a missing binary, a {@code cd} that fails) {@link #SETUP_FAILED_EXIT}, so an environment fault is never
      * reported as tampering. The explicit {@code -} is for the BSD {@code sha256sum} of a macOS test host, which
-     * does not read a manifest from stdin without it.
+     * does not read a manifest from stdin without it. A {@code null} manifest reads the checked {@code $p/.manifest}.
      */
     private static void appendCheck(StringBuilder s, String directory, String manifest) {
         s.append("( cd -- ").append(directory).append(" || exit ").append(SETUP_FAILED_EXIT).append('\n');
-        s.append("  printf '%s' ").append(quote(manifest))
-                .append(" | PATH=/usr/bin:/bin /usr/bin/sha256sum -c --strict - >/dev/null 2>&1\n");
+        if (manifest != null) {
+            s.append("  printf '%s' ").append(quote(manifest))
+                    .append(" | PATH=/usr/bin:/bin /usr/bin/sha256sum -c --strict - >/dev/null 2>&1\n");
+        } else {
+            s.append("  PATH=/usr/bin:/bin /usr/bin/sha256sum -c --strict - <\"$p/.manifest\" >/dev/null 2>&1\n");
+        }
         s.append("  s=$?; [ \"$s\" = 0 ] && exit 0; [ \"$s\" = 1 ] && exit ").append(RUN_FILES_TAMPERED_EXIT)
                 .append("; exit ").append(SETUP_FAILED_EXIT).append(" ) || exit $?\n");
     }

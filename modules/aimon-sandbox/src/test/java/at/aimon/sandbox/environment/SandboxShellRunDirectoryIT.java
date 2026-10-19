@@ -139,7 +139,7 @@ class SandboxShellRunDirectoryIT {
                 hook().runDirectory(hookFiles("big", large, "스크립트.sh", "한글")).build());
 
         assertThat(result.stdout().replace(" ", "")).isEqualTo(large.length() + "\n한글");
-        assertThat(uploaded(script -> script.contains("cat -- \"$r.files/\"'big'"))).isTrue();
+        assertThat(uploaded(script -> script.contains("cat -- \"$r.files/$f\""))).isTrue();
         assertThat(runFiles()).isEmpty();
         assertThat(leftovers()).isEmpty();
     }
@@ -257,12 +257,12 @@ class SandboxShellRunDirectoryIT {
         assertThat(bash(env, "wc -c < \"$AIMON_HOOK_DIR/a\"",
                 hook().runDirectory(hookFiles("a", "z".repeat(atLimit))).build()).stdout().strip())
                 .isEqualTo(String.valueOf(atLimit));
-        assertThat(uploaded(script -> script.contains("\"$r.files/\""))).as("at the limit: inline").isFalse();
+        assertThat(uploaded(script -> script.contains("\"$r.files/"))).as("at the limit: inline").isFalse();
 
         assertThat(bash(env, "wc -c < \"$AIMON_HOOK_DIR/a\"",
                 hook().runDirectory(hookFiles("a", "z".repeat(atLimit + 1))).build()).stdout().strip())
                 .isEqualTo(String.valueOf(atLimit + 1));
-        assertThat(uploaded(script -> script.contains("\"$r.files/\""))).as("one byte over: uploaded").isTrue();
+        assertThat(uploaded(script -> script.contains("\"$r.files/"))).as("one byte over: uploaded").isTrue();
     }
 
     @Test
@@ -285,20 +285,41 @@ class SandboxShellRunDirectoryIT {
     }
 
     @Test
-    @DisplayName("a script still over the argument budget with everything uploaded is refused before connecting")
-    void aScriptOverTheBudgetIsRefused() {
-        // The manifest always travels in the script: enough long names exceed the budget on their own.
+    @DisplayName("many small files, whose manifest alone exceeds the argument budget, are uploaded with the manifest")
+    void manyFilesTravelWithAnUploadedManifest() throws Exception {
+        // About 1 500 names of 60 bytes: the manifest is ~190 KiB, far past the script's budget, the files ~1.5 KiB.
         final RunDirectory.Builder many = RunDirectory.builder().variable("AIMON_HOOK_DIR");
         for (int i = 0; i < 1500; i++) {
-            many.file(String.format("scripts/%04d-%s.sh", i, "n".repeat(40)), new byte[]{'x'});
+            many.file(String.format("scripts/%04d-%s.sh", i, "n".repeat(40)), new byte[]{(byte) ('a' + i % 26)});
         }
-        final SessionId fresh = SessionId.generate();
 
-        assertThatThrownBy(() -> bash(harness.mainTurn(fresh, ALICE), "true",
-                hook().stdin("s".repeat(200 * 1024)).runDirectory(many.build()).build()))
-                .isExactlyInstanceOf(ShellExecutionException.class).hasMessageContaining("too large to pass")
-                .hasMessageContaining("at most " + ShellWrapper.ARGUMENT_BUDGET);
-        assertThat(recording[0].runs).isEmpty();
+        final ShellCommandResult result = bash(env,
+                "find \"$AIMON_HOOK_DIR\" -type f | wc -l | tr -d ' '; cat \"$AIMON_HOOK_DIR\"/scripts/1499-*.sh",
+                hook().stdin("s".repeat(200 * 1024)).runDirectory(many.build()).build());
+
+        assertThat(result.exitCode()).isZero();
+        assertThat(result.stdout()).isEqualTo("1500\n" + (char) ('a' + 1499 % 26));
+        assertThat(uploaded(script -> script.contains("\"$r.manifest\"") && !script.contains("0000-"))).isTrue();
+        assertThat(recording[0].runs).allSatisfy(
+                spec -> assertThat(ShellWrapper.scriptBytes(spec.command())).isLessThan(ShellWrapper.ARGUMENT_BUDGET));
+        assertThat(runFiles()).isEmpty();
+        assertThat(leftovers()).isEmpty();
+    }
+
+    @Test
+    @DisplayName("4: an uploaded manifest rewritten before the wrapper copies it is an integrity failure")
+    void aTamperedManifestIsAnIntegrityFailure() throws Exception {
+        try (SandboxHarness tampering = tampering(path -> path.endsWith(".manifest"))) {
+            final SessionId other = SessionId.generate();
+            final ExecutionEnvironment tampered = tampering.mainTurn(other, ALICE);
+
+            assertThatThrownBy(() -> bash(tampered, "touch /workspace/ran",
+                    isolated().runDirectory(hookFiles("a", "y".repeat(40 * 1024))).build()))
+                    .isExactlyInstanceOf(RunDirectoryIntegrityException.class);
+            assertThat(Files.exists(tampering.host(other, "/workspace/ran"))).isFalse();
+            assertThat(entries(tampering, other, ".run.")).isEmpty();
+            assertThat(entries(tampering, other, "run-")).isEmpty();
+        }
     }
 
     @Test

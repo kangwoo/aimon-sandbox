@@ -174,10 +174,19 @@ class ShellWrapperTest {
         final String uploaded = ShellWrapper
                 .isolated(stream("true").runDirectory("AIMON_HOOK_DIR", runFiles(false), true));
 
-        assertThat(uploaded).contains("cat -- \"$r.files/\"'a' > \"$p/d/\"'a'")
-                .contains("mkdir -p -- \"$p/d/\"'lib' && cat -- \"$r.files/\"'lib/b' > \"$p/d/\"'lib/b'")
-                .contains("rm -rf -- \"$r.files\"\n").doesNotContain("base64 -d >");
-        assertThat(uploaded.indexOf("rm -rf -- \"$r.files\"")).isLessThan(uploaded.indexOf("sha256sum -c"));
+        final String manifest = "aa".repeat(32) + "  a\n" + "bb".repeat(32) + "  lib/b\n";
+        assertThat(ShellWrapper.manifest(runFiles(false))).isEqualTo(manifest);
+        // Only the manifest's digest travels: no file name, no file digest.
+        assertThat(uploaded).doesNotContain("'a'").doesNotContain("lib/b").doesNotContain("aa".repeat(32))
+                .doesNotContain("base64 -d >").contains("cat -- \"$r.manifest\" > \"$p/.manifest\" || exit 70\n")
+                .contains("printf '%s' '" + ShellWrapper.sha256Hex(manifest.getBytes(StandardCharsets.UTF_8))
+                        + "  .manifest\n' | PATH=/usr/bin:/bin /usr/bin/sha256sum -c --strict -")
+                .contains("while IFS= read -r l; do f=${l:66}\n").contains("cat -- \"$r.files/$f\" > \"$p/d/$f\"")
+                .contains("done < \"$p/.manifest\"\n").contains("rm -rf -- \"$r.files\"\n")
+                .contains("/usr/bin/sha256sum -c --strict - <\"$p/.manifest\"").contains("[ $n -eq 2 ] || exit 73\n");
+        // The manifest is checked before a line of it is used, and the files after the uploads are gone.
+        assertThat(uploaded.indexOf("  .manifest\n'")).isLessThan(uploaded.indexOf("while IFS="));
+        assertThat(uploaded.indexOf("rm -rf -- \"$r.files\"")).isLessThan(uploaded.indexOf("<\"$p/.manifest\""));
 
         final String empty = ShellWrapper.hook(stream("true").runDirectory("D", List.of(), false));
         assertThat(empty).doesNotContain("sha256sum").contains("[ $n -eq 0 ] || exit 73\n");
