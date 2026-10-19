@@ -350,6 +350,23 @@ class SandboxShellIT {
     }
 
     @Test
+    @DisplayName("§9: isolation alone, without hook(true), still takes no lock and saves nothing")
+    void isolationAloneTakesNoLockAndSavesNothing() throws Exception {
+        final Future<ShellCommandResult> model = executor
+                .submit(() -> bash(env, ": > /workspace/model-running; sleep 3; echo done"));
+        awaitHostFile("/workspace/model-running");
+
+        final long started = System.nanoTime();
+        final ShellCommandResult isolated = bash(env, "export ISO=1; cd /tmp; echo guarded",
+                ExecutionOptions.builder().timeout(Duration.ofSeconds(10)).isolated(true).build());
+
+        assertThat(isolated.stdout()).isEqualTo("guarded\n");
+        assertThat(Duration.ofNanos(System.nanoTime() - started)).isLessThan(Duration.ofMillis(1500));
+        assertThat(model.get(20, TimeUnit.SECONDS).stdout()).isEqualTo("done\n");
+        assertThat(bash(env, "pwd; echo \"ISO=$ISO\"").stdout()).isEqualTo("/workspace/repo\nISO=\n");
+    }
+
+    @Test
     @DisplayName("§9: an isolated command ends at its own timeout, like a hook's")
     void isolatedCommandEndsAtItsTimeout() {
         final long started = System.nanoTime();
