@@ -30,6 +30,7 @@ import at.aimon.core.shell.RunDirectory;
 import at.aimon.core.shell.ShellCancellationSource;
 import at.aimon.core.shell.ShellCommandResult;
 import at.aimon.core.shell.ShellFeature;
+import at.aimon.core.shell.exception.RunDirectoryIntegrityException;
 import at.aimon.core.shell.exception.ShellCancelledException;
 import at.aimon.core.shell.exception.ShellExecutionException;
 import at.aimon.core.shell.exception.ShellTimeoutException;
@@ -43,6 +44,8 @@ import at.aimon.sandbox.provider.OutputSink;
 import at.aimon.sandbox.provider.ProviderSandboxRef;
 import at.aimon.sandbox.provider.ResourceSpec;
 import at.aimon.sandbox.provider.SandboxConnection;
+import at.aimon.sandbox.provider.SandboxProvider;
+import at.aimon.sandbox.testkit.FaultInjectingSandboxProvider;
 import at.aimon.sandbox.testkit.ManualClock;
 import at.aimon.sandbox.testkit.ManualScheduler;
 import at.aimon.sandbox.workspace.InMemorySandboxWorkspaceStore;
@@ -91,6 +94,10 @@ class OpenSandboxWorkspaceIT {
     }
 
     private WorkspaceSandbox assembly(SandboxProfile profile, SandboxWorkspaceStore store) {
+        return assembly(profile, store, provider);
+    }
+
+    private WorkspaceSandbox assembly(SandboxProfile profile, SandboxWorkspaceStore store, SandboxProvider provider) {
         final SandboxSettings settings = SandboxSettings.builder().deployment(OpenSandboxTestServer.DEPLOYMENT)
                 .nodeId("it-" + UUID.randomUUID()).profiles(List.of(profile)).defaultProfile(profile.name())
                 .closeWait(Duration.ofSeconds(20)).build();
@@ -237,10 +244,12 @@ class OpenSandboxWorkspaceIT {
     }
 
     @Test
-    @DisplayName("#33: RUN_DIRECTORY inline and uploaded, a hook's & job killed at its trailer, stream output whole")
+    @DisplayName("#33: RUN_DIRECTORY inline, uploaded, tampered; a hook's & job killed at its trailer; timeout")
     void hookAndIsolatedRunsOnARealServer() throws Exception {
-        // One sandbox for every row: provisioning it is the expensive part, and its seed checks base64 too.
-        final WorkspaceSandbox assembly = assembly(profile().build(), new InMemorySandboxWorkspaceStore());
+        // One sandbox for every row: provisioning it is the expensive part, and its seed checks base64 too. Faults
+        // are injected only for the tamper row.
+        final FaultInjectingSandboxProvider faults = new FaultInjectingSandboxProvider(provider);
+        final WorkspaceSandbox assembly = assembly(profile().build(), new InMemorySandboxWorkspaceStore(), faults);
         final ExecutionEnvironment env = mainTurn(assembly, SessionId.generate());
         final ExecutionOptions.Builder hook = ExecutionOptions.builder().timeout(Duration.ofSeconds(60)).hook(true);
         final String large = "x".repeat(40 * 1024);
@@ -278,5 +287,42 @@ class OpenSandboxWorkspaceIT {
         assertThat(exact.stdout()).isEqualTo("a\nb\n");
         assertThat(exact.stderr()).isEqualTo("e\n");
         assertThat(exact.exitCode()).isEqualTo(2);
+
+        // The timeout of a stream run is the JVM's clock plus execd's report of the watchdog's SIGKILL (137): were it
+        // reported otherwise, a hook's timeout would read as a wrapper failure, which a failOpen guard passes.
+        assertThatThrownBy(() -> env.shell().execute(() -> "echo started; sleep 30",
+                ExecutionOptions.builder().timeout(Duration.ofSeconds(1)).hook(true).isolated(true).build()))
+                .isInstanceOfSatisfying(ShellTimeoutException.class,
+                        e -> assertThat(e.stdout()).isEqualTo("started\n"));
+
+        // A same-uid writer rewrites the uploaded blob in the window between the upload and the exec — held open here
+        // by a delay on the exec — and the wrapper's digest check refuses it: the command does not run.
+        final CompletableFuture<Object> writer = CompletableFuture.supplyAsync(() -> {
+            try {
+                return env.shell().execute(() -> ": > /workspace/writer-up; for i in $(seq 1 300); do"
+                        + " for f in /workspace/.aimon-shell/*/run-*.blob; do [ -f \"$f\" ] && echo Zm9yZ2Vk > \"$f\";"
+                        + " done; sleep 0.05; done",
+                        ExecutionOptions.builder().timeout(Duration.ofMinutes(2)).background(true).build());
+            } catch (ShellExecutionException e) {
+                return e;
+            }
+        });
+        final long deadline = System.nanoTime() + Duration.ofSeconds(30).toNanos();
+        while (!env.fileSystem().exists("/workspace/writer-up") && System.nanoTime() < deadline) {
+            Thread.sleep(100);
+        }
+        faults.inject(FaultInjectingSandboxProvider.Operation.RUN,
+                FaultInjectingSandboxProvider.Fault.delay(Duration.ofSeconds(3)));
+        try {
+            assertThatThrownBy(
+                    () -> env.shell().execute(() -> "touch /workspace/ran", hook.runDirectory(uploaded).build()))
+                    .isExactlyInstanceOf(RunDirectoryIntegrityException.class);
+        } finally {
+            faults.clear();
+        }
+        assertThat(env.fileSystem().exists("/workspace/ran")).isFalse();
+        assertThat(bash(env, "ls -A /workspace/.aimon-shell | grep -c '^\\.run\\.' || true").stdout())
+                .as("no private directory left").isEqualTo("0\n");
+        writer.cancel(true);
     }
 }
