@@ -6,6 +6,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.io.IOException;
+import java.lang.reflect.InvocationTargetException;
+import java.lang.reflect.Proxy;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -39,6 +41,7 @@ import at.aimon.core.shell.exception.ShellTimeoutException;
 import at.aimon.sandbox.RecordingProvider;
 import at.aimon.sandbox.SandboxHarness;
 import at.aimon.sandbox.TamperingFiles;
+import at.aimon.sandbox.provider.SandboxFiles;
 
 /**
  * {@link ShellFeature#RUN_DIRECTORY} and the stream runs of hooks and isolated commands (kangwoo/aimon-sandbox#33,
@@ -243,7 +246,43 @@ class SandboxShellRunDirectoryIT {
     @DisplayName("22: a file and a directory of the same name cannot be built; core's builder refuses them (core #283)")
     void aFileAndADirectoryOfTheSameNameAreRefused() {
         assertThatThrownBy(() -> hookFiles("lib", "file", "lib/x", "child"))
-                .isInstanceOf(IllegalArgumentException.class);
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("is a file and also the parent directory of");
+    }
+
+    @Test
+    @DisplayName("22b: an upload that vanished before the wrapper copies it fails the setup, not the integrity; nothing runs")
+    void aVanishedUploadIsASetupFailure() throws Exception {
+        // The placement-failure branch on any filesystem: #7 reaches it only where letter case collides.
+        try (SandboxHarness dropping = dropping(path -> path.endsWith(".blob"))) {
+            final SessionId other = SessionId.generate();
+            final ExecutionEnvironment dropped = dropping.mainTurn(other, ALICE);
+
+            assertThatThrownBy(() -> bash(dropped, "touch /workspace/ran",
+                    isolated().runDirectory(hookFiles("a", "y".repeat(40 * 1024))).build()))
+                    .isExactlyInstanceOf(ShellExecutionException.class);
+            assertThat(Files.exists(dropping.host(other, "/workspace/ran"))).isFalse();
+            assertThat(entries(dropping, other, ".run.")).isEmpty();
+        }
+    }
+
+    /** A harness whose files API silently drops what is written to matching paths, from the first connection on. */
+    private static SandboxHarness dropping(Predicate<String> paths) {
+        return SandboxHarness.builder().decorate((provider, clock) -> {
+            final RecordingProvider dropping = new RecordingProvider(provider);
+            dropping.files(files -> (SandboxFiles) Proxy.newProxyInstance(SandboxFiles.class.getClassLoader(),
+                    new Class<?>[]{SandboxFiles.class}, (proxy, method, args) -> {
+                        if (method.getName().equals("write") && paths.test((String) args[0])) {
+                            return null;
+                        }
+                        try {
+                            return method.invoke(files, args);
+                        } catch (InvocationTargetException e) {
+                            throw e.getCause();
+                        }
+                    }));
+            return dropping;
+        }).build();
     }
 
     @Test
@@ -264,14 +303,16 @@ class SandboxShellRunDirectoryIT {
     }
 
     @Test
-    @DisplayName("10/18: a newline in a path or a hook command over 64 KiB is refused before anything is provisioned")
+    @DisplayName("10/18: a newline in a path cannot be built (core #283); a hook command over 64 KiB is refused before anything is provisioned")
     void badArgumentsAreRefusedBeforeConnecting() {
         final SessionId fresh = SessionId.generate();
         final ExecutionEnvironment unprovisioned = harness.mainTurn(fresh, ALICE);
 
         // A newline or carriage return in a path never reaches the shell: core's builder refuses it (core #283).
-        assertThatThrownBy(() -> hookFiles("a\nb", "1")).isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> hookFiles("a\rb", "1")).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> hookFiles("a\nb", "1")).isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("control character");
+        assertThatThrownBy(() -> hookFiles("a\rb", "1")).isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("control character");
         assertThatThrownBy(
                 () -> bash(unprovisioned, "echo " + "x".repeat(ShellWrapper.INLINE_COMMAND_LIMIT), isolated().build()))
                 .isExactlyInstanceOf(ShellExecutionException.class)

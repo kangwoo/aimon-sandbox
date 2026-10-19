@@ -9,12 +9,12 @@ Requires aimon-core **0.3.3**. Until core releases it, `main` pins `0.3.3-SNAPSH
 which `scripts/release.sh` refuses to release
 ([`docs/design/workspace-sandbox-core-033.md`](docs/design/workspace-sandbox-core-033.md)).
 
-### Changed: follow core's run-directory cap and refusals (kangwoo/aimon-core#283)
+### Changed: follow core's run-directory cap and refusals (#36, kangwoo/aimon-core#283)
 
-- `SandboxShell` takes a run directory's ceiling from core's `RunDirectory.MAX_TOTAL_BYTES` (4 MiB) instead of its own
-  8 MiB guess.
-- Core's `RunDirectory.Builder` now refuses control characters and file/directory overlaps itself, so the sandbox's
-  matching checks are a backstop; `SandboxShellRunDirectoryIT` pins the core refusal instead of the sandbox's.
+- `SandboxShell` follows core's published `RunDirectory.MAX_TOTAL_BYTES` (4 MiB) as a run directory's ceiling.
+- Core's `RunDirectory.Builder` now refuses control characters and file/directory overlaps itself; the sandbox's own
+  newline and size checks stay as a backstop, and `SandboxShellRunDirectoryIT` pins the core refusal instead of the
+  sandbox's.
 
 ### Added: run directories for hooks, and hook runs off the shell directory (#33, kangwoo/aimon-core#275)
 
@@ -28,8 +28,9 @@ which `scripts/release.sh` refuses to release
   checked against SHA-256 digests that travel only in the exec, counted, exported in the run directory's variable after
   every other variable, and removed after the run whatever its outcome. A digest or count mismatch throws
   `RunDirectoryIntegrityException` (core: `HOOK_FILES_TAMPERED`, which blocks whatever `failOpen` says) and the command
-  does not run; any other placement failure is a plain `ShellExecutionException`. A file name with a newline, files over
-  8 MiB, and a script over the exec's single-argument budget are refused before anything is provisioned.
+  does not run; any other placement failure is a plain `ShellExecutionException`. A script over the exec's
+  single-argument budget is refused before anything is provisioned; a control character in a file name, a
+  file/directory overlap and more than 4 MiB are refused by core's `RunDirectory.Builder` (kangwoo/aimon-core#283).
 - **Changed: hook and isolated runs keep nothing in the shell directory.** Their command, a small stdin and their output
   used to be run files under `/workspace/.aimon-shell/{h}/`, which the agent's shell (the same uid) could rewrite to
   forge a policy hook's verdict. Now the command is an argument of the exec, stdin is base64 in the exec (or uploaded,

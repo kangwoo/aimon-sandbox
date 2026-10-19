@@ -252,11 +252,12 @@ final class SandboxShell implements VirtualShell {
     }
 
     /**
-     * The checks of a run directory that core makes too ({@link ShellFeature#RUN_DIRECTORY}). Since core #283 its
-     * builder also refuses control characters (so no newline, carriage return or NUL reaches a {@code sha256sum}
-     * manifest line), file/directory overlaps and more than {@link RunDirectory#MAX_TOTAL_BYTES}; the matching checks
-     * here are kept as a backstop. Only confinement and placement failures the filesystem itself raises (a letter-case
-     * collision) remain the sandbox's own. All are a bad argument, never the integrity failure.
+     * The checks of a run directory, all of which core's builder already makes ({@link ShellFeature#RUN_DIRECTORY},
+     * core #283): a valid variable, confined paths without a control character (so no newline, carriage return or NUL
+     * reaches a {@code sha256sum} manifest line), and at most {@link RunDirectory#MAX_TOTAL_BYTES}. They are kept as a
+     * backstop. File/directory overlaps, which core also refuses, are not checked here; what is left of placement (a
+     * letter-case collision on a case-insensitive filesystem, a vanished upload) fails in the wrapper, as exit 70. All
+     * are a bad argument, never the integrity failure.
      */
     private static void checkRunDirectory(RunDirectory run) throws ShellExecutionException {
         if (!ShellWrapper.invalidNames(List.of(run.getVariable())).isEmpty()) {
