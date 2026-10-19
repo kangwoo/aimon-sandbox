@@ -415,8 +415,10 @@ public final class ProviderSandbox { ref, state, labels, expiresAt, Optional<Ins
 `maxCaptureBytes`(stdout · stderr 각각의 상한) 를 담는다. `ProviderCapabilities.maxExpiry()` 는 §13.2 의
 `terminate-after ≤ max-expiry` 검사가 읽는다 — 서버 설정이라 매니저가 볼 수 있는 통로는 SPI 뿐이다. OpenSandbox 는 그 값을
 알려 주는 API 가 없으므로 프로바이더 설정(`max-expiry`)이 서버와 같은 값을 선언한다. 서버의 renew 는 만료를 줄이는 것도,
-상한을 넘기는 것도 받아들이므로 `extendExpiry` 의 "앞으로만" 과 상한은 **프로바이더가** 지킨다. 명령은 **execd 의 uid** 로 돈다. `/command` 의 uid 인자는 쓰지 않는다 — files
-API 에는 uid 인자가 없으므로, 명령만 다른 uid 로 돌리면 파일 도구가 쓴 파일과 소유자가 어긋난다(§13.3). 프로바이더는 stdout 과 stderr 를 **구분해서** 돌려주고, `kill()` 은
+상한을 넘기는 것도 받아들이므로 `extendExpiry` 의 "앞으로만" 과 상한은 **프로바이더가** 지킨다. 명령은 **execd 의 uid** 로 돈다. `/command` 의 uid 인자는 쓰지 않는다 — 우리가 쓰는 execd(`v1.1.0`)의
+files API 에는 uid 인자가 없으므로, 명령만 다른 uid 로 돌리면 파일 도구가 쓴 파일과 소유자가 어긋난다(§13.3). execd
+`release-1.1.1` 부터는 files API 도 uid 로 돌 수 있다 — 훅을 다른 uid 로 돌리는 일(#34)의 기록은
+[`workspace-sandbox-hook-identity.md`](workspace-sandbox-hook-identity.md) 에 있다. 프로바이더는 stdout 과 stderr 를 **구분해서** 돌려주고, `kill()` 은
 그 호출의 프로세스 그룹만 끝낸다. 지속 셸 세션은 SPI 에 없다 — `SandboxShell` 이 이 위에서 셸 상태를 이어 붙인다(§9).
 **출력은 줄로 정규화될 수 있다 — SPI 의 계약이다**(`ExecOutcome`): 줄 단위로 받는 프로바이더는 줄마다 `\n` 을 붙여
 돌려주고(비어 있지 않은 출력의 마지막 줄바꿈은 늘 있다), `\r` 은 버려지거나 줄바꿈이 되며(`\r\n` 은 줄바꿈 하나, 홀로 선
@@ -2466,6 +2468,7 @@ docker 계층, K8s 에서만 드러나는 것은 k8s 계층 — 는 [`workspace-
 - [`workspace-sandbox-core-033.md`](workspace-sandbox-core-033.md) — aimon-core 0.3.3 의 세 이음매(요청 속성 · 세션 소유자와 삭제 이벤트 · 실행 환경 notice)를 따라간 변경의 설계, 열린 질문(§12)과 구현이 벗어난 점(§14)
 - [`workspace-sandbox-unannounced-reset.md`](workspace-sandbox-unannounced-reset.md) — 코어가 꺼내지 않는 경로(훅 · 워크플로 단계 · 스테이징)의 초기화 notice 를 세션 옵션에 남겨 다음 턴에 알리는 변경(#28)의 설계, 열린 질문(§11)과 구현이 벗어난 점(§12)
 - [`workspace-sandbox-run-directory.md`](workspace-sandbox-run-directory.md) — 코어의 `RUN_DIRECTORY` 를 구현하고 훅 · 격리 실행의 run 파일을 에이전트의 손에서 치운 변경(#33)의 설계, 열린 질문(§11)과 구현이 벗어난 점(§12)
+- [`workspace-sandbox-hook-identity.md`](workspace-sandbox-hook-identity.md) — 정책 훅을 에이전트와 다른 uid 로 돌리는 일(#34, 코어 EE-113)의 기록: OpenSandbox 가 준 것, 막힌 것(execd API 의 도달성), 이미지 계약과 seed 검사 초안 — 구현 전
 - [`opensandbox-spike.md`](opensandbox-spike.md) — 2단계(OpenSandbox 스파이크)의 결과와 근거
 - [`sandbox.md` @ `704013c`](https://github.com/kangwoo/aimon-sandbox/blob/704013c02cb14f16ec37ebf8c07f90d7e107db73/docs/design/sandbox.md) — 이 설계가 대체한 identifier 기반 설계(삭제됨)
 - [`scope-model.md`](https://github.com/kangwoo/aimon-core/blob/main/docs/overview/scope-model.md) — 수명과 소멸 책임
