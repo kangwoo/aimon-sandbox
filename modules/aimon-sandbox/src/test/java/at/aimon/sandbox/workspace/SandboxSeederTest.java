@@ -14,9 +14,11 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+import java.util.stream.Stream;
 
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import at.aimon.sandbox.profile.SandboxProfile;
 import at.aimon.sandbox.provider.Capability;
@@ -161,6 +163,49 @@ class SandboxSeederTest {
         assertThat(seeder.script(profile, "/workspace/repo"))
                 .contains("for t in git rg flock sha256sum base64; do command -v \"$t\"")
                 .contains("it must provide git, rg, flock, sha256sum and base64");
+    }
+
+    @Test
+    @DisplayName("§13.3: the image contract wants sha256sum and base64 executable in /usr/bin, where hooks call them")
+    void theImageContractChecksTheAbsolutePaths() {
+        assertThat(seeder.script(profile, "/workspace/repo"))
+                .contains("for t in /usr/bin/sha256sum /usr/bin/base64; do [ -x \"$t\" ]")
+                .contains("sha256sum and base64 must be in /usr/bin");
+    }
+
+    @Test
+    @DisplayName("§13.3: a sha256sum that refuses -c --strict - (BusyBox) fails the image contract; GNU's passes")
+    void aSha256sumWithoutStrictFailsTheImageContract(@TempDir Path dir) throws Exception {
+        final String script = seeder.script(profile, "/workspace/repo");
+        final String failLine = script.lines().filter(l -> l.startsWith("fail() ")).findFirst().orElseThrow();
+        final String probe = script.lines().filter(l -> l.contains("-c --strict -")).findFirst().orElseThrow();
+        // BusyBox's sha256sum knows -c but not --strict: it prints usage and exits 1.
+        final Path busybox = executable(dir.resolve("busybox-sha256sum"),
+                "#!/bin/sh\ncase \" $* \" in *' --strict '*) echo 'unrecognized option' >&2; exit 1;; esac\nexit 0\n");
+        final String hostSha = Stream.of("/usr/bin/sha256sum", "/sbin/sha256sum", "/usr/local/bin/sha256sum")
+                .filter(p -> Files.isExecutable(Path.of(p))).findFirst().orElse(null);
+        final Path gnu = executable(dir.resolve("host-sha256sum"),
+                hostSha != null
+                        ? "#!/bin/sh\nexec " + hostSha + " \"$@\"\n"
+                        : "#!/bin/sh\nexec /usr/bin/shasum -a 256 \"$@\"\n");
+
+        assertThat(runProbe(failLine, probe.replace("| /usr/bin/sha256sum -c", "| " + busybox + " -c"))).contains(
+                SandboxSeeder.FAIL_EXIT + " AIMON_SEED_FAIL image-contract /usr/bin/sha256sum does not accept");
+        assertThat(runProbe(failLine, probe.replace("| /usr/bin/sha256sum -c", "| " + gnu + " -c"))).isEqualTo("0 ");
+    }
+
+    private static Path executable(Path path, String content) throws Exception {
+        Files.writeString(path, content);
+        Files.setPosixFilePermissions(path, PosixFilePermissions.fromString("rwxr-xr-x"));
+        return path;
+    }
+
+    /** Runs the seed's {@code fail} and one line of it: the exit code, a space, then what it printed. */
+    private static String runProbe(String failLine, String line) throws Exception {
+        final Process process = new ProcessBuilder("/bin/bash", "-c", failLine + "\n" + line).redirectErrorStream(true)
+                .start();
+        final String output = new String(process.getInputStream().readAllBytes(), StandardCharsets.UTF_8).strip();
+        return process.waitFor() + " " + output;
     }
 
     @Test

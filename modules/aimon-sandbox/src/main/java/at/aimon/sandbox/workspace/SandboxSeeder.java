@@ -23,7 +23,9 @@ import at.aimon.sandbox.provider.SandboxProviderException;
  * <ul>
  * <li>{@code /workspace} is a writable directory, and the seed lock in it can be opened — the mount contract
  * (§13.3);</li>
- * <li>{@code command -v git rg flock sha256sum base64} — the image contract (§13.3);</li>
+ * <li>{@code command -v git rg flock sha256sum base64}, {@code /usr/bin/sha256sum} and {@code /usr/bin/base64}
+ * executable, and {@code /usr/bin/sha256sum -c --strict -} accepting a manifest as GNU coreutils does — the image
+ * contract (§13.3);</li>
  * <li>{@code uname -s}, lower-cased, equals the declared platform; {@code uname -sr} matches the declared OS version
  * as a glob ({@code Linux 6.x} reads as {@code Linux 6.*}) when one is declared;</li>
  * <li>not root and no service-account token — skipped when {@code HARDENED_SECURITY_CONTEXT} is waived;</li>
@@ -40,6 +42,8 @@ final class SandboxSeeder {
 
     static final int FAIL_EXIT = 65;
     private static final String FAIL_MARKER = "AIMON_SEED_FAIL ";
+    /** The SHA-256 of no bytes: the manifest line the seed checks {@code /dev/null} against. */
+    private static final String EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
     private static final Pattern VERSION_X = Pattern.compile("(?<=\\.)x(?=$|\\.)");
     /** How long the network probe waits for one connect; {@code /dev/tcp} alone can hang for over a minute. */
     static final int PROBE_TIMEOUT_SECONDS = 3;
@@ -130,6 +134,13 @@ final class SandboxSeeder {
         s.append("[ -d /workspace ] && [ -w /workspace ] || fail workspace '/workspace is missing or not writable'\n");
         s.append("for t in git rg flock sha256sum base64; do command -v \"$t\" >/dev/null 2>&1 || fail image-contract "
                 + "\"the image lacks $t (it must provide git, rg, flock, sha256sum and base64)\"; done\n");
+        // The run-directory check calls both by absolute path, and reads sha256sum's status 1 as tampering: a
+        // sha256sum that refuses `-c --strict -` (BusyBox) would report every hook as tampered (§9, §13.3).
+        s.append("for t in /usr/bin/sha256sum /usr/bin/base64; do [ -x \"$t\" ] || fail image-contract "
+                + "\"the image lacks $t (sha256sum and base64 must be in /usr/bin)\"; done\n");
+        s.append("printf '%s  /dev/null\\n' ").append(EMPTY_SHA256)
+                .append(" | /usr/bin/sha256sum -c --strict - >/dev/null 2>&1 || fail image-contract "
+                        + "'/usr/bin/sha256sum does not accept -c --strict - (it must be GNU coreutils)'\n");
         // bash (not in POSIX mode) carries on after a failed exec redirection; flock would then report the missing
         // fd as lock contention, a transient failure retried forever.
         s.append("exec 8>/workspace/.aimon-seed.lock || fail workspace 'cannot open /workspace/.aimon-seed.lock'\n");
