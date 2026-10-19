@@ -44,7 +44,7 @@ mockito = "5.24.0"
 testcontainers = "2.0.5"
 
 checkstyle = "10.12.5"
-spotless = "8.10.3"
+spotless = "8.10.4"
 maven-publish = "0.37.0"
 
 [libraries]
