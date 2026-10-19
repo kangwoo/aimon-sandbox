@@ -229,8 +229,8 @@ Script changes:
     `ShellExecutionException("a hook file path is not a relative path inside the run directory: …")`;
   - no path contains `\n` → `ShellExecutionException("a hook file name contains a newline, which the sandbox cannot
     place")`; also refuse `\r` the same way (a normalizing provider never sees it, but `sha256sum` line parsing would);
-  - `run.getTotalBytes() <= MAX_RUN_DIRECTORY_BYTES` (new constant, **8 MiB** — since core #283 `RunDirectory.MAX_TOTAL_BYTES`, 4 MiB: core caps at 4 MiB, slack for a core
-    raise), else `ShellExecutionException` (never the integrity exception).
+  - `run.getTotalBytes() <= MAX_RUN_DIRECTORY_BYTES` (new constant, **8 MiB**: core caps at 4 MiB, slack for a core raise;
+    since core #283 it is `RunDirectory.MAX_TOTAL_BYTES`), else `ShellExecutionException` (never the integrity exception).
 - **Plan the script before connecting** (new private static `plan(...)` → the filled `Invocation` plus the list of
   uploads to do): generate `runPrefix`, `nonce` and `P` here (they depend only on the binding), read each file's
   bytes once with `run.getContent(...)`, compute digests in the JVM, then:
@@ -398,7 +398,7 @@ No public API of this library changes.
 |---|---|---|---|
 | Invalid variable / unconfined path / newline in a path / total > 8 MiB (since core #283 core's builder refuses the path and size cases first, 4 MiB) / hook command > 64 KiB / script over budget | `execute`, before connect | `ShellExecutionException`; nothing provisioned | `EXECUTION_FAILED` (`failOpen` passes) |
 | Upload fails (disk full, provider error) | `upload` | `ShellExecutionException` / `SandboxUnavailableException` (as today) | `EXECUTION_FAILED` / unavailable |
-| `P` exists (`mkdir` fails), `mkdir`/decode/copy fails, two paths the FS merges (noclobber), `a` and `a/b` both present | wrapper, exit 70 + stderr line | generic wrapper failure with the message; command not run; JVM `cleanUp` | `EXECUTION_FAILED` |
+| `P` exists (`mkdir` fails), `mkdir`/decode/copy fails, two paths the FS merges (noclobber), `a` and `a/b` both present (unreachable since core #283; the builder refuses it) | wrapper, exit 70 + stderr line | generic wrapper failure with the message; command not run; JVM `cleanUp` | `EXECUTION_FAILED` |
 | Placed bytes ≠ digest, extra/missing entry, uploaded stdin ≠ digest | wrapper, exit 73 | `RunDirectoryIntegrityException`; `P` removed by trap + JVM | `HOOK_FILES_TAMPERED` (blocks whatever `failOpen`) |
 | Hook timeout | watchdog kills group (137), no trailer, elapsed ≥ timeout | `ShellTimeoutException` with streamed partial output; JVM removes `P` | `TIMEOUT` |
 | No timeout, backstop | provider `timedOut()` | `ShellTimeoutException` | `TIMEOUT` |
