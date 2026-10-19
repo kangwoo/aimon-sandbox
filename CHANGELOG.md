@@ -12,16 +12,17 @@ which `scripts/release.sh` refuses to release
 ### Added: run directories for hooks, and hook runs off the shell directory (#33, kangwoo/aimon-core#275)
 
 - **`SandboxShell` declares `ShellFeature.RUN_DIRECTORY`.** Core hands a hook its files as bytes
-  (`ExecutionOptions.getRunDirectory()`) and runs a `hooks.json` handler that names `AIMON_HOOK_DIR` only on a shell that
-  declares it; until now such a handler was not run on the sandbox (`RUN_DIRECTORY_UNSUPPORTED`, so a guard blocked).
-  Skill hooks get `AIMON_SKILL_DIR` the same way instead of the staged copy under `.aimon-staged`. The files are placed
-  for the one run in a fresh private directory, `/workspace/.aimon-shell/.run.{hex}/d` (exclusive `mkdir`, mode 700),
-  inline in the exec when they fit and through an upload otherwise, checked against SHA-256 digests that travel only in
-  the exec (for an upload, the digest of an uploaded manifest, so a skill with many small files is not refused), counted, exported in the run directory's variable after every other variable, and removed after the run
-  whatever its outcome. A digest or count mismatch throws `RunDirectoryIntegrityException` (core: `HOOK_FILES_TAMPERED`,
-  which blocks whatever `failOpen` says) and the command does not run; any other placement failure is a plain
-  `ShellExecutionException`. A file name with a newline, files over 8 MiB, and a script over the exec's single-argument
-  budget are refused before anything is provisioned.
+  (`ExecutionOptions.getRunDirectory()`) and runs a `hooks.json` handler that names `AIMON_HOOK_DIR` only on a shell
+  that declares it; until now such a handler was not run on the sandbox (`RUN_DIRECTORY_UNSUPPORTED`, so a guard
+  blocked). Skill hooks get `AIMON_SKILL_DIR` the same way instead of the staged copy under `.aimon-staged`. The files
+  are placed for the one run in a fresh private directory, `/workspace/.aimon-shell/.run.{hex}/d` (exclusive `mkdir`,
+  mode 700), inline in the exec when they fit and otherwise as two uploads whatever their number (a manifest and one
+  blob, whose digests the exec carries, so a skill with many small files is neither refused nor one upload per file),
+  checked against SHA-256 digests that travel only in the exec, counted, exported in the run directory's variable after
+  every other variable, and removed after the run whatever its outcome. A digest or count mismatch throws
+  `RunDirectoryIntegrityException` (core: `HOOK_FILES_TAMPERED`, which blocks whatever `failOpen` says) and the command
+  does not run; any other placement failure is a plain `ShellExecutionException`. A file name with a newline, files over
+  8 MiB, and a script over the exec's single-argument budget are refused before anything is provisioned.
 - **Changed: hook and isolated runs keep nothing in the shell directory.** Their command, a small stdin and their output
   used to be run files under `/workspace/.aimon-shell/{h}/`, which the agent's shell (the same uid) could rewrite to
   forge a policy hook's verdict. Now the command is an argument of the exec, stdin is base64 in the exec (or uploaded,
@@ -38,7 +39,8 @@ which `scripts/release.sh` refuses to release
   checks both paths and that `/usr/bin/sha256sum -c --strict -` accepts a manifest: a BusyBox `sha256sum` rejects
   `--strict`, which would read as tampering on every hook with files.
 - **Testkit: `LocalProcessSandboxProvider`'s shims start at once on macOS.** The `flock`, `rg` and `shasum` shim scripts
-  are written once per host (`$TMPDIR/aimon-sandbox-shims/`, keyed by content) and linked into each provider, and the
+  are written once per host and user (`$TMPDIR/aimon-sandbox-shims-{user}/`, mode 700, keyed by content; a directory
+  that is not the user's own or that others can reach is not used) and linked into each provider, and the
   `sha256sum` shim links the host's binary: a freshly written executable is assessed on its first run, which under load
   outlasted a seed's timeout.
 - Design record:

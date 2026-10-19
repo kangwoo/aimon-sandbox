@@ -848,7 +848,7 @@ EE-42 — 등록된 정의의 `sandbox.slot` 은 스크립트가 바꾸지 못�
                                                          deletes them before its trailer, SandboxShell only when
                                                          there is no trailer (timeout, wrapper failure). Foreground
                                                          and background only: a hook or isolated run has none (#33)
-  run-{id}.files/ , run-{id}.in                          a hook run's uploads, only past the inline limits; the
+  run-{id}.manifest / .blob / .in                        a hook run's uploads, only past the inline limits; the
                                                          wrapper removes them right after copying them
 /workspace/.aimon-shell/.run.{32 hex}/                   one run's private directory (mode 700, exclusive mkdir):
   d/           RUN_DIRECTORY's files, exported in its variable
@@ -992,7 +992,7 @@ INNER:
   bash 의 stdout · stderr 는 exec 자신의 스트림이고, 트레일러는 `\n{nonce} exit=N cwd=C` 다(바이트 수 없음). 상한은 JVM 이
   받은 바이트로 자른다(§6.1 정규화 뒤의 바이트). 타임아웃은 `.timedout` 표지가 아니라 JVM 의 시계로 정한다 — 트레일러 없이
   137 로 끝났고 명령 타임아웃이 지났으면 타임아웃이다. 에이전트가 쓸 수 있는 곳의 표지는 위조할 수 있기 때문이다. cwd
-  fallback 표시는 비공개 디렉터리의 `r.cwd` 에 두고 트레일러로 읽는다. 업로드(`run-{id}.files/` · `run-{id}.in`)만
+  fallback 표시는 비공개 디렉터리의 `r.cwd` 에 두고 트레일러로 읽는다. 업로드(`run-{id}.manifest` · `.blob` · `.in`)만
   `.aimon-shell/{h}/` 에 잠깐 나타나고, 래퍼가 복사한 즉시 지운다
 - **실행마다 비공개 디렉터리를 만든다.** 스트림 래퍼는 늘, 모델의 명령은 실행 디렉터리를 받았을 때만
   `/workspace/.aimon-shell/.run.{32 hex}` 를 만든다. 이름은 JVM 이 고른 독립된 난수다 — `runPrefix` 의 접미사는 업로드
@@ -1003,10 +1003,12 @@ INNER:
 - **실행 디렉터리(`ShellFeature.RUN_DIRECTORY`, 코어 EE-109).** 코어는 훅의 파일을 경로가 아니라 바이트로
   `ExecutionOptions.getRunDirectory()` 에 실어 보낸다 — `hooks.json` 의 `AIMON_HOOK_DIR`(격리 실행), 스킬 훅의
   `AIMON_SKILL_DIR`. `SandboxShell` 은 이 기능을 선언한다. 파일은 비공개 디렉터리의 `d/` 에 놓인다. base64 와 manifest 가
-  16 KiB 안이면 스크립트에 넣어 `base64 -d` 로 풀고, 넘으면 files API 로 `run-{id}.files/` 에 올렸다가 `cat` 으로 복사한다.
-  올릴 때는 manifest 도 `run-{id}.manifest` 로 올리고 스크립트에는 그 다이제스트와 파일 수만 싣는다 — 스크립트가 파일 수에
-  따라 커지지 않으므로, 작은 파일이 많은 스킬(1 200 개 남짓을 넘으면 manifest 만으로 인자 예산을 넘는다)도 거부되지 않는다.
-  래퍼는 manifest 를 비공개 디렉터리로 복사해 그 다이제스트부터 확인하고, 확인한 manifest 의 줄로 파일을 복사한다
+  16 KiB 안이면 스크립트에 넣어 `base64 -d` 로 풀고, 넘으면 files API 로 **파일 수와 상관없이 두 번** 올린다 — manifest
+  (`run-{id}.manifest`)와, 파일마다 base64 한 줄씩 manifest 순서로 이은 blob(`run-{id}.blob`). 스크립트에는 둘의 다이제스트와
+  파일 수만 싣는다. 그래서 스크립트도 업로드 횟수도 파일 수에 따라 늘지 않는다 — 작은 파일이 많은 스킬(1 200 개 남짓을 넘으면
+  manifest 만으로 인자 예산을 넘는다)도 거부되지 않고, OpenSandbox 에서 업로드 한 번이 `POST` 와 exec 한 번씩이어도 훅 호출마다
+  드는 왕복은 일정하다. 래퍼는 둘을 비공개 디렉터리로 복사해 다이제스트부터 확인하고(어느 쪽이든 다르면 exit 73), 확인한
+  manifest 의 줄로 경로를, blob 의 줄로 내용을 얻어 파일을 놓는다
   놓는 동안은 noclobber(`set -C`)다 — 파일 시스템이 하나로 합치는 두 경로(대소문자만 다른 이름이 대소문자를 가리지 않는
   파일 시스템에서, 같은 이름의 파일과 디렉터리)는 오류이고 명령은 돌지 않는다. 어느 쪽이든 JVM 이 바이트에서 계산해
   스크립트에만 실은 SHA-256 manifest 로 `sha256sum -c --strict -` 를 돌리고, 파일 수를 센다. 다이제스트가 다르거나 파일이
@@ -1017,7 +1019,7 @@ INNER:
   있거나 합이 8 MiB 를 넘으면 연결 전에 거부한다(코어는 4 MiB 로 묶는다)
 - **스크립트 하나가 인자 하나다.** Linux 는 인자 하나를 128 KiB 로 묶고, 래퍼 스크립트 전체 — 명령(≤ 64 KiB), 명령별 환경
   (≤ 32 KiB), 인라인 실행 파일(≤ 16 KiB), 인라인 stdin — 가 그 하나다. 스트림 래퍼는 조립한 스크립트의 길이를
-  `ARGUMENT_BUDGET`(120 KiB)과 견준다 — stdin 을 먼저 업로드로 돌리고, 그래도 넘으면 실행 파일을(manifest 와 함께), 그래도
+  `ARGUMENT_BUDGET`(120 KiB)과 견준다 — stdin 을 먼저 업로드로 돌리고, 그래도 넘으면 실행 파일을(manifest 와 blob 으로), 그래도
   넘으면 연결 전에 거부한다. 다 올린 스크립트는 명령과 환경의 상한 안이므로 마지막 거부는 방어선일 뿐 닿지 않는다
 - **훅이 남긴 작업은 훅과 함께 끝난다(동작 변경).** 스트림 래퍼에서는 exec 의 stdout 이 곧 훅의 stdout 이므로, 훅의
   `cmd &` 가 exec 를 붙잡는다 — OpenSandbox 의 `await` 는 스트림을 쥔 자손이 모두 끝나야 돌아온다. 그래서 `SandboxShell` 은
@@ -1929,7 +1931,7 @@ workspace-purged · session-options-set · session-options-cleared)는
 | 명령이 `.aimon-shell` 을 지워 실행 파일이 사라짐 | 포그라운드 · 백그라운드 명령만 — 래퍼 실패 에러, 출력을 잃었다고 적는다. 빈 성공(exit 0)으로 보고하지 않는다. 훅 · 격리 실행에는 실행 파일이 없고, 다음 실행이 셸 루트를 되살린다(§9) |
 | 훅의 실행 파일이나 업로드한 stdin 이 다이제스트와 다름(파일이 바뀌거나 빠지거나 더 있음) | `RunDirectoryIntegrityException`, 명령은 돌지 않는다. 코어는 `HOOK_FILES_TAMPERED` 로 보고 `failOpen` 과 무관하게 막는다(§9) |
 | 훅 명령 64 KiB 초과 · 실행 파일 경로의 줄바꿈 · 실행 파일 8 MiB 초과 · 스크립트가 인자 예산 초과 | 연결 전에 `ShellExecutionException`. 아무것도 프로비저닝하지 않는다(§9) |
-| 작은 파일이 많은 실행 디렉터리(manifest 가 인자 예산을 넘음) | 거부하지 않는다 — 파일과 manifest 를 올리고 스크립트에는 manifest 의 다이제스트만 싣는다. 올린 manifest 가 바뀌면 위의 `RunDirectoryIntegrityException`(§9) |
+| 작은 파일이 많은 실행 디렉터리(manifest 가 인자 예산을 넘음) | 거부하지 않는다 — manifest 와 blob 두 파일로 올리고 스크립트에는 둘의 다이제스트만 싣는다. 업로드는 파일 수와 상관없이 두 번이다(OpenSandbox 에서 각각 `POST` 와 exec 한 번). 올린 것이 바뀌면 위의 `RunDirectoryIntegrityException`(§9) |
 | 실행 파일을 놓지 못함(파일 시스템이 합치는 두 경로, 디스크, 업로드가 사라짐) | `ShellExecutionException`(exit 70 과 그 이유), 명령은 돌지 않는다. 변조로 보고하지 않는다(§9) |
 | 훅이 남긴 `cmd &` | 트레일러가 오면 exec 의 프로세스 그룹을 kill 한다 — 훅과 함께 끝난다(§9) |
 | 슬롯이 이미 다른 프로파일로 있음 | 사용 불가 — 요구한 프로파일과 실제 프로파일을 적는다(§8.3) |

@@ -612,13 +612,20 @@ pointing back here. Q-A, Q-F and Q-G are answered below.
   every 10 ms until `run(...)` has returned it (or the wait has ended), and kills it then. One mechanism instead of two.
   (Built first as "wait for `await` to return", which a hook's `cmd &` holds open — the case the kill exists for; the
   PR review bounded it.)
-- **Uploaded run files carry an uploaded manifest (PR review).** §3.2 always embeds the manifest, at ~67 bytes plus
-  the path per file, so a skill under core's 4 MiB but with roughly 1 200 or more files pushed the script past
-  `ARGUMENT_BUDGET` even with every file uploaded, and was refused (`EXECUTION_FAILED`) where core's fallback used to
-  stage it. Now an upload sends the manifest too (`run-{id}.manifest`) and the script carries only its SHA-256 and the
-  file count: the wrapper copies the manifest into `P`, checks it against that digest (status 1 → 73), then copies the
-  files the checked manifest names and runs `sha256sum -c --strict -` with it. The script no longer grows with the
-  number of files; inline placement is unchanged. The budget refusal stays as a guard but is not reachable with every
+- **Uploaded run files are two uploads: the manifest and one blob (PR review).** §3.2 always embeds the manifest
+  (~67 bytes plus the path per file) and uploads each file on its own. So a skill under core's 4 MiB with roughly 1 200
+  or more files pushed the script past `ARGUMENT_BUDGET` even with every file uploaded, and was refused
+  (`EXECUTION_FAILED`) where core's fallback used to stage it. And on OpenSandbox every upload is a `POST` plus an exec
+  (`mv`), on every hook call. Now an upload is `run-{id}.manifest` and `run-{id}.blob` — each file's base64 on a line of
+  its own, in the manifest's order — whatever the number of files, and the script carries only their two SHA-256s and
+  the file count. The wrapper copies both into `P` and checks both digests (status 1 → 73) before using a byte of
+  either. It then reads each path from the manifest and each content from the blob (`read -r` on fd 4, decoded with
+  `/usr/bin/base64 -d`), places it under noclobber, and runs `sha256sum -c --strict -` with the manifest and the count.
+  A first round uploaded the manifest only, keeping one upload per file. The pinned blob digest also means a decode
+  failure cannot come from tampering. Inline placement is unchanged.
+- **A model's command with a run directory places it after the `flock` (PR review).** §3.1 put the private-directory
+  section in the shared prologue, so a foreground run's `P` existed through the lock wait and was placed even when the
+  lock then stayed busy. `foreground()` now appends it after the owner record. The budget refusal stays as a guard but is not reachable with every
   part within its cap.
 - **A model's command with a run directory maps exit 73 to the integrity exception too.** §3.3 described the mapping in
   the stream classification; §5's failure table applies it to every run with a run directory. `classify` (foreground,
@@ -637,9 +644,11 @@ pointing back here. Q-A, Q-F and Q-G are answered below.
 ### Tests placed or shaped differently from §7
 
 - The `SandboxShellIT` cases of §7 are in a class of their own, `SandboxShellRunDirectoryIT` (`SandboxShellIT` is 1300
-  lines); its display names carry §7's numbers. Cases added: 1 500 small files whose manifest alone exceeds
-  `ARGUMENT_BUDGET` run through the uploaded manifest (it replaced the build's "refused before connecting" case), a
-  tampered uploaded manifest is an integrity failure, and the Q-G foreground case.
+  lines); its display names carry §7's numbers. Cases added:
+  - 1 500 small files, whose manifest alone exceeds `ARGUMENT_BUDGET`, run as exactly three uploads (manifest, blob,
+    stdin). This replaced the build's "refused before connecting" case.
+  - A tampered uploaded manifest, like a tampered blob, is an integrity failure.
+  - The Q-G foreground case.
 - §7 #3 and #8 share a test (the upload transport with a non-ASCII name); #8's inline half has its own.
 - §7's tamper tests use `TamperingFiles`, a files-API decorator next to `FailingFiles`, installed through a
   `RecordingProvider` in a harness of their own (the files wrapper applies to connections opened after it is set).
@@ -653,9 +662,11 @@ pointing back here. Q-A, Q-F and Q-G are answered below.
   `StagedResource` directly instead of through `OrcaAgentExecutor`: a skill hook gets its resource from core's
   skill-scoped hook registry, which this repository's E2E wiring does not build. The `hooks.json` case runs through
   `OrcaAgentExecutor` as §7 says.
-- `OpenSandboxWorkspaceIT` (docker) has no tamper case: its wiring talks to `OpenSandboxProvider` directly and has no
-  provider decorator; the local-provider tamper tests cover the script, which is the same. Its other §7 rows run in one
-  test against one sandbox (`seq 1 40000` for the drain grace, ~230 KiB in 40 000 lines).
+- `OpenSandboxWorkspaceIT` (docker) runs its §7 rows in one test against one sandbox: `seq 1 40000` for the drain
+  grace (~230 KiB in 40 000 lines), a clock-decided timeout of an isolated hook (execd's 137), and a tamper case. The
+  build had no tamper case there; the PR review added one. A background command of the same uid rewrites
+  `run-*.blob` in a loop while the testkit's `FaultInjectingSandboxProvider` delays the hook's exec by 3 s, and the run
+  is a `RunDirectoryIntegrityException` that does not run the command.
 
 ### Review 2's non-blocking items
 
