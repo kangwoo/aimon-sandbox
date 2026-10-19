@@ -193,6 +193,29 @@ workspaces.purge(ws.id(), alice);                                               
 - **Files do not persist yet.** A slot ends after its profile's `terminate-after`, and the next use starts from an
   empty `/workspace` (with the usual "recreated" notice). Persistent files come with shared volumes (step 5).
 
+### Files
+
+`sandbox.workspaces().files()` is the backend of a file explorer: list, stat, read (ranged), search, write, create,
+move and delete under `/workspace` of a workspace's running sandbox
+([`docs/design/workspace-sandbox-files.md`](docs/design/workspace-sandbox-files.md)):
+
+```java
+SandboxWorkspaceFiles files = sandbox.workspaces().files();
+WorkspaceFileListing top = files.list(ws.id(), "repo", 500, alice);         // directories first, then by name
+try (InputStream in = files.read(ws.id(), "repo/build.log", 0, 512 * 1024, alice)) { ... }
+files.write(ws.id(), "repo/input.csv", upload, size, false, alice);         // FILES_CHANGED, actor alice
+```
+
+- **It never provisions.** A workspace whose sandbox is not RUNNING throws `WorkspaceFilesUnavailableException` with a
+  `reason()` — `NOT_RUNNING`, `CLOSED`, `CLOSING`, `NOT_FOUND`, `UNREACHABLE` — to show, not retry. Looking never
+  starts a sandbox, reopens an idle-closed workspace or resets one the model would hear about.
+- **Paths are relative to `/workspace`** and cannot leave it. `/workspace` itself and the sandbox's `.aimon-*`
+  entries are read-only.
+- **Use right, like attaching a session.** A session's own `ws:{sessionId}` is browsable by the session's owner.
+  `SandboxAdministration.files()` checks nothing and records the operator.
+- **Changes count as activity** (reads do not) and publish `SandboxEvent.Type.FILES_CHANGED`. The model is not told;
+  core's `Edit`/`Write` refuse to overwrite a file changed since the model read it.
+
 ### Administration
 
 `SandboxAdministration.of(sandbox)` is the operator's surface. It lists every workspace (by state, origin, name,

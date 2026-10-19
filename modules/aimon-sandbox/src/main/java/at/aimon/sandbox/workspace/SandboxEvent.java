@@ -45,7 +45,12 @@ public final class SandboxEvent {
         /** A session's sandbox options were set. */
         SESSION_OPTIONS_SET,
         /** A session's sandbox options were cleared. */
-        SESSION_OPTIONS_CLEARED;
+        SESSION_OPTIONS_CLEARED,
+        /**
+         * Files in a workspace were changed through {@code SandboxWorkspaceFiles} — by a person, not an agent's tools;
+         * the cause names the operation and path (docs/design/workspace-sandbox-files.md §6.4).
+         */
+        FILES_CHANGED;
 
         /** @return whether this is one of the session types, which may lack a workspace */
         public boolean isSessionType() {

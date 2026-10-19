@@ -40,9 +40,11 @@ public final class SandboxAdministration {
     public static final int DETAIL_SESSIONS = 100;
 
     private final SandboxWorkspaceManager manager;
+    private final SandboxWorkspaceFiles files;
 
     private SandboxAdministration(SandboxWorkspaceManager manager) {
         this.manager = Objects.requireNonNull(manager, "manager must not be null");
+        this.files = SandboxWorkspaceFiles.administrator(manager);
     }
 
     /**
@@ -101,6 +103,17 @@ public final class SandboxAdministration {
      */
     public List<SandboxView> sandboxes() {
         return manager.adminSandboxes();
+    }
+
+    /**
+     * The files of any workspace's running sandbox (docs/design/workspace-sandbox-files.md): no owner or tenant check;
+     * the principal every call takes is the operator, required and recorded on {@code FILES_CHANGED}. Like the
+     * owner-facing {@link SandboxWorkspaces#files()}, it never provisions.
+     *
+     * @return the operator's files
+     */
+    public SandboxWorkspaceFiles files() {
+        return files;
     }
 
     /**

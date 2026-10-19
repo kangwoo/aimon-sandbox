@@ -366,6 +366,42 @@ live.submit(prompt, SubmitOptions.builder()
 (`/workspace/.aimon-shell/`)도 마찬가지이고, 프로파일의 자격 증명도 함께 쓴다. 그래서 `PRINCIPAL` 배포에서 주체를
 넘나드는 공유는 `allow-shared-workspaces: true` 로 명시해야 한다.
 
+### 5.4 파일 탐색기 — `SandboxWorkspaceFiles`
+
+```java
+SandboxWorkspaceFiles files = sandbox.workspaces().files();
+
+WorkspaceFileListing top = files.list(ws.id(), "repo", 500, alice);        // 한 단계만. 디렉터리 먼저, 이름순
+Optional<WorkspaceFile> log = files.stat(ws.id(), "repo/build.log", alice);
+try (InputStream in = files.read(ws.id(), "repo/build.log", 0, 512 * 1024, alice)) { ... }  // 미리보기는 앞부분만
+files.write(ws.id(), "repo/input.csv", upload, size, false, alice);        // 있으면 FileAlreadyExistsException
+files.move(ws.id(), "repo/a.txt", "repo/b.txt", false, alice);              // 이름 바꾸기도 move
+files.delete(ws.id(), "repo/tmp", true, alice);
+```
+
+사람이 쓰는 파일 탐색기의 백엔드다. 실행 중인 `primary` 샌드박스의 `/workspace` 아래를 보고 고친다
+([설계](../design/workspace-sandbox-files.md)).
+
+- **샌드박스를 띄우지 않는다.** RUNNING 이 아니면 `WorkspaceFilesUnavailableException` 이 나오고 `reason()` 이
+  `NOT_RUNNING` · `CLOSED` · `CLOSING` · `NOT_FOUND` · `UNREACHABLE` 중 하나다. 화면에는 "실행 중인 샌드박스 없음"으로
+  보여 주고, 다시 시도하는 루프를 돌리지 않는다. 열어 보는 것만으로 프로비저닝 · idle reopen · reset 이 일어나지 않으니
+  모델이 엉뚱한 reset 알림을 받는 일도 없다. 띄우려면 `workspaces.provision(id, caller)` 를 따로 부른다
+- **경로는 `/workspace` 기준 상대 경로다.** `""` 가 `/workspace` 자체다. `..` 로 벗어나는 경로, `/` 로 시작하는
+  경로는 `InvalidPathException` 이다. 에이전트 파일 도구의 `repo/x` 와 여기의 `repo/x` 는 기본 root 에서 같은 파일이다
+- **`/workspace` 자체와 `.aimon-*` 항목은 읽기 전용이다**(`WorkspaceFile.readOnly()`). 목록과 읽기는 되고, 쓰기 ·
+  삭제 · 이동은 `FileAccessDeniedException` 이다. `.aimon-shell` 에는 세션마다 cwd 와 export 가 있고 모든 명령이
+  그것을 source 하기 때문이다. 실수를 막는 장치일 뿐 보안 경계는 아니다(§5.3)
+- **권한은 워크스페이스 사용 권리다.** 세션을 붙일 수 있는 사람이면 파일도 본다. 세션이 만든 `ws:{sessionId}` 는
+  그 세션의 소유자가 본다. 권한이 없는 워크스페이스는 없는 워크스페이스와 똑같이 `NOT_FOUND` 로 답한다
+- **변경은 활동으로 친다.** 쓰기 · mkdir · move · delete 는 idle close 와 프로바이더 만료를 미루고
+  `SandboxEvent.Type.FILES_CHANGED` 를 행위자와 함께 남긴다. 읽기는 활동이 아니다 — 탐색기를 열어 둬도 샌드박스가
+  idle 로 닫힌다
+- **모델에게는 알리지 않는다.** 대신 core 의 `Edit` · `Write` 가 "File changed since it was read" 로 거부하므로,
+  사람이 고친 파일을 모델이 모르고 덮어쓰지는 않는다
+- **업로드 크기 제한은 호스트가 한다.** `write` 의 `length` 는 모르면 `-1`
+- 목록은 `limit`(최대 10 000)을 넘으면 `truncated()` 가 true 이고, 검색은 10만 항목이 넘는 트리에서 실패한다.
+  디렉터리 전체 사용량 요약은 없다
+
 ---
 
 ## 6. 모델이 보는 것
@@ -449,6 +485,8 @@ admin.terminateSlot(workspaceId, "primary", operator);   // 다음 사용 때 �
 
 - **소유자 · 테넌트를 검사하지 않는다.** 반드시 애플리케이션의 운영자 인가 뒤에 두고, 일반 호출자에게 넘기지 않는다
 - 모든 쓰기는 `SandboxEvent.actor()` 에 행위자를 남긴다
+- `admin.files()` 는 아무 워크스페이스의 파일 탐색기다(§5.4). 행위자 principal 이 필수이고, 역시 샌드박스를 띄우지
+  않는다
 
 ### 8.2 이벤트와 관측
 
