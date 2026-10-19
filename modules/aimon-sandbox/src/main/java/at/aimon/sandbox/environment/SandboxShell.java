@@ -61,13 +61,13 @@ import at.aimon.sandbox.workspace.SandboxWorkspaceManager;
  * ({@link ExecutionOptions#isBackground()}) and a hook's command ({@link ExecutionOptions#isHook()}) take no lock
  * and save no state: they start from the session's cwd and exports, and their own {@code cd} and {@code export} end
  * with them. A hook's command keeps the foreground's in-sandbox watchdog, so it ends at its own timeout rather than at
- * the exec's backstop. An isolated command ({@link ExecutionOptions#isIsolated()},
- * {@link ShellFeature#ISOLATED_EXECUTION}
- * — core sets it, with {@code isHook()}, on an operator's {@code hooks.json} command) takes the hook's path but starts
- * as
- * a new shell would: in the root, with the profile's exec environment and its own variables, never the session's cwd or
- * exports, so the model cannot steer an operator's policy hook. A timeout or interrupt kills the command's process
- * group; the state from before the command remains, and the result says so.
+ * the exec's backstop. Core marks an operator's {@code hooks.json} command isolated
+ * ({@link ExecutionOptions#isIsolated()}, along with {@code isHook()}) and sends it only to a shell that declares
+ * {@link ShellFeature#ISOLATED_EXECUTION}. Such a command takes the hook's path but starts as a new shell would: in the
+ * root, with the profile's exec environment and its own variables, never the session's cwd or exports, so the model's
+ * {@code cd} and exports cannot steer an operator's policy hook. (Its run files still live in the agent-writable shell
+ * directory: kangwoo/aimon-sandbox#33.) A timeout or interrupt kills the command's process group; the state from before
+ * the command remains, and the result says so.
  *
  * <p>
  * <b>Cancellation</b> ({@link ShellFeature#CANCELLATION}, foreground and background alike). The signal of

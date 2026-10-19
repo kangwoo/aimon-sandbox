@@ -101,7 +101,9 @@ final class ShellWrapper {
      * {@code $3} {@code fg|bg|iso}, {@code $4} root (where a new shell starts, and the fallback when the saved cwd is
      * gone), {@code $5} per-command working directory (may be empty), then {@code NAME=value} per-command variables.
      * {@code iso} starts as a new shell would: it does not read the state file, so no cwd or export the session's
-     * commands left behind reaches the command, and like {@code bg} it saves none.
+     * commands left behind reaches the command, and like {@code bg} it saves none. It shares the new shell's root
+     * fallback on purpose: a missing root makes {@code __aimon_fallback} retry it once, then run in {@code /workspace}
+     * with notice {@code 2}, which is as true for an isolated command as for a new shell.
      * A cwd fallback writes {@code 1} (ran in the root) or {@code 2} (the root is gone too: ran in {@code /workspace})
      * to {@code $2.cwd}. When the exec environment names a CA bundle in {@code SSL_CERT_FILE} — OpenSandbox's execd
      * does,
