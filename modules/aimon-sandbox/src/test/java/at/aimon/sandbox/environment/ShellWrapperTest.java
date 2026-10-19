@@ -146,15 +146,15 @@ class ShellWrapperTest {
         assertThat(script).doesNotContain("<<");
     }
 
-    private static List<ShellWrapper.RunFile> runFiles(boolean inline) {
-        return List.of(new ShellWrapper.RunFile("a", inline ? "QQ==" : null, "aa".repeat(32)),
-                new ShellWrapper.RunFile("lib/b", inline ? "Qg==" : null, "bb".repeat(32)));
+    private static List<ShellWrapper.RunFile> runFiles() {
+        return List.of(new ShellWrapper.RunFile("a", "QQ==", "aa".repeat(32)),
+                new ShellWrapper.RunFile("lib/b", "Qg==", "bb".repeat(32)));
     }
 
     @Test
     @DisplayName("RUN_DIRECTORY: inline files are decoded under noclobber and checked against the embedded manifest")
     void inlineRunFilesArePlacedAndChecked() {
-        final String script = ShellWrapper.hook(stream("true").runDirectory("AIMON_HOOK_DIR", runFiles(true), false));
+        final String script = ShellWrapper.hook(stream("true").runDirectory("AIMON_HOOK_DIR", runFiles(), false));
 
         assertThat(script).contains("mkdir -m 700 -- \"$p/d\" || exit 70\n")
                 .contains("printf '%s' 'QQ==' | /usr/bin/base64 -d > \"$p/d/\"'a'")
@@ -170,23 +170,29 @@ class ShellWrapperTest {
     }
 
     @Test
+    @DisplayName("RUN_DIRECTORY: uploaded files are two uploads, both checked against digests in the script before use")
     void uploadedRunFilesAreCopiedThenRemovedAndAnEmptyDirectoryIsOnlyCounted() {
-        final String uploaded = ShellWrapper
-                .isolated(stream("true").runDirectory("AIMON_HOOK_DIR", runFiles(false), true));
+        final String uploaded = ShellWrapper.isolated(stream("true").runDirectory("AIMON_HOOK_DIR", runFiles(), true));
 
         final String manifest = "aa".repeat(32) + "  a\n" + "bb".repeat(32) + "  lib/b\n";
-        assertThat(ShellWrapper.manifest(runFiles(false))).isEqualTo(manifest);
-        // Only the manifest's digest travels: no file name, no file digest.
+        final byte[] blob = "QQ==\nQg==\n".getBytes(StandardCharsets.US_ASCII);
+        assertThat(ShellWrapper.manifest(runFiles())).isEqualTo(manifest);
+        assertThat(ShellWrapper.blob(runFiles())).isEqualTo(blob);
+        // Only the two digests travel: no file name, no file digest, no content.
         assertThat(uploaded).doesNotContain("'a'").doesNotContain("lib/b").doesNotContain("aa".repeat(32))
-                .doesNotContain("base64 -d >").contains("cat -- \"$r.manifest\" > \"$p/.manifest\" || exit 70\n")
+                .doesNotContain("QQ==").doesNotContain("$r.files")
+                .contains("cat -- \"$r.manifest\" > \"$p/.manifest\" && cat -- \"$r.blob\" > \"$p/.blob\" || exit 70\n")
+                .contains("rm -f -- \"$r.manifest\" \"$r.blob\"\n")
                 .contains("printf '%s' '" + ShellWrapper.sha256Hex(manifest.getBytes(StandardCharsets.UTF_8))
-                        + "  .manifest\n' | PATH=/usr/bin:/bin /usr/bin/sha256sum -c --strict -")
-                .contains("while IFS= read -r l; do f=${l:66}\n").contains("cat -- \"$r.files/$f\" > \"$p/d/$f\"")
-                .contains("done < \"$p/.manifest\"\n").contains("rm -rf -- \"$r.files\"\n")
+                        + "  .manifest\n" + ShellWrapper.sha256Hex(blob)
+                        + "  .blob\n' | PATH=/usr/bin:/bin /usr/bin/sha256sum -c --strict -")
+                .contains("exec 4<\"$p/.blob\" || exit 70\n").contains("while IFS= read -r l; do f=${l:66}\n")
+                .contains("IFS= read -r b <&4 && printf '%s' \"$b\" | /usr/bin/base64 -d > \"$p/d/$f\"")
+                .contains("done < \"$p/.manifest\"\n").contains("exec 4<&-; b=; rm -f -- \"$p/.blob\"\n")
                 .contains("/usr/bin/sha256sum -c --strict - <\"$p/.manifest\"").contains("[ $n -eq 2 ] || exit 73\n");
-        // The manifest is checked before a line of it is used, and the files after the uploads are gone.
-        assertThat(uploaded.indexOf("  .manifest\n'")).isLessThan(uploaded.indexOf("while IFS="));
-        assertThat(uploaded.indexOf("rm -rf -- \"$r.files\"")).isLessThan(uploaded.indexOf("<\"$p/.manifest\""));
+        // Both uploads are checked before a byte of either is used.
+        assertThat(uploaded.indexOf("  .blob\n'")).isLessThan(uploaded.indexOf("exec 4<"))
+                .isLessThan(uploaded.indexOf("while IFS="));
 
         final String empty = ShellWrapper.hook(stream("true").runDirectory("D", List.of(), false));
         assertThat(empty).doesNotContain("sha256sum").contains("[ $n -eq 0 ] || exit 73\n");
@@ -205,11 +211,14 @@ class ShellWrapperTest {
     @DisplayName("RUN_DIRECTORY on a model's command: run files kept, the private directory removed before the trailer")
     void aForegroundRunDirectoryKeepsTheRunFiles() {
         final String script = ShellWrapper.foreground(invocation("true")
-                .privateDirectory("/workspace/.aimon-shell/.run.9").runDirectory("V", runFiles(true), false));
+                .privateDirectory("/workspace/.aimon-shell/.run.9").runDirectory("V", runFiles(), false));
 
         assertThat(script).contains(">\"$r.out\" 2>\"$r.err\"").contains("\" fg '/workspace/repo' '' 'V'\"=$p/d\"")
                 .contains("\"$r.timedout\"");
         assertThat(script.indexOf("rm -rf -- \"$p\"\n")).isLessThan(script.indexOf("printf '\\n%s exit="));
+        // Placed once the lock is held: nothing of the run exists through the lock wait or a busy lock.
+        assertThat(script.indexOf("flock -w ")).isLessThan(script.indexOf("mkdir -m 700 -- \"$p\""));
+        assertThat(script.indexOf("> \"$d/owner\"")).isLessThan(script.indexOf("p='/workspace/.aimon-shell/.run.9'"));
         assertThat(ShellWrapper.foreground(invocation("true"))).doesNotContain("$p");
     }
 

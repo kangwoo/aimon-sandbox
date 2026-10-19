@@ -85,8 +85,9 @@ import at.aimon.sandbox.workspace.SandboxWorkspaceManager;
  * <b>Run directories</b> ({@link ShellFeature#RUN_DIRECTORY}). The files of
  * {@link ExecutionOptions#getRunDirectory()} are placed for the one run in a fresh private directory,
  * {@code /workspace/.aimon-shell/.run.{hex}/d}, exported in the run directory's variable after every other variable:
- * inline in the script when they fit, otherwise uploaded through the files API, which the agent can write, and copied
- * in. Either way the script checks them against SHA-256 digests computed here and carried only in the script; a
+ * inline in the script when they fit, otherwise uploaded through the files API, which the agent can write, as two
+ * files whatever their number — their manifest and one blob of their base64 — and copied in. Either way the script
+ * checks them against SHA-256 digests computed here and carried only in the script; a
  * mismatch throws {@link RunDirectoryIntegrityException} and the command does not run. Any other failure to place them
  * is a plain {@link ShellExecutionException}. The wrapper removes the directory, and so does {@code cleanUp} when the
  * wrapper was killed first. Narrowing, not a privilege boundary: a process of the same user can still reach the
@@ -313,29 +314,25 @@ final class SandboxShell implements VirtualShell {
                 invocation.stdinPath(runPrefix + ".in");
             }
         }
-        final List<ShellWrapper.RunFile> inlineFiles = new ArrayList<>();
-        final List<ShellWrapper.RunFile> uploadedFiles = new ArrayList<>();
+        final List<ShellWrapper.RunFile> runFiles = new ArrayList<>();
         final List<Upload> fileUploads = new ArrayList<>();
         boolean filesUploaded = false;
         if (runDirectory.isPresent()) {
             long inlineBytes = 0;
             for (String relPath : runDirectory.get().getPaths()) {
                 final byte[] content = runDirectory.get().getContent(relPath);
-                final String sha256 = ShellWrapper.sha256Hex(content);
                 final String base64 = Base64.getEncoder().encodeToString(content);
-                inlineFiles.add(new ShellWrapper.RunFile(relPath, base64, sha256));
-                uploadedFiles.add(new ShellWrapper.RunFile(relPath, null, sha256));
-                fileUploads.add(new Upload(runPrefix + ".files/" + relPath, content, "a hook file"));
+                runFiles.add(new ShellWrapper.RunFile(relPath, base64, ShellWrapper.sha256Hex(content)));
                 inlineBytes += ShellWrapper.quote(base64).length();
             }
-            final String manifest = ShellWrapper.manifest(uploadedFiles);
-            // Uploaded, the manifest goes too: the script then carries one digest, whatever the number of files.
+            final String manifest = ShellWrapper.manifest(runFiles);
+            // Uploaded, they are two files whatever their number: the manifest and one blob of their base64.
             fileUploads.add(new Upload(runPrefix + ".manifest", manifest.getBytes(StandardCharsets.UTF_8),
                     "the hook files' manifest"));
+            fileUploads.add(new Upload(runPrefix + ".blob", ShellWrapper.blob(runFiles), "the hook files"));
             inlineBytes += ShellWrapper.scriptBytes(ShellWrapper.quote(manifest));
             filesUploaded = inlineBytes > ShellWrapper.INLINE_RUN_FILES_LIMIT;
-            invocation.runDirectory(runDirectory.get().getVariable(), filesUploaded ? uploadedFiles : inlineFiles,
-                    filesUploaded);
+            invocation.runDirectory(runDirectory.get().getVariable(), runFiles, filesUploaded);
         }
         final byte[] stdin = mode.streams() && options.getStdin() != null
                 ? options.getStdin().getBytes(options.getCharset())
@@ -351,10 +348,10 @@ final class SandboxShell implements VirtualShell {
             invocation.stdinInline(null).stdinUploaded(ShellWrapper.sha256Hex(stdin));
             script = script(mode, invocation);
         }
-        if (runDirectory.isPresent() && !filesUploaded && !uploadedFiles.isEmpty()
+        if (runDirectory.isPresent() && !filesUploaded && !runFiles.isEmpty()
                 && ShellWrapper.scriptBytes(script) > ShellWrapper.ARGUMENT_BUDGET) {
             filesUploaded = true;
-            invocation.runDirectory(runDirectory.get().getVariable(), uploadedFiles, true);
+            invocation.runDirectory(runDirectory.get().getVariable(), runFiles, true);
             script = script(mode, invocation);
         }
         if (privateDirectory != null && ShellWrapper.scriptBytes(script) > ShellWrapper.ARGUMENT_BUDGET) {
@@ -934,8 +931,8 @@ final class SandboxShell implements VirtualShell {
             remove(files, run.prefix + ".in", false, false);
         }
         if (run.uploadedRunFiles) {
-            remove(files, run.prefix + ".files", true, false);
             remove(files, run.prefix + ".manifest", false, false);
+            remove(files, run.prefix + ".blob", false, false);
         }
         if (run.privateDirectory != null) {
             remove(files, run.privateDirectory, true, true);

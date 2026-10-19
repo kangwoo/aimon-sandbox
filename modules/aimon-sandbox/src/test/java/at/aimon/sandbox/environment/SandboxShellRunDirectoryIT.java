@@ -12,6 +12,7 @@ import java.nio.file.Path;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -139,7 +140,7 @@ class SandboxShellRunDirectoryIT {
                 hook().runDirectory(hookFiles("big", large, "스크립트.sh", "한글")).build());
 
         assertThat(result.stdout().replace(" ", "")).isEqualTo(large.length() + "\n한글");
-        assertThat(uploaded(script -> script.contains("cat -- \"$r.files/$f\""))).isTrue();
+        assertThat(uploaded(script -> script.contains("cat -- \"$r.blob\""))).isTrue();
         assertThat(runFiles()).isEmpty();
         assertThat(leftovers()).isEmpty();
     }
@@ -154,9 +155,9 @@ class SandboxShellRunDirectoryIT {
     }
 
     @Test
-    @DisplayName("4: an upload rewritten before the wrapper copies it is an integrity failure; the command does not run")
+    @DisplayName("4: an uploaded blob rewritten before the wrapper copies it is an integrity failure; nothing runs")
     void aTamperedUploadIsAnIntegrityFailure() throws Exception {
-        try (SandboxHarness tampering = tampering(path -> path.endsWith(".files/a"))) {
+        try (SandboxHarness tampering = tampering(path -> path.endsWith(".blob"))) {
             final SessionId other = SessionId.generate();
             final ExecutionEnvironment tampered = tampering.mainTurn(other, ALICE);
 
@@ -257,12 +258,12 @@ class SandboxShellRunDirectoryIT {
         assertThat(bash(env, "wc -c < \"$AIMON_HOOK_DIR/a\"",
                 hook().runDirectory(hookFiles("a", "z".repeat(atLimit))).build()).stdout().strip())
                 .isEqualTo(String.valueOf(atLimit));
-        assertThat(uploaded(script -> script.contains("\"$r.files/"))).as("at the limit: inline").isFalse();
+        assertThat(uploaded(script -> script.contains("\"$r.blob\""))).as("at the limit: inline").isFalse();
 
         assertThat(bash(env, "wc -c < \"$AIMON_HOOK_DIR/a\"",
                 hook().runDirectory(hookFiles("a", "z".repeat(atLimit + 1))).build()).stdout().strip())
                 .isEqualTo(String.valueOf(atLimit + 1));
-        assertThat(uploaded(script -> script.contains("\"$r.files/"))).as("one byte over: uploaded").isTrue();
+        assertThat(uploaded(script -> script.contains("\"$r.blob\""))).as("one byte over: uploaded").isTrue();
     }
 
     @Test
@@ -285,25 +286,33 @@ class SandboxShellRunDirectoryIT {
     }
 
     @Test
-    @DisplayName("many small files, whose manifest alone exceeds the argument budget, are uploaded with the manifest")
-    void manyFilesTravelWithAnUploadedManifest() throws Exception {
+    @DisplayName("many small files, whose manifest alone exceeds the argument budget, travel as two uploads")
+    void manyFilesTravelAsTwoUploads() throws Exception {
         // About 1 500 names of 60 bytes: the manifest is ~190 KiB, far past the script's budget, the files ~1.5 KiB.
         final RunDirectory.Builder many = RunDirectory.builder().variable("AIMON_HOOK_DIR");
         for (int i = 0; i < 1500; i++) {
             many.file(String.format("scripts/%04d-%s.sh", i, "n".repeat(40)), new byte[]{(byte) ('a' + i % 26)});
         }
+        final List<String> writes = new CopyOnWriteArrayList<>();
+        // Rewrites nothing: it only records the paths the shell writes through the files API.
+        try (SandboxHarness counting = tampering(path -> writes.add(path) && false)) {
+            final SessionId other = SessionId.generate();
+            final ExecutionEnvironment counted = counting.mainTurn(other, ALICE);
+            bash(counted, "true");
+            writes.clear();
 
-        final ShellCommandResult result = bash(env,
-                "find \"$AIMON_HOOK_DIR\" -type f | wc -l | tr -d ' '; cat \"$AIMON_HOOK_DIR\"/scripts/1499-*.sh",
-                hook().stdin("s".repeat(200 * 1024)).runDirectory(many.build()).build());
+            final ShellCommandResult result = bash(counted,
+                    "find \"$AIMON_HOOK_DIR\" -type f | wc -l | tr -d ' '; cat \"$AIMON_HOOK_DIR\"/scripts/1499-*.sh",
+                    hook().stdin("s".repeat(200 * 1024)).runDirectory(many.build()).build());
 
-        assertThat(result.exitCode()).isZero();
-        assertThat(result.stdout()).isEqualTo("1500\n" + (char) ('a' + 1499 % 26));
-        assertThat(uploaded(script -> script.contains("\"$r.manifest\"") && !script.contains("0000-"))).isTrue();
-        assertThat(recording[0].runs).allSatisfy(
-                spec -> assertThat(ShellWrapper.scriptBytes(spec.command())).isLessThan(ShellWrapper.ARGUMENT_BUDGET));
-        assertThat(runFiles()).isEmpty();
-        assertThat(leftovers()).isEmpty();
+            assertThat(result.exitCode()).isZero();
+            assertThat(result.stdout()).isEqualTo("1500\n" + (char) ('a' + 1499 % 26));
+            assertThat(writes).as("the manifest, the blob and the stdin: not one upload per file").hasSize(3)
+                    .anyMatch(path -> path.endsWith(".manifest")).anyMatch(path -> path.endsWith(".blob"))
+                    .anyMatch(path -> path.endsWith(".in"));
+            assertThat(entries(counting, other, ".run.")).isEmpty();
+            assertThat(entries(counting, other, "run-")).isEmpty();
+        }
     }
 
     @Test

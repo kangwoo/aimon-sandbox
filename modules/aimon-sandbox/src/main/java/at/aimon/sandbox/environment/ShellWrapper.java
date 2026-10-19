@@ -53,9 +53,10 @@ import java.util.regex.Pattern;
  * with mode 700 and removed by the outer's epilogue and {@code EXIT} trap. It holds an uploaded stdin after its digest
  * check ({@code .stdin}), the inner's cwd flag ({@code r.cwd}) and, under {@code d/}, the files of a
  * {@code RunDirectory} — the only part a model's own command (foreground, background) gets too, when it carries one.
- * Run files come inline (base64, with their manifest) or, past {@link #INLINE_RUN_FILES_LIMIT}, from an upload of the
- * files and their manifest, of which the script carries only the digest — so the script does not grow with the number
- * of files. Either way they are placed under noclobber, checked with {@code sha256sum -c} against a manifest the script
+ * Run files come inline (base64, with their manifest) or, past {@link #INLINE_RUN_FILES_LIMIT}, from two uploads —
+ * their manifest and one blob of their base64 — of which the script carries only the digests, so neither the script
+ * nor the number of uploads grows with the number of files. Either way they are placed under noclobber, checked with
+ * {@code sha256sum -c} against a manifest the script
  * vouches for, and counted. A digest or count mismatch exits {@link #RUN_FILES_TAMPERED_EXIT}; any other placement
  * failure {@link #SETUP_FAILED_EXIT}. Manifests are fed by the {@code printf} builtin through a pipe or read from the
  * private directory, never a here-document, whose temp file would need a writable {@code $TMPDIR}.
@@ -120,7 +121,7 @@ final class ShellWrapper {
 
     /**
      * The largest run directory, as quoted base64 of all its files plus the quoted manifest, that the script embeds; a
-     * larger one is uploaded and copied in.
+     * larger one is uploaded as its manifest and one blob, and copied in.
      */
     static final int INLINE_RUN_FILES_LIMIT = 16 * 1024;
 
@@ -350,8 +351,8 @@ final class ShellWrapper {
          * @param files
          *            its files, in the order they are placed (a parent before its children)
          * @param uploaded
-         *            the files are at {@code {runPrefix}.files/{relPath}} and their {@link #manifest} at
-         *            {@code {runPrefix}.manifest}, not in the script, which carries only the manifest's digest
+         *            the files are uploaded as {@code {runPrefix}.blob} ({@link #blob}) with their {@link #manifest}
+         *            at {@code {runPrefix}.manifest}, not in the script, which carries only the two digests
          */
         Invocation runDirectory(String variable, List<RunFile> files, boolean uploaded) {
             this.runVariable = Objects.requireNonNull(variable);
@@ -376,7 +377,7 @@ final class ShellWrapper {
         }
     }
 
-    /** One file of a run directory: where it goes, its base64 when the script carries it, and its SHA-256. */
+    /** One file of a run directory: where it goes, its base64 (in the script or the uploaded blob), and its SHA-256. */
     static final class RunFile {
         private final String relPath;
         private final String base64;
@@ -386,13 +387,13 @@ final class ShellWrapper {
          * @param relPath
          *            the confined relative path, without a newline
          * @param base64
-         *            the content as base64, or {@code null} when it is uploaded
+         *            the content as base64
          * @param sha256
          *            the content's SHA-256, lowercase hex
          */
         RunFile(String relPath, String base64, String sha256) {
             this.relPath = Objects.requireNonNull(relPath);
-            this.base64 = base64;
+            this.base64 = Objects.requireNonNull(base64);
             this.sha256 = Objects.requireNonNull(sha256);
         }
     }
@@ -405,12 +406,16 @@ final class ShellWrapper {
      * @return the script
      */
     static String foreground(Invocation in) {
-        final StringBuilder s = prologue(in);
+        final StringBuilder s = prologue(in, false);
         s.append("exec 9>\"$d/lock\"\n");
         s.append("flock -w ").append(Math.max(1, (in.lockWait.toMillis() + 999) / 1000)).append(" 9 || exit ")
                 .append(LOCK_BUSY_EXIT).append('\n');
         s.append("s=-; [ -r \"/proc/$$/stat\" ] && s=$(awk '{print $22}' \"/proc/$$/stat\" 2>/dev/null)\n");
         s.append("printf '%s %s %s\\n' ").append(quote(in.nodeId)).append(" \"$$\" \"${s:--}\" > \"$d/owner\"\n");
+        if (in.privateDirectory != null) {
+            // Once the lock is held: the run's files exist for the run, not through the lock wait or a busy lock.
+            appendPrivate(s, in);
+        }
         if (in.timeout != null) {
             appendWatchdog(s, in, " 9>&-", true);
         }
@@ -429,7 +434,7 @@ final class ShellWrapper {
      * @return the script
      */
     static String background(Invocation in) {
-        final StringBuilder s = prologue(in);
+        final StringBuilder s = prologue(in, true);
         appendInner(s, in, "bg", "");
         return epilogue(s, in);
     }
@@ -503,7 +508,7 @@ final class ShellWrapper {
         s.append("wait \"$wd\" 2>/dev/null\n");
     }
 
-    private static StringBuilder prologue(Invocation in) {
+    private static StringBuilder prologue(Invocation in, boolean withPrivate) {
         final StringBuilder s = new StringBuilder();
         s.append("__aimon_inner=").append(quote(INNER)).append('\n');
         s.append("d=").append(quote(in.directory)).append('\n');
@@ -514,7 +519,7 @@ final class ShellWrapper {
             s.append("printf '%s' ").append(quote(in.command)).append(" > \"$r.cmd\" || exit ")
                     .append(SETUP_FAILED_EXIT).append('\n');
         }
-        if (in.privateDirectory != null) {
+        if (withPrivate && in.privateDirectory != null) {
             appendPrivate(s, in);
         }
         return s;
@@ -562,22 +567,40 @@ final class ShellWrapper {
     }
 
     /**
-     * Uploaded run files: the manifest is uploaded too and the script carries only its digest, so the script stays the
-     * same size whatever the number of files. The manifest is copied into {@code $p} and checked first; its lines —
-     * trusted from then on — name the files to copy in and are the {@code sha256sum -c} input.
+     * Uploaded run files: two uploads whatever the number of files — the manifest, and one blob holding every file's
+     * base64 on a line of its own, in the manifest's order ({@link #blob}) — so the uploads and the script stay the
+     * same size whatever the number of files. Both are copied into {@code $p} and checked against the digests the
+     * script carries before a byte of either is used; from then on the manifest's lines name the files and the blob's
+     * lines are their content. The placed files are then checked against the manifest as inline ones are.
      */
     private static void appendUploadedRunFiles(StringBuilder s, Invocation in) {
-        s.append("cat -- \"$r.manifest\" > \"$p/.manifest\" || exit ").append(SETUP_FAILED_EXIT).append('\n');
-        s.append("rm -f -- \"$r.manifest\"\n");
-        appendCheck(s, "\"$p\"", sha256Hex(manifest(in.runFiles).getBytes(StandardCharsets.UTF_8)) + "  .manifest\n");
+        s.append("cat -- \"$r.manifest\" > \"$p/.manifest\" && cat -- \"$r.blob\" > \"$p/.blob\" || exit ")
+                .append(SETUP_FAILED_EXIT).append('\n');
+        s.append("rm -f -- \"$r.manifest\" \"$r.blob\"\n");
+        appendCheck(s, "\"$p\"", sha256Hex(manifest(in.runFiles).getBytes(StandardCharsets.UTF_8)) + "  .manifest\n"
+                + sha256Hex(blob(in.runFiles)) + "  .blob\n");
+        s.append("exec 4<\"$p/.blob\" || exit ").append(SETUP_FAILED_EXIT).append('\n');
         // A line is 64 hex digits, two spaces and the path: the path starts at offset 66.
         s.append("while IFS= read -r l; do f=${l:66}\n");
         s.append("  { case $f in */*) mkdir -p -- \"$p/d/${f%/*}\";; esac &&\n");
-        s.append("    cat -- \"$r.files/$f\" > \"$p/d/$f\"; } \\\n");
+        s.append("    IFS= read -r b <&4 && printf '%s' \"$b\" | /usr/bin/base64 -d > \"$p/d/$f\"; } \\\n");
         s.append("    || { printf 'cannot place %s\\n' \"$f\" >&2; exit ").append(SETUP_FAILED_EXIT).append("; }\n");
         s.append("done < \"$p/.manifest\"\n");
-        s.append("rm -rf -- \"$r.files\"\n");
+        s.append("exec 4<&-; b=; rm -f -- \"$p/.blob\"\n");
         appendCheck(s, "\"$p/d\"", null);
+    }
+
+    /**
+     * @param files
+     *            a run directory's files, with their base64
+     * @return the upload that carries them: each file's base64 and a newline, in order
+     */
+    static byte[] blob(List<RunFile> files) {
+        final StringBuilder blob = new StringBuilder();
+        for (RunFile file : files) {
+            blob.append(file.base64).append('\n');
+        }
+        return blob.toString().getBytes(StandardCharsets.US_ASCII);
     }
 
     private static void appendInlineRunFiles(StringBuilder s, Invocation in) {
