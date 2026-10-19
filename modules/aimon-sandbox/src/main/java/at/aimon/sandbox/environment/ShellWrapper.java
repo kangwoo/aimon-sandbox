@@ -1,8 +1,11 @@
 package at.aimon.sandbox.environment;
 
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -33,12 +36,29 @@ import java.util.regex.Pattern;
  * only the inner bash; the outer still reports its output and exit code.
  *
  * <p>
- * The command reaches the inner bash through the run file {@code run-{id}.cmd}, never as an argument: the outer writes
+ * A model's command reaches the inner bash through the run file {@code run-{id}.cmd}, never as an argument: the outer
+ * writes
  * it there with the {@code printf} builtin, or — for a command too large to embed in the exec at all
  * ({@link #INLINE_COMMAND_LIMIT}) — {@code SandboxShell} uploads it through the files API and the script carries no
  * copy. Linux limits one argument to 128 KiB (MAX_ARG_STRLEN), and the exec's own script is one. Per-command
  * variables and the working directory are always embedded; {@code SandboxShell} refuses them over
  * {@link #INLINE_ENVIRONMENT_LIMIT} as a bad argument rather than letting the exec fail as an unreachable sandbox.
+ *
+ * <p>
+ * A hook's or an isolated command ({@link #hook}, {@link #isolated}) is the <b>stream</b> family: it keeps nothing in
+ * the agent-writable shell directory (kangwoo/aimon-sandbox#33). The command is the inner bash's sixth argument; a
+ * small stdin is base64 in the script, piped through {@code /usr/bin/base64 -d}; the inner's stdout and stderr are the
+ * exec's own, capped by {@code SandboxShell}; the trailer is {@code \n{nonce} exit=N cwd=0|1|2}; and the watchdog
+ * writes no {@code .timedout} — {@code SandboxShell} decides a timeout by its own clock. Every such run gets a
+ * <b>private directory</b> {@code /workspace/.aimon-shell/.run.{hex}} ({@link #PRIVATE_PREFIX}), created exclusively
+ * with mode 700 and removed by the outer's epilogue and {@code EXIT} trap. It holds an uploaded stdin after its digest
+ * check ({@code .stdin}), the inner's cwd flag ({@code r.cwd}) and, under {@code d/}, the files of a
+ * {@code RunDirectory} — the only part a model's own command (foreground, background) gets too, when it carries one.
+ * Run files come inline (base64) or, past {@link #INLINE_RUN_FILES_LIMIT}, from an upload; either way they are placed
+ * under noclobber, checked with {@code sha256sum -c} against a manifest embedded in the script, and counted. A digest
+ * or count mismatch exits {@link #RUN_FILES_TAMPERED_EXIT}; any other placement failure {@link #SETUP_FAILED_EXIT}.
+ * The manifests are fed by the {@code printf} builtin through a pipe, never a here-document, whose temp file would need
+ * a writable {@code $TMPDIR}.
  *
  * <p>
  * The inner bash keeps its own state in {@code readonly} variables named {@code __aimon_*}; <b>that prefix is
@@ -62,8 +82,9 @@ import java.util.regex.Pattern;
  *
  * <p>
  * The script is bash 3.2 compatible and needs {@code flock}, {@code head}, {@code wc}, {@code sleep}, {@code kill},
- * {@code mv} and {@code rm}; a {@code /proc} is used when present (the owner's start time, for cross-node takeover)
- * and not required.
+ * {@code mv} and {@code rm}, plus {@code cat}, {@code find}, {@code /usr/bin/base64} and {@code /usr/bin/sha256sum}
+ * for a private directory; a {@code /proc} is used when present (the owner's start time, for cross-node takeover) and
+ * not required.
  */
 final class ShellWrapper {
 
@@ -94,12 +115,33 @@ final class ShellWrapper {
      */
     static final int INLINE_ENVIRONMENT_LIMIT = 32 * 1024;
 
+    /** Exit code of the outer wrapper when a placed run file or uploaded stdin does not match its embedded digest. */
+    static final int RUN_FILES_TAMPERED_EXIT = 73;
+
+    /**
+     * The largest run directory, as quoted base64 of all its files plus the quoted manifest, that the script embeds; a
+     * larger one is uploaded and copied in.
+     */
+    static final int INLINE_RUN_FILES_LIMIT = 16 * 1024;
+
+    /**
+     * The largest whole script, in UTF-8 bytes: MAX_ARG_STRLEN (128 KiB) less a margin. The caps above sum to 112 KiB;
+     * {@code SandboxShell} decides inline or upload against the assembled script, not a sum of caps.
+     */
+    static final int ARGUMENT_BUDGET = 120 * 1024;
+
+    /** Where a run's private directory lives: the shell root, which file tools see read-only, plus a random suffix. */
+    static final String PRIVATE_PREFIX = SHELL_ROOT + "/.run.";
+
     private static final Pattern ENV_NAME = Pattern.compile("[A-Za-z_][A-Za-z0-9_]*");
 
     /**
      * The inner bash. {@code $1} state directory, {@code $2} run-file prefix (the command is in {@code $2.cmd}),
-     * {@code $3} {@code fg|bg|iso}, {@code $4} root (where a new shell starts, and the fallback when the saved cwd is
-     * gone), {@code $5} per-command working directory (may be empty), then {@code NAME=value} per-command variables.
+     * {@code $3} {@code fg|bg|hook|iso}, {@code $4} root (where a new shell starts, and the fallback when the saved cwd
+     * is gone), {@code $5} per-command working directory (may be empty), for {@code hook} and {@code iso} {@code $6}
+     * the
+     * command itself, then {@code NAME=value} per-command variables. {@code hook} behaves as {@code bg}; it is its own
+     * word only so the command comes from {@code $6}, and its {@code $2} is inside the private directory.
      * {@code iso} starts as a new shell would: it does not read the state file, so no cwd or export the session's
      * commands left behind reaches the command, and like {@code bg} it saves none. It shares the new shell's root
      * fallback on purpose: a missing root makes {@code __aimon_fallback} retry it once, then run in {@code /workspace}
@@ -118,8 +160,8 @@ final class ShellWrapper {
             fi
             __aimon_base=$(export -p)
             __aimon_dir=$1; __aimon_run=$2; __aimon_mode=$3; __aimon_root=$4; __aimon_wd=$5
-            shift 5
-            IFS= read -r -d '' __aimon_cmd < "$__aimon_run.cmd"
+            if [ "$__aimon_mode" = iso ] || [ "$__aimon_mode" = hook ]; then __aimon_cmd=$6; shift 6
+            else shift 5; IFS= read -r -d '' __aimon_cmd < "$__aimon_run.cmd"; fi
             __aimon_fallback() {
               if builtin cd -- "$__aimon_root" 2>/dev/null; then builtin printf 1 > "$__aimon_run.cwd"
               else builtin cd /workspace; builtin printf 2 > "$__aimon_run.cwd"; fi
@@ -215,6 +257,12 @@ final class ShellWrapper {
         private String stdinPath;
         private String workingDirectory;
         private Map<String, String> environment = Map.of();
+        private String privateDirectory;
+        private String runVariable;
+        private List<RunFile> runFiles;
+        private boolean runFilesUploaded;
+        private String stdinInline;
+        private String stdinUploadedSha256;
 
         Invocation command(String value) {
             this.command = value;
@@ -287,6 +335,68 @@ final class ShellWrapper {
             this.environment = Objects.requireNonNull(value);
             return this;
         }
+
+        /**
+         * The run's private directory ({@link #PRIVATE_PREFIX}{@code {hex}}): required for a hook's or an isolated
+         * command, and for a model's command only with a run directory; {@code null} otherwise.
+         */
+        Invocation privateDirectory(String value) {
+            this.privateDirectory = value;
+            return this;
+        }
+
+        /**
+         * A run directory to place under {@code {privateDirectory}/d} and export in {@code variable}.
+         *
+         * @param variable
+         *            the variable that names the directory
+         * @param files
+         *            its files, in the order they are placed (a parent before its children)
+         * @param uploaded
+         *            the files are at {@code {runPrefix}.files/{relPath}}, not in the script
+         */
+        Invocation runDirectory(String variable, List<RunFile> files, boolean uploaded) {
+            this.runVariable = Objects.requireNonNull(variable);
+            this.runFiles = List.copyOf(files);
+            this.runFilesUploaded = uploaded;
+            return this;
+        }
+
+        /** A hook's or an isolated command's stdin, base64 in the script; {@code null} for none. */
+        Invocation stdinInline(String base64) {
+            this.stdinInline = base64;
+            return this;
+        }
+
+        /**
+         * A hook's or an isolated command's stdin is at {@code {runPrefix}.in}, to be copied into the private directory
+         * and checked against this digest; {@code null} for none.
+         */
+        Invocation stdinUploaded(String sha256) {
+            this.stdinUploadedSha256 = sha256;
+            return this;
+        }
+    }
+
+    /** One file of a run directory: where it goes, its base64 when the script carries it, and its SHA-256. */
+    static final class RunFile {
+        private final String relPath;
+        private final String base64;
+        private final String sha256;
+
+        /**
+         * @param relPath
+         *            the confined relative path, without a newline
+         * @param base64
+         *            the content as base64, or {@code null} when it is uploaded
+         * @param sha256
+         *            the content's SHA-256, lowercase hex
+         */
+        RunFile(String relPath, String base64, String sha256) {
+            this.relPath = Objects.requireNonNull(relPath);
+            this.base64 = base64;
+            this.sha256 = Objects.requireNonNull(sha256);
+        }
     }
 
     /**
@@ -304,7 +414,7 @@ final class ShellWrapper {
         s.append("s=-; [ -r \"/proc/$$/stat\" ] && s=$(awk '{print $22}' \"/proc/$$/stat\" 2>/dev/null)\n");
         s.append("printf '%s %s %s\\n' ").append(quote(in.nodeId)).append(" \"$$\" \"${s:--}\" > \"$d/owner\"\n");
         if (in.timeout != null) {
-            appendWatchdog(s, in, " 9>&-");
+            appendWatchdog(s, in, " 9>&-", true);
         }
         appendInner(s, in, "fg", " 9>&-");
         if (in.timeout != null) {
@@ -327,24 +437,17 @@ final class ShellWrapper {
     }
 
     /**
-     * The script of a hook's command: the background script — no lock, no state save — with the foreground's
-     * watchdog, so the command ends at its own timeout. The exec's backstop alone would end it five seconds late: for
-     * a hook at core's default 30-second timeout or longer, the very moment core's outer deadline for the hook fires.
+     * The script of a hook's command: no lock, no state save — it reads the session's state as a background command
+     * does — with the foreground's watchdog, so the command ends at its own timeout. The exec's backstop alone would
+     * end it five seconds late: for a hook at core's default 30-second timeout or longer, the very moment core's outer
+     * deadline for the hook fires. A stream script: nothing of the run lives in the shell directory.
      *
      * @param in
      *            the invocation
      * @return the script
      */
     static String hook(Invocation in) {
-        final StringBuilder s = prologue(in);
-        if (in.timeout != null) {
-            appendWatchdog(s, in, "");
-        }
-        appendInner(s, in, "bg", "");
-        if (in.timeout != null) {
-            appendWatchdogStop(s);
-        }
-        return epilogue(s, in);
+        return stream(in, "hook");
     }
 
     /**
@@ -357,26 +460,42 @@ final class ShellWrapper {
      * @return the script
      */
     static String isolated(Invocation in) {
-        final StringBuilder s = prologue(in);
+        return stream(in, "iso");
+    }
+
+    private static String stream(Invocation in, String mode) {
+        Objects.requireNonNull(in.privateDirectory, "a stream script needs a private directory");
+        final StringBuilder s = new StringBuilder();
+        s.append("__aimon_inner=").append(quote(INNER)).append('\n');
+        s.append("d=").append(quote(in.directory)).append('\n');
+        s.append("r=").append(quote(in.runPrefix)).append('\n');
+        // No mkdir of $d and no $r.cmd: nothing of this run goes under the shell directory but a transient upload.
+        appendPrivate(s, in);
         if (in.timeout != null) {
-            appendWatchdog(s, in, "");
+            appendWatchdog(s, in, "", false);
         }
-        appendInner(s, in, "iso", "");
+        appendInner(s, in, mode, "");
         if (in.timeout != null) {
             appendWatchdogStop(s);
         }
-        return epilogue(s, in);
+        s.append("c=0; [ -e \"$p/r.cwd\" ] && read -r c < \"$p/r.cwd\"\n");
+        s.append("rm -rf -- \"$p\"\n");
+        s.append("printf '\\n%s exit=%d cwd=%d\\n' ").append(quote(in.nonce)).append(" \"$rc\" \"$c\" >&2\n");
+        return s.toString();
     }
 
     /**
-     * Starts the watchdog: after the timeout it writes {@code .timedout} and kills the wrapper's process group.
-     * {@code closeLockFd} keeps it from holding the shell's lock.
+     * Starts the watchdog: after the timeout it kills the wrapper's process group, writing {@code .timedout} first when
+     * {@code marker} (a stream script's timeout is decided by the JVM's clock instead: a marker in a directory the
+     * agent can write could be forged). {@code closeLockFd} keeps it from holding the shell's lock.
      */
-    private static void appendWatchdog(StringBuilder s, Invocation in, String closeLockFd) {
+    private static void appendWatchdog(StringBuilder s, Invocation in, String closeLockFd, boolean marker) {
         s.append("( trap 'kill \"$w\" 2>/dev/null; exit 0' TERM\n");
         s.append("  sleep ").append(seconds(in.timeout)).append(" & w=$!\n");
         s.append("  wait \"$w\"\n");
-        s.append("  : > \"$r.timedout\"\n");
+        if (marker) {
+            s.append("  : > \"$r.timedout\"\n");
+        }
         s.append("  kill -KILL 0 )").append(closeLockFd).append(" </dev/null >/dev/null 2>&1 &\n");
         s.append("wd=$!\n");
     }
@@ -397,22 +516,124 @@ final class ShellWrapper {
             s.append("printf '%s' ").append(quote(in.command)).append(" > \"$r.cmd\" || exit ")
                     .append(SETUP_FAILED_EXIT).append('\n');
         }
+        if (in.privateDirectory != null) {
+            appendPrivate(s, in);
+        }
         return s;
     }
 
+    /**
+     * Creates the private directory {@code $p} — exclusively, mode 700, removed by the {@code EXIT} trap — and places
+     * what goes in it: the run directory under {@code $p/d}, an uploaded stdin as {@code $p/.stdin}. Placement runs
+     * under {@code umask 077} and noclobber, both undone before the inner bash starts, and before the watchdog, so it
+     * does not count against the command's timeout.
+     */
+    private static void appendPrivate(StringBuilder s, Invocation in) {
+        s.append("p=").append(quote(in.privateDirectory)).append('\n');
+        // The shared root, as `mkdir -p "$d"` re-creates it for a model's command: one may have removed it.
+        s.append("mkdir -p -- ").append(quote(SHELL_ROOT)).append(" || exit ").append(SETUP_FAILED_EXIT).append('\n');
+        s.append("m=$(umask); umask 077\n");
+        // No -p: an existing directory, planted or not, is a failure.
+        s.append("mkdir -m 700 -- \"$p\" || exit ").append(SETUP_FAILED_EXIT).append('\n');
+        s.append("trap 'rm -rf -- \"$p\"' EXIT\n");
+        s.append("set -C\n");
+        if (in.runFiles != null) {
+            appendRunFiles(s, in);
+        }
+        if (in.stdinUploadedSha256 != null) {
+            s.append("cat -- \"$r.in\" > \"$p/.stdin\" || exit ").append(SETUP_FAILED_EXIT).append('\n');
+            s.append("rm -f -- \"$r.in\"\n");
+            appendCheck(s, "\"$p\"", in.stdinUploadedSha256 + "  .stdin\n");
+        }
+        s.append("set +C\n");
+        s.append("umask \"$m\"\n");
+    }
+
+    private static void appendRunFiles(StringBuilder s, Invocation in) {
+        s.append("mkdir -m 700 -- \"$p/d\" || exit ").append(SETUP_FAILED_EXIT).append('\n');
+        final StringBuilder manifest = new StringBuilder();
+        for (RunFile file : in.runFiles) {
+            final String target = "\"$p/d/\"" + quote(file.relPath);
+            final int slash = file.relPath.lastIndexOf('/');
+            if (slash > 0) {
+                s.append("mkdir -p -- \"$p/d/\"").append(quote(file.relPath.substring(0, slash))).append(" && ");
+            }
+            if (in.runFilesUploaded) {
+                s.append("cat -- \"$r.files/\"").append(quote(file.relPath)).append(" > ").append(target);
+            } else {
+                s.append("printf '%s' ").append(quote(file.base64)).append(" | /usr/bin/base64 -d > ").append(target);
+            }
+            s.append(" \\\n  || { printf 'cannot place %s\\n' ").append(quote(file.relPath)).append(" >&2; exit ")
+                    .append(SETUP_FAILED_EXIT).append("; }\n");
+            manifest.append(file.sha256).append("  ").append(file.relPath).append('\n');
+        }
+        if (in.runFilesUploaded) {
+            s.append("rm -rf -- \"$r.files\"\n");
+        }
+        if (!in.runFiles.isEmpty()) {
+            // GNU sha256sum -c refuses an empty manifest; the count below still holds an empty directory to empty.
+            appendCheck(s, "\"$p/d\"", manifest.toString());
+        }
+        // The digests cover the listed files; the count catches one added beside them.
+        s.append("l=$(cd -- \"$p/d\" && find . ! -type d) || exit ").append(SETUP_FAILED_EXIT).append('\n');
+        s.append("n=0; [ -z \"$l\" ] || n=$(printf '%s\\n' \"$l\" | wc -l)\n");
+        s.append("[ $n -eq ").append(in.runFiles.size()).append(" ] || exit ").append(RUN_FILES_TAMPERED_EXIT)
+                .append('\n');
+    }
+
+    /**
+     * Checks the files under {@code directory} against {@code manifest} ({@code sha256  relPath} lines). Status 1 —
+     * a digest that does not match, or a listed file that is gone — exits {@link #RUN_FILES_TAMPERED_EXIT}; anything
+     * else (a missing binary, a {@code cd} that fails) {@link #SETUP_FAILED_EXIT}, so an environment fault is never
+     * reported as tampering. The explicit {@code -} is for the BSD {@code sha256sum} of a macOS test host, which
+     * does not read a manifest from stdin without it.
+     */
+    private static void appendCheck(StringBuilder s, String directory, String manifest) {
+        s.append("( cd -- ").append(directory).append(" || exit ").append(SETUP_FAILED_EXIT).append('\n');
+        s.append("  printf '%s' ").append(quote(manifest))
+                .append(" | PATH=/usr/bin:/bin /usr/bin/sha256sum -c --strict - >/dev/null 2>&1\n");
+        s.append("  s=$?; [ \"$s\" = 0 ] && exit 0; [ \"$s\" = 1 ] && exit ").append(RUN_FILES_TAMPERED_EXIT)
+                .append("; exit ").append(SETUP_FAILED_EXIT).append(" ) || exit $?\n");
+    }
+
     private static void appendInner(StringBuilder s, Invocation in, String mode, String closeLockFd) {
-        s.append("/bin/bash -c \"$__aimon_inner\" aimon \"$d\" \"$r\" ").append(mode).append(' ').append(quote(in.root))
-                .append(' ').append(quote(in.workingDirectory == null ? "" : in.workingDirectory));
+        final boolean stream = "hook".equals(mode) || "iso".equals(mode);
+        if (stream && in.stdinInline != null) {
+            // The decoder's complaint about a hook that never read its stdin is not the hook's stderr.
+            s.append("printf '%s' ").append(quote(in.stdinInline)).append(" | /usr/bin/base64 -d 2>/dev/null | ");
+        }
+        s.append("/bin/bash -c \"$__aimon_inner\" aimon \"$d\" ").append(stream ? "\"$p/r\" " : "\"$r\" ").append(mode)
+                .append(' ').append(quote(in.root)).append(' ')
+                .append(quote(in.workingDirectory == null ? "" : in.workingDirectory));
+        if (stream) {
+            s.append(' ').append(quote(in.command));
+        }
         for (Map.Entry<String, String> variable : in.environment.entrySet()) {
             s.append(' ').append(quote(variable.getKey() + "=" + variable.getValue()));
         }
-        s.append(closeLockFd);
-        if (in.redirectErrorStream) {
-            s.append(" >\"$r.out\" 2>&1");
-        } else {
-            s.append(" >\"$r.out\" 2>\"$r.err\"");
+        if (in.runVariable != null) {
+            // Last, so it wins over the same name among the per-command variables: the inner exports them in order.
+            s.append(' ').append(quote(in.runVariable)).append("\"=$p/d\"");
         }
-        s.append(" <").append(in.stdinPath == null ? "/dev/null" : quote(in.stdinPath)).append('\n');
+        s.append(closeLockFd);
+        if (stream) {
+            if (in.redirectErrorStream) {
+                s.append(" 2>&1");
+            }
+            if (in.stdinUploadedSha256 != null) {
+                s.append(" <\"$p/.stdin\"");
+            } else if (in.stdinInline == null) {
+                s.append(" </dev/null");
+            }
+            s.append('\n');
+        } else {
+            if (in.redirectErrorStream) {
+                s.append(" >\"$r.out\" 2>&1");
+            } else {
+                s.append(" >\"$r.out\" 2>\"$r.err\"");
+            }
+            s.append(" <").append(in.stdinPath == null ? "/dev/null" : quote(in.stdinPath)).append('\n');
+        }
         s.append("rc=$?\n");
     }
 
@@ -428,9 +649,34 @@ final class ShellWrapper {
         // Nothing reads the run files once the trailer is out: remove them here, not by per-file calls from the JVM.
         s.append("rm -f \"$r.out\" \"$r.err\" \"$r.in\" \"$r.cmd\" \"$r.cwd\"")
                 .append(in.timeout != null ? " \"$r.timedout\"" : "").append('\n');
+        if (in.privateDirectory != null) {
+            s.append("rm -rf -- \"$p\"\n");
+        }
         s.append("printf '\\n%s exit=%d out=%d err=%d cwd=%d\\n' ").append(quote(in.nonce))
                 .append(" \"$rc\" \"$o\" \"$e\" \"$c\" >&2\n");
         return s.toString();
+    }
+
+    /**
+     * @param script
+     *            a wrapper script
+     * @return its length as the exec argument, in UTF-8 bytes
+     */
+    static long scriptBytes(String script) {
+        return script.getBytes(StandardCharsets.UTF_8).length;
+    }
+
+    /**
+     * @param content
+     *            some bytes
+     * @return their SHA-256, lowercase hex: the {@code sha256sum} format
+     */
+    static String sha256Hex(byte[] content) {
+        try {
+            return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(content));
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 is a required JDK algorithm", e);
+        }
     }
 
     /**

@@ -2,10 +2,12 @@ package at.aimon.sandbox.environment;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 class ShellWrapperTest {
@@ -80,29 +82,133 @@ class ShellWrapperTest {
         assertThat(script).doesNotContain("flock").doesNotContain("kill -KILL").contains("\" bg '/workspace/repo'");
     }
 
+    private static ShellWrapper.Invocation stream(String command) {
+        return invocation(command).privateDirectory("/workspace/.aimon-shell/.run.0123");
+    }
+
     @Test
     void aHookTakesNoLockSavesNoStateAndKeepsTheWatchdog() {
-        final String script = ShellWrapper.hook(invocation("true"));
+        final String script = ShellWrapper.hook(stream("true"));
 
-        assertThat(script).doesNotContain("flock").contains("\" bg '/workspace/repo'").contains("sleep 2.500 & w=$!")
-                .contains("  kill -KILL 0 ) </dev/null").contains("\"$r.timedout\"\n");
-        assertThat(ShellWrapper.hook(invocation("true").timeout(null))).doesNotContain("kill -KILL 0")
-                .doesNotContain("$r.timedout");
+        assertThat(script).doesNotContain("flock").contains("\" hook '/workspace/repo'").contains("sleep 2.500 & w=$!")
+                .contains("  kill -KILL 0 ) </dev/null");
+        assertThat(ShellWrapper.hook(stream("true").timeout(null))).doesNotContain("kill -KILL 0");
     }
 
     @Test
     void anIsolatedCommandTakesNoLockKeepsTheWatchdogAndRunsTheInnerBashAsANewShell() {
-        final String script = ShellWrapper.isolated(invocation("true"));
+        final String script = ShellWrapper.isolated(stream("true"));
 
         assertThat(script).doesNotContain("flock").contains("\" iso '/workspace/repo'").contains("sleep 2.500 & w=$!")
-                .contains("  kill -KILL 0 ) </dev/null").contains("\"$r.timedout\"\n");
-        assertThat(ShellWrapper.isolated(invocation("true").timeout(null))).doesNotContain("kill -KILL 0")
-                .doesNotContain("$r.timedout");
+                .contains("  kill -KILL 0 ) </dev/null");
+        assertThat(ShellWrapper.isolated(stream("true").timeout(null))).doesNotContain("kill -KILL 0");
         // iso never reads the state file and, not being fg, installs no save trap.
         assertThat(ShellWrapper.INNER).contains(
                 "if [ \"$__aimon_mode\" != iso ] && [ -r \"$__aimon_dir/state\" ]; then . \"$__aimon_dir/state\"\n"
                         + "else builtin cd -- \"$__aimon_root\" 2>/dev/null || __aimon_fallback; fi")
                 .contains("if [ \"$__aimon_mode\" = fg ]; then\n  trap");
+    }
+
+    @Test
+    @DisplayName("#33: a hook's or an isolated command's script keeps nothing in the shell directory")
+    void aStreamScriptHasNoRunFiles() {
+        for (String script : List.of(ShellWrapper.hook(stream("echo 'x'").stdinInline("aGk=")),
+                ShellWrapper.isolated(stream("echo 'x'").redirectErrorStream(true)))) {
+            assertThat(script).doesNotContain("$r.out").doesNotContain("$r.err").doesNotContain("$r.cmd")
+                    .doesNotContain("$r.timedout").doesNotContain("$r.cwd").doesNotContain("mkdir -p \"$d\"")
+                    .doesNotContain("head -c").doesNotContain("out=%d");
+            // The command is the inner bash's sixth argument, after root and working directory.
+            assertThat(script).contains("\"$d\" \"$p/r\" ").contains(" '/workspace/repo' '' 'echo '\\''x'\\'''")
+                    .contains("printf '\\n%s exit=%d cwd=%d\\n' 'AIMON-n' \"$rc\" \"$c\" >&2\n");
+            assertThat(script.indexOf("rm -rf -- \"$p\"\n")).isLessThan(script.indexOf("printf '\\n%s exit="));
+        }
+        assertThat(ShellWrapper.hook(stream("true").stdinInline("aGk=")))
+                .contains("printf '%s' 'aGk=' | /usr/bin/base64 -d 2>/dev/null | /bin/bash -c")
+                .doesNotContain("</dev/null\n");
+        assertThat(ShellWrapper.isolated(stream("true").redirectErrorStream(true))).contains(" 2>&1 </dev/null\n");
+        assertThat(ShellWrapper.INNER).contains("then __aimon_cmd=$6; shift 6\n"
+                + "else shift 5; IFS= read -r -d '' __aimon_cmd < \"$__aimon_run.cmd\"; fi");
+    }
+
+    @Test
+    @DisplayName("#33: the private directory is made exclusively, after the shell root, with placement under umask 077")
+    void thePrivateDirectoryIsExclusiveAndPlacementIsScoped() {
+        final String script = ShellWrapper.isolated(stream("true"));
+
+        final int root = script.indexOf("mkdir -p -- '/workspace/.aimon-shell' || exit 70\n");
+        final int mkdir = script.indexOf("mkdir -m 700 -- \"$p\" || exit 70\n");
+        assertThat(root).isNotNegative().isLessThan(mkdir);
+        assertThat(script).contains("p='/workspace/.aimon-shell/.run.0123'\n").contains("m=$(umask); umask 077\n")
+                .contains("trap 'rm -rf -- \"$p\"' EXIT\n").contains("set -C\n").contains("set +C\n");
+        assertThat(script.indexOf("umask \"$m\"\n")).isLessThan(script.indexOf("sleep 2.500"))
+                .isLessThan(script.indexOf("/bin/bash -c \"$__aimon_inner\""));
+        // No here-document anywhere: bash would write it to a temp file in $TMPDIR.
+        assertThat(script).doesNotContain("<<");
+    }
+
+    private static List<ShellWrapper.RunFile> runFiles(boolean inline) {
+        return List.of(new ShellWrapper.RunFile("a", inline ? "QQ==" : null, "aa".repeat(32)),
+                new ShellWrapper.RunFile("lib/b", inline ? "Qg==" : null, "bb".repeat(32)));
+    }
+
+    @Test
+    @DisplayName("RUN_DIRECTORY: inline files are decoded under noclobber and checked against the embedded manifest")
+    void inlineRunFilesArePlacedAndChecked() {
+        final String script = ShellWrapper.hook(stream("true").runDirectory("AIMON_HOOK_DIR", runFiles(true), false));
+
+        assertThat(script).contains("mkdir -m 700 -- \"$p/d\" || exit 70\n")
+                .contains("printf '%s' 'QQ==' | /usr/bin/base64 -d > \"$p/d/\"'a'")
+                .contains("mkdir -p -- \"$p/d/\"'lib' && printf '%s' 'Qg==' | /usr/bin/base64 -d > \"$p/d/\"'lib/b'")
+                .contains("printf 'cannot place %s\\n' 'lib/b' >&2; exit 70; }")
+                .contains("printf '%s' '" + "aa".repeat(32) + "  a\n" + "bb".repeat(32) + "  lib/b\n'"
+                        + " | PATH=/usr/bin:/bin /usr/bin/sha256sum -c --strict - >/dev/null 2>&1\n")
+                .contains("[ \"$s\" = 1 ] && exit 73; exit 70 ) || exit $?\n").contains("[ $n -eq 2 ] || exit 73\n")
+                .doesNotContain("$r.files");
+        assertThat(script.indexOf("set -C")).isLessThan(script.indexOf("base64 -d >"));
+        // Exported last: it wins over the same name among the per-command variables.
+        assertThat(script).contains(" 'AIMON_HOOK_DIR'\"=$p/d\" </dev/null\n");
+    }
+
+    @Test
+    void uploadedRunFilesAreCopiedThenRemovedAndAnEmptyDirectoryIsOnlyCounted() {
+        final String uploaded = ShellWrapper
+                .isolated(stream("true").runDirectory("AIMON_HOOK_DIR", runFiles(false), true));
+
+        assertThat(uploaded).contains("cat -- \"$r.files/\"'a' > \"$p/d/\"'a'")
+                .contains("mkdir -p -- \"$p/d/\"'lib' && cat -- \"$r.files/\"'lib/b' > \"$p/d/\"'lib/b'")
+                .contains("rm -rf -- \"$r.files\"\n").doesNotContain("base64 -d >");
+        assertThat(uploaded.indexOf("rm -rf -- \"$r.files\"")).isLessThan(uploaded.indexOf("sha256sum -c"));
+
+        final String empty = ShellWrapper.hook(stream("true").runDirectory("D", List.of(), false));
+        assertThat(empty).doesNotContain("sha256sum").contains("[ $n -eq 0 ] || exit 73\n");
+    }
+
+    @Test
+    void anUploadedStdinIsCopiedCheckedAndRedirected() {
+        final String script = ShellWrapper.hook(stream("cat").stdinUploaded("cc".repeat(32)));
+
+        assertThat(script).contains("cat -- \"$r.in\" > \"$p/.stdin\" || exit 70\n").contains("rm -f -- \"$r.in\"\n")
+                .contains("printf '%s' '" + "cc".repeat(32) + "  .stdin\n'").contains(" <\"$p/.stdin\"\n")
+                .doesNotContain("base64 -d");
+    }
+
+    @Test
+    @DisplayName("RUN_DIRECTORY on a model's command: run files kept, the private directory removed before the trailer")
+    void aForegroundRunDirectoryKeepsTheRunFiles() {
+        final String script = ShellWrapper.foreground(invocation("true")
+                .privateDirectory("/workspace/.aimon-shell/.run.9").runDirectory("V", runFiles(true), false));
+
+        assertThat(script).contains(">\"$r.out\" 2>\"$r.err\"").contains("\" fg '/workspace/repo' '' 'V'\"=$p/d\"")
+                .contains("\"$r.timedout\"");
+        assertThat(script.indexOf("rm -rf -- \"$p\"\n")).isLessThan(script.indexOf("printf '\\n%s exit="));
+        assertThat(ShellWrapper.foreground(invocation("true"))).doesNotContain("$p");
+    }
+
+    @Test
+    void scriptBytesAndDigestsAreWhatTheShellSees() {
+        assertThat(ShellWrapper.scriptBytes("é")).isEqualTo(2);
+        assertThat(ShellWrapper.sha256Hex("abc".getBytes(StandardCharsets.UTF_8)))
+                .isEqualTo("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
     }
 
     @Test

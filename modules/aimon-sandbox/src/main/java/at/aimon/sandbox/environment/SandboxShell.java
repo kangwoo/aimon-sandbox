@@ -9,11 +9,14 @@ import java.security.SecureRandom;
 import java.time.Clock;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.regex.Matcher;
@@ -24,11 +27,13 @@ import org.slf4j.LoggerFactory;
 
 import at.aimon.core.filesystem.exception.VirtualFileSystemException;
 import at.aimon.core.shell.ExecutionOptions;
+import at.aimon.core.shell.RunDirectory;
 import at.aimon.core.shell.ShellCancellation;
 import at.aimon.core.shell.ShellCommand;
 import at.aimon.core.shell.ShellCommandResult;
 import at.aimon.core.shell.ShellFeature;
 import at.aimon.core.shell.VirtualShell;
+import at.aimon.core.shell.exception.RunDirectoryIntegrityException;
 import at.aimon.core.shell.exception.ShellCancelledException;
 import at.aimon.core.shell.exception.ShellExecutionException;
 import at.aimon.core.shell.exception.ShellTimeoutException;
@@ -65,9 +70,27 @@ import at.aimon.sandbox.workspace.SandboxWorkspaceManager;
  * ({@link ExecutionOptions#isIsolated()}, along with {@code isHook()}) and sends it only to a shell that declares
  * {@link ShellFeature#ISOLATED_EXECUTION}. Such a command takes the hook's path but starts as a new shell would: in the
  * root, with the profile's exec environment and its own variables, never the session's cwd or exports, so the model's
- * {@code cd} and exports cannot steer an operator's policy hook. (Its run files still live in the agent-writable shell
- * directory: kangwoo/aimon-sandbox#33.) A timeout or interrupt kills the command's process group; the state from before
- * the command remains, and the result says so.
+ * {@code cd} and exports cannot steer an operator's policy hook. A timeout or interrupt kills the command's process
+ * group; the state from before the command remains, and the result says so.
+ *
+ * <p>
+ * <b>Hook and isolated runs keep nothing in the shell directory</b> (kangwoo/aimon-sandbox#33): their command, a small
+ * stdin and their output travel in the exec itself — the script's argument and the exec's own streams, capped here —
+ * and a larger stdin is uploaded, copied into a private directory and checked against a digest the script carries. A
+ * timeout is the JVM's clock, not a marker file. Their exec is killed once the trailer has arrived
+ * ({@link #TRAILER_KILL_GRACE} later), so a hook's {@code cmd &} ends with the hook instead of holding the call open
+ * until the exec's backstop.
+ *
+ * <p>
+ * <b>Run directories</b> ({@link ShellFeature#RUN_DIRECTORY}). The files of
+ * {@link ExecutionOptions#getRunDirectory()} are placed for the one run in a fresh private directory,
+ * {@code /workspace/.aimon-shell/.run.{hex}/d}, exported in the run directory's variable after every other variable:
+ * inline in the script when they fit, otherwise uploaded through the files API, which the agent can write, and copied
+ * in. Either way the script checks them against SHA-256 digests computed here and carried only in the script; a
+ * mismatch throws {@link RunDirectoryIntegrityException} and the command does not run. Any other failure to place them
+ * is a plain {@link ShellExecutionException}. The wrapper removes the directory, and so does {@code cleanUp} when the
+ * wrapper was killed first. Narrowing, not a privilege boundary: a process of the same user can still reach the
+ * directory while the command runs (docs/design/workspace-sandbox.md §12.1).
  *
  * <p>
  * <b>Cancellation</b> ({@link ShellFeature#CANCELLATION}, foreground and background alike). The signal of
@@ -117,6 +140,14 @@ final class SandboxShell implements VirtualShell {
     private static final Duration BACKSTOP_SLACK = Duration.ofSeconds(5);
     private static final Pattern TRAILER = Pattern
             .compile("exit=(-?\\d+) out=\\s*(\\d+) err=\\s*(\\d+) cwd=(\\d)\\s*$");
+    /** A stream run's trailer after its marker: no byte counts, and not anchored at the end (§9). */
+    private static final Pattern STREAM_TRAILER = Pattern.compile("exit=(-?\\d+) cwd=(\\d)\\r?\\n");
+    /** How long a stream run's exec lives after its trailer arrived, unless its wait returns first. */
+    static final Duration TRAILER_KILL_GRACE = Duration.ofMillis(500);
+    /** A run directory's ceiling: core caps one at 4 MiB; the slack is for a core that raises it. */
+    static final long MAX_RUN_DIRECTORY_BYTES = 8L * 1024 * 1024;
+    /** The exit code of a process group the watchdog killed: 128 + SIGKILL. */
+    private static final int KILLED_EXIT = 137;
     private static final SecureRandom RANDOM = new SecureRandom();
 
     private final SandboxBinding binding;
@@ -170,6 +201,18 @@ final class SandboxShell implements VirtualShell {
                     + " to pass to the sandbox (" + inline + " bytes, at most " + ShellWrapper.INLINE_ENVIRONMENT_LIMIT
                     + "); pass large values through a file");
         }
+        final boolean streams = options.isHook() || options.isIsolated();
+        if (streams && !ShellWrapper.embeddable(text)) {
+            // A hook's command travels as an argument, never as a run file the agent could rewrite.
+            throw new ShellExecutionException(
+                    "a hook command over " + ShellWrapper.INLINE_COMMAND_LIMIT / 1024 + " KiB is not supported");
+        }
+        if (options.getRunDirectory().isPresent()) {
+            checkRunDirectory(options.getRunDirectory().get());
+        }
+        final boolean foreground = !options.isBackground() && !streams;
+        // Before connect, like the checks above: a run that cannot be passed to the sandbox provisions nothing.
+        final Plan plan = plan(text, options, foreground);
         final ShellCancellation cancellation = options.getCancellation();
         if (cancellation.isCancelled()) {
             // Before connect: a command that is not to run provisions nothing and records no activity.
@@ -177,11 +220,11 @@ final class SandboxShell implements VirtualShell {
         }
         final ConnectedSlot slot = pending.connect(manager, binding);
         slot.activity().record(false);
-        if (options.isBackground() || options.isHook() || options.isIsolated()) {
+        if (!foreground) {
             // None may hold the session's shell: a background command outlives the call, and a hook or an isolated
             // command runs on behalf of the runtime between the model's own commands (§9, §12.1). None saves state;
             // only an isolated command does not read it either.
-            return run(slot, text, options, false);
+            return run(slot, plan, options);
         }
         final SandboxConnectionCache.Lease lease;
         try {
@@ -201,7 +244,166 @@ final class SandboxShell implements VirtualShell {
                 // Tripped while provisioning or waiting for the lock: neither wait is aborted, the command is.
                 throw cancelledBeforeStart();
             }
-            return run(slot, text, options, true);
+            return run(slot, plan, options);
+        }
+    }
+
+    /**
+     * The checks of a run directory that core makes too ({@link ShellFeature#RUN_DIRECTORY}), plus the sandbox's own:
+     * a newline or carriage return in a path cannot be a line of the {@code sha256sum} manifest, and the bytes must
+     * fit an upload. All are a bad argument, never the integrity failure.
+     */
+    private static void checkRunDirectory(RunDirectory run) throws ShellExecutionException {
+        if (!ShellWrapper.invalidNames(List.of(run.getVariable())).isEmpty()) {
+            throw new ShellExecutionException("invalid run directory variable name: " + run.getVariable());
+        }
+        for (String relPath : run.getPaths()) {
+            if (relPath.indexOf('\n') >= 0 || relPath.indexOf('\r') >= 0) {
+                throw new ShellExecutionException(
+                        "a hook file name contains a newline, which the sandbox cannot place");
+            }
+            if (relPath.indexOf('\0') >= 0 || !SandboxStaging.confined(relPath)) {
+                throw new ShellExecutionException(
+                        "a hook file path is not a relative path inside the run directory: " + relPath);
+            }
+        }
+        if (run.getTotalBytes() > MAX_RUN_DIRECTORY_BYTES) {
+            throw new ShellExecutionException("the hook's files are too large to pass to the sandbox ("
+                    + run.getTotalBytes() + " bytes, at most " + MAX_RUN_DIRECTORY_BYTES + ")");
+        }
+    }
+
+    /**
+     * Everything about a run that does not need the sandbox: its names, the script and what to upload before it.
+     * Run files and a hook's stdin go into the script when it stays within {@link ShellWrapper#ARGUMENT_BUDGET} —
+     * stdin first, then the run files past {@link ShellWrapper#INLINE_RUN_FILES_LIMIT} — and are uploaded otherwise;
+     * a script still over the budget is refused. The digests are computed here, from the bytes core handed over, and
+     * travel only in the script.
+     */
+    private Plan plan(String text, ExecutionOptions options, boolean foreground) throws ShellExecutionException {
+        final Mode mode = foreground
+                ? Mode.FOREGROUND
+                : options.isIsolated() ? Mode.ISOLATED : options.isHook() ? Mode.HOOK : Mode.BACKGROUND;
+        final String directory = ShellWrapper.directory(binding.shellKey().directoryName());
+        final String runPrefix = directory + "/run-" + randomHex(6);
+        final String nonce = "AIMON-" + randomHex(16);
+        final Optional<RunDirectory> runDirectory = options.getRunDirectory();
+        // Not derived from runPrefix: an upload shows that in the shell directory before the exec starts.
+        final String privateDirectory = mode.streams() || runDirectory.isPresent()
+                ? ShellWrapper.PRIVATE_PREFIX + randomHex(16)
+                : null;
+        final Duration timeout = options.getTimeout();
+        final long max = options.getMaxCaptureBytes() != null ? options.getMaxCaptureBytes() : DEFAULT_MAX_CAPTURE;
+        final ShellWrapper.Invocation invocation = new ShellWrapper.Invocation().command(text).directory(directory)
+                .runPrefix(runPrefix).root(binding.root()).nodeId(settings.nodeId()).nonce(nonce)
+                .lockWait(settings.shellLockWait()).timeout(timeout).maxBytes(max)
+                .redirectErrorStream(options.isRedirectErrorStream()).workingDirectory(options.getWorkingDirectory())
+                .environment(options.getEnvironment()).privateDirectory(privateDirectory);
+        final List<Upload> uploads = new ArrayList<>();
+        if (!mode.streams()) {
+            if (!ShellWrapper.embeddable(text)) {
+                // Too large for one exec argument (MAX_ARG_STRLEN): the command goes in as a file instead.
+                uploads.add(new Upload(runPrefix + ".cmd", text.getBytes(StandardCharsets.UTF_8), "the command"));
+                invocation.commandUploaded(true);
+            }
+            if (options.getStdin() != null) {
+                uploads.add(new Upload(runPrefix + ".in", options.getStdin().getBytes(options.getCharset()), "stdin"));
+                invocation.stdinPath(runPrefix + ".in");
+            }
+        }
+        final List<ShellWrapper.RunFile> inlineFiles = new ArrayList<>();
+        final List<ShellWrapper.RunFile> uploadedFiles = new ArrayList<>();
+        final List<Upload> fileUploads = new ArrayList<>();
+        boolean filesUploaded = false;
+        if (runDirectory.isPresent()) {
+            final StringBuilder manifest = new StringBuilder();
+            long inlineBytes = 0;
+            for (String relPath : runDirectory.get().getPaths()) {
+                final byte[] content = runDirectory.get().getContent(relPath);
+                final String sha256 = ShellWrapper.sha256Hex(content);
+                final String base64 = Base64.getEncoder().encodeToString(content);
+                inlineFiles.add(new ShellWrapper.RunFile(relPath, base64, sha256));
+                uploadedFiles.add(new ShellWrapper.RunFile(relPath, null, sha256));
+                fileUploads.add(new Upload(runPrefix + ".files/" + relPath, content, "a hook file"));
+                inlineBytes += ShellWrapper.quote(base64).length();
+                manifest.append(sha256).append("  ").append(relPath).append('\n');
+            }
+            inlineBytes += ShellWrapper.scriptBytes(ShellWrapper.quote(manifest.toString()));
+            filesUploaded = inlineBytes > ShellWrapper.INLINE_RUN_FILES_LIMIT;
+            invocation.runDirectory(runDirectory.get().getVariable(), filesUploaded ? uploadedFiles : inlineFiles,
+                    filesUploaded);
+        }
+        final byte[] stdin = mode.streams() && options.getStdin() != null
+                ? options.getStdin().getBytes(options.getCharset())
+                : null;
+        boolean stdinUploaded = false;
+        if (stdin != null) {
+            // base64, not quoted text: the exact bytes in the caller's charset, a NUL included.
+            invocation.stdinInline(Base64.getEncoder().encodeToString(stdin));
+        }
+        String script = script(mode, invocation);
+        if (stdin != null && ShellWrapper.scriptBytes(script) > ShellWrapper.ARGUMENT_BUDGET) {
+            stdinUploaded = true;
+            invocation.stdinInline(null).stdinUploaded(ShellWrapper.sha256Hex(stdin));
+            script = script(mode, invocation);
+        }
+        if (runDirectory.isPresent() && !filesUploaded
+                && ShellWrapper.scriptBytes(script) > ShellWrapper.ARGUMENT_BUDGET) {
+            filesUploaded = true;
+            invocation.runDirectory(runDirectory.get().getVariable(), uploadedFiles, true);
+            script = script(mode, invocation);
+        }
+        if (privateDirectory != null && ShellWrapper.scriptBytes(script) > ShellWrapper.ARGUMENT_BUDGET) {
+            throw new ShellExecutionException("the hook's command, environment and files are too large to pass to the"
+                    + " sandbox (" + ShellWrapper.scriptBytes(script) + " bytes, at most "
+                    + ShellWrapper.ARGUMENT_BUDGET + ")");
+        }
+        if (filesUploaded) {
+            uploads.addAll(fileUploads);
+        }
+        if (stdinUploaded) {
+            uploads.add(new Upload(runPrefix + ".in", stdin, "stdin"));
+        }
+        final Duration backstop = (timeout != null ? timeout : NO_TIMEOUT_BACKSTOP)
+                .plus(foreground ? settings.shellLockWait() : Duration.ZERO).plus(BACKSTOP_SLACK);
+        return new Plan(script, backstop, uploads, new Run(runPrefix, nonce, timeout != null ? timeout : backstop, max,
+                mode, options, new Placement(privateDirectory, filesUploaded, stdinUploaded)));
+    }
+
+    private static String script(Mode mode, ShellWrapper.Invocation invocation) {
+        return switch (mode) {
+            case FOREGROUND -> ShellWrapper.foreground(invocation);
+            case HOOK -> ShellWrapper.hook(invocation);
+            case ISOLATED -> ShellWrapper.isolated(invocation);
+            case BACKGROUND -> ShellWrapper.background(invocation);
+        };
+    }
+
+    /** A file to write through the files API before the exec. */
+    private static final class Upload {
+        private final String path;
+        private final byte[] content;
+        private final String what;
+
+        private Upload(String path, byte[] content, String what) {
+            this.path = path;
+            this.content = content;
+            this.what = what;
+        }
+    }
+
+    /** A planned run: its script, the exec's backstop, the uploads to make first, and its identity. */
+    private static final class Plan {
+        private final String script;
+        private final Duration backstop;
+        private final List<Upload> uploads;
+        private final Run run;
+
+        private Plan(String script, Duration backstop, List<Upload> uploads, Run run) {
+            this.script = script;
+            this.backstop = backstop;
+            this.uploads = uploads;
+            this.run = run;
         }
     }
 
@@ -217,13 +419,9 @@ final class SandboxShell implements VirtualShell {
         return max * NORMALIZATION_GROWTH + TRAILER_ALLOWANCE;
     }
 
-    private ShellCommandResult run(ConnectedSlot slot, String text, ExecutionOptions options, boolean foreground)
+    private ShellCommandResult run(ConnectedSlot slot, Plan plan, ExecutionOptions options)
             throws ShellExecutionException {
         final String directory = ShellWrapper.directory(binding.shellKey().directoryName());
-        final String runPrefix = directory + "/run-" + randomHex(6);
-        final String nonce = "AIMON-" + randomHex(16);
-        final Duration timeout = options.getTimeout();
-        final long max = options.getMaxCaptureBytes() != null ? options.getMaxCaptureBytes() : DEFAULT_MAX_CAPTURE;
         final SandboxFiles files = slot.connection().files();
         final boolean execKey = binding.shellKey().isExecution();
         if (execKey) {
@@ -231,39 +429,15 @@ final class SandboxShell implements VirtualShell {
         }
         boolean wrapperCleanedUp = false;
         try {
-            final ShellWrapper.Invocation invocation = new ShellWrapper.Invocation().command(text).directory(directory)
-                    .runPrefix(runPrefix).root(binding.root()).nodeId(settings.nodeId()).nonce(nonce)
-                    .lockWait(settings.shellLockWait()).timeout(timeout).maxBytes(max)
-                    .redirectErrorStream(options.isRedirectErrorStream())
-                    .workingDirectory(options.getWorkingDirectory()).environment(options.getEnvironment());
-            if (!ShellWrapper.embeddable(text)) {
-                // Too large for one exec argument (MAX_ARG_STRLEN): the command goes in as a file instead.
-                upload(files, runPrefix + ".cmd", text.getBytes(StandardCharsets.UTF_8), "the command");
-                invocation.commandUploaded(true);
+            for (Upload upload : plan.uploads) {
+                upload(files, upload.path, upload.content, upload.what);
             }
-            if (options.getStdin() != null) {
-                upload(files, runPrefix + ".in", options.getStdin().getBytes(options.getCharset()), "stdin");
-                invocation.stdinPath(runPrefix + ".in");
-            }
-            final Mode mode = foreground
-                    ? Mode.FOREGROUND
-                    : options.isIsolated() ? Mode.ISOLATED : options.isHook() ? Mode.HOOK : Mode.BACKGROUND;
-            final String script = switch (mode) {
-                case FOREGROUND -> ShellWrapper.foreground(invocation);
-                case HOOK -> ShellWrapper.hook(invocation);
-                case ISOLATED -> ShellWrapper.isolated(invocation);
-                case BACKGROUND -> ShellWrapper.background(invocation);
-            };
-            final Duration backstop = (timeout != null ? timeout : NO_TIMEOUT_BACKSTOP)
-                    .plus(foreground ? settings.shellLockWait() : Duration.ZERO).plus(BACKSTOP_SLACK);
             // Not binding.root(): a command may have removed it, and an exec server may refuse a missing directory
             // before the wrapper could fall back. The wrapper moves into the root itself.
-            final ExecSpec spec = ExecSpec.builder().command(script).workingDirectory(ShellWrapper.EXEC_DIRECTORY)
-                    .environment(slot.profile().environment()).timeout(backstop).maxCaptureBytes(captureBackstop(max))
-                    .build();
-            final ShellCommandResult result = await(slot, spec, options.getCancellation(),
-                    new Run(runPrefix, nonce, timeout != null ? timeout : backstop, max, options.getCharset(), mode,
-                            options.getWorkingDirectory() != null));
+            final ExecSpec spec = ExecSpec.builder().command(plan.script).workingDirectory(ShellWrapper.EXEC_DIRECTORY)
+                    .environment(slot.profile().environment()).timeout(plan.backstop)
+                    .maxCaptureBytes(captureBackstop(plan.run.max)).build();
+            final ShellCommandResult result = await(slot, spec, options.getCancellation(), plan.run);
             // A result means the trailer was read, and the wrapper removed its run files before printing it.
             wrapperCleanedUp = true;
             return result;
@@ -274,7 +448,7 @@ final class SandboxShell implements VirtualShell {
             throw new SandboxUnavailableException("the sandbox cannot be reached: " + e.getMessage(), e);
         } finally {
             if (!wrapperCleanedUp) {
-                cleanUp(files, runPrefix);
+                cleanUp(files, plan.run);
             }
             if (execKey) {
                 connections.execShellFinished(slot.ref(), directory);
@@ -304,7 +478,15 @@ final class SandboxShell implements VirtualShell {
         /** A hook's command: no lock and no save, but the watchdog, so it ends at its own timeout. */
         HOOK,
         /** An isolated command: a hook's command that does not read the session's state either. */
-        ISOLATED
+        ISOLATED;
+
+        /**
+         * Whether the run keeps nothing in the shell directory: its output is the exec's own streams, capped here, and
+         * its timeout is read from the clock (kangwoo/aimon-sandbox#33).
+         */
+        boolean streams() {
+            return this == HOOK || this == ISOLATED;
+        }
     }
 
     /** One invocation's identity and limits. */
@@ -312,23 +494,48 @@ final class SandboxShell implements VirtualShell {
         private final String prefix;
         private final String nonce;
         private final Duration timeout;
+        /** The command has a timeout of its own, so a watchdog enforces it. */
+        private final boolean commandTimeout;
         private final long max;
         private final Charset charset;
+        private final Mode mode;
         private final boolean foreground;
         /** The wrapper runs a watchdog, which marks a timeout with {@code .timedout}. */
         private final boolean watched;
         private final boolean ownWorkingDirectory;
+        /** The run's private directory, or {@code null} for a model's command without a run directory. */
+        private final String privateDirectory;
+        private final boolean uploadedRunFiles;
+        private final boolean uploadedStdin;
 
-        private Run(String prefix, String nonce, Duration timeout, long max, Charset charset, Mode mode,
-                boolean ownWorkingDirectory) {
+        private Run(String prefix, String nonce, Duration timeout, long max, Mode mode, ExecutionOptions options,
+                Placement placement) {
             this.prefix = prefix;
             this.nonce = nonce;
             this.timeout = timeout;
+            this.commandTimeout = options.getTimeout() != null;
             this.max = max;
-            this.charset = charset;
+            this.charset = options.getCharset();
+            this.mode = mode;
             this.foreground = mode == Mode.FOREGROUND;
             this.watched = mode != Mode.BACKGROUND;
-            this.ownWorkingDirectory = ownWorkingDirectory;
+            this.ownWorkingDirectory = options.getWorkingDirectory() != null;
+            this.privateDirectory = placement.privateDirectory;
+            this.uploadedRunFiles = placement.uploadedRunFiles;
+            this.uploadedStdin = placement.uploadedStdin;
+        }
+    }
+
+    /** Where a run's private directory is, and what reaches it through an upload. */
+    private static final class Placement {
+        private final String privateDirectory;
+        private final boolean uploadedRunFiles;
+        private final boolean uploadedStdin;
+
+        private Placement(String privateDirectory, boolean uploadedRunFiles, boolean uploadedStdin) {
+            this.privateDirectory = privateDirectory;
+            this.uploadedRunFiles = uploadedRunFiles;
+            this.uploadedStdin = uploadedStdin;
         }
     }
 
@@ -348,6 +555,11 @@ final class SandboxShell implements VirtualShell {
                 killQuietly(command);
             }
         });
+        final CountDownLatch awaited = new CountDownLatch(1);
+        // A stream run ends at its trailer: what it left running in the exec's process group goes with it (§9).
+        final TrailerWatch watch = run.mode.streams()
+                ? new TrailerWatch(run.nonce, () -> killAfterTrailer(running, awaited))
+                : null;
         final ExecOutcome outcome;
         try {
             if (cancelled.get()) {
@@ -362,7 +574,7 @@ final class SandboxShell implements VirtualShell {
                         }
                     });
             try {
-                running.set(slot.connection().run(spec, OutputSink.DISCARD));
+                running.set(slot.connection().run(spec, watch != null ? watch : OutputSink.DISCARD));
                 if (lost.get() || cancelled.get()) {
                     // A provider whose kill throws must not skip the await: the run files are removed only after it.
                     killQuietly(running.get());
@@ -385,13 +597,14 @@ final class SandboxShell implements VirtualShell {
                 heartbeat.close();
             }
         } finally {
+            awaited.countDown();
             registration.remove();
         }
         final Duration duration = Duration.ofNanos(System.nanoTime() - startedNanos);
         if (cancelled.get()) {
             // Ahead of the lost and timed-out answers: a command its caller asked to stop was stopped, whatever else
             // happened in that instant. Only a trailer says otherwise — the command had already ended by itself.
-            final Optional<ShellCommandResult> completed = completed(outcome, run, duration);
+            final Optional<ShellCommandResult> completed = completed(outcome, run, duration, watch);
             if (completed.isPresent()) {
                 return completed.get();
             }
@@ -400,27 +613,88 @@ final class SandboxShell implements VirtualShell {
         if (lost.get()) {
             throw new ShellExecutionException(SandboxWorkspaceManager.LOST_MESSAGE, null, "", "", false, List.of());
         }
-        return classify(slot, outcome, run, duration);
+        return run.mode.streams()
+                ? classifyStream(outcome, run, duration, watch)
+                : classify(slot, outcome, run, duration);
+    }
+
+    /**
+     * Kills the exec of a stream run once its trailer arrived, off the provider's thread (an {@link OutputSink} must
+     * not block, and a kill may be a remote call). It waits {@link #TRAILER_KILL_GRACE} first, or until the wait for
+     * the exec returned: an exec server that forwards stdout and stderr apart can deliver the trailer before the
+     * command's last stdout lines, which it already holds. The kill is idempotent, so a finished exec costs nothing.
+     */
+    private static void killAfterTrailer(AtomicReference<RunningCommand> running, CountDownLatch awaited) {
+        final Thread killer = new Thread(() -> {
+            try {
+                if (!awaited.await(TRAILER_KILL_GRACE.toMillis(), TimeUnit.MILLISECONDS) && running.get() == null) {
+                    // The trailer came before run(...) returned: the command is there once the wait ends.
+                    awaited.await();
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+            final RunningCommand command = running.get();
+            if (command != null) {
+                killQuietly(command);
+            }
+        }, "sandbox-hook-trailer-kill");
+        killer.setDaemon(true);
+        killer.start();
+    }
+
+    /**
+     * A stream run: its trailer decides, then an integrity failure of the private directory's files, then a timeout
+     * by the clock — the watchdog killed the group ({@code 137}) once the timeout had passed, which the exec's own
+     * duration, measured from before the exec started, always exceeds — and otherwise the wrapper failed.
+     */
+    private ShellCommandResult classifyStream(ExecOutcome outcome, Run run, Duration duration, TrailerWatch watch)
+            throws ShellExecutionException {
+        final Optional<ShellCommandResult> completed = completed(outcome, run, duration, watch);
+        if (completed.isPresent()) {
+            return completed.get();
+        }
+        if (outcome.exitCode() == ShellWrapper.RUN_FILES_TAMPERED_EXIT) {
+            throw tampered();
+        }
+        if (outcome.timedOut()
+                || run.commandTimeout && outcome.exitCode() == KILLED_EXIT && duration.compareTo(run.timeout) >= 0) {
+            throw timeout(null, run, outcome);
+        }
+        throw wrapperFailed(outcome, run);
+    }
+
+    private static RunDirectoryIntegrityException tampered() {
+        // No content: the message reaches logs and core's hook result.
+        return new RunDirectoryIntegrityException(
+                "a hook file or the hook's input placed for the run does not match its digest");
     }
 
     private ShellCommandResult classify(ConnectedSlot slot, ExecOutcome outcome, Run run, Duration duration)
             throws ShellExecutionException {
         final SandboxFiles files = slot.connection().files();
         if (outcome.timedOut()) {
-            throw timeout(files, run);
+            throw timeout(files, run, outcome);
         }
-        final Optional<ShellCommandResult> completed = completed(outcome, run, duration);
+        final Optional<ShellCommandResult> completed = completed(outcome, run, duration, null);
         if (completed.isPresent()) {
             return completed.get();
         }
         if (run.watched && files.stat(run.prefix + ".timedout").isPresent()) {
-            throw timeout(files, run);
+            throw timeout(files, run, outcome);
         }
         if (run.foreground && outcome.exitCode() == ShellWrapper.LOCK_BUSY_EXIT) {
             throw new ShellExecutionException(busyLockMessage(slot), null, "", "", false, List.of());
         }
+        if (run.privateDirectory != null && outcome.exitCode() == ShellWrapper.RUN_FILES_TAMPERED_EXIT) {
+            throw tampered();
+        }
+        throw wrapperFailed(outcome, run);
+    }
+
+    private static ShellExecutionException wrapperFailed(ExecOutcome outcome, Run run) {
         final byte[] stderr = outcome.stderr();
-        throw new ShellExecutionException(
+        return new ShellExecutionException(
                 "the sandbox shell wrapper failed (exit " + outcome.exitCode() + "): "
                         + new String(stderr, run.charset).strip(),
                 null, new String(outcome.stdout(), run.charset), new String(stderr, run.charset),
@@ -431,7 +705,11 @@ final class SandboxShell implements VirtualShell {
      * The result of a run whose wrapper printed its trailer — the command ended by itself, whatever it exited with —
      * or empty when there is none: the wrapper was killed, or failed before it got there.
      */
-    private Optional<ShellCommandResult> completed(ExecOutcome outcome, Run run, Duration duration) {
+    private Optional<ShellCommandResult> completed(ExecOutcome outcome, Run run, Duration duration,
+            TrailerWatch watch) {
+        if (run.mode.streams()) {
+            return completedStream(outcome, run, duration, watch);
+        }
         final byte[] stderr = outcome.stderr();
         final int marker = lastIndexOf(stderr, ("\n" + run.nonce).getBytes(StandardCharsets.US_ASCII));
         if (marker < 0) {
@@ -448,6 +726,55 @@ final class SandboxShell implements VirtualShell {
         return Optional
                 .of(new ShellCommandResult(Integer.parseInt(m.group(1)), new String(outcome.stdout(), run.charset),
                         new String(stderr, 0, marker, run.charset), duration, truncated, extra));
+    }
+
+    /**
+     * A stream run's result. The trailer is the one in the captured stderr — matched at its marker, not at the end: a
+     * descendant may write after it before the kill lands, and that is dropped — or, when the provider's capture cap
+     * cut it off, the one {@link TrailerWatch} parsed from the stream. The cap is applied here, on the bytes received
+     * (after any line normalization, §6.1): stdout and the stderr before the trailer, each cut to {@code max}.
+     */
+    private Optional<ShellCommandResult> completedStream(ExecOutcome outcome, Run run, Duration duration,
+            TrailerWatch watch) {
+        final byte[] stderr = outcome.stderr();
+        final byte[] marker = ("\n" + run.nonce + " ").getBytes(StandardCharsets.US_ASCII);
+        final int at = lastIndexOf(stderr, marker);
+        int exitCode = 0;
+        String cwd = null;
+        int stderrEnd = stderr.length;
+        if (at >= 0) {
+            final Matcher m = STREAM_TRAILER.matcher(new String(stderr, at + marker.length,
+                    stderr.length - at - marker.length, StandardCharsets.ISO_8859_1));
+            if (m.lookingAt()) {
+                try {
+                    exitCode = Integer.parseInt(m.group(1));
+                    cwd = m.group(2);
+                    stderrEnd = at;
+                } catch (NumberFormatException e) {
+                    cwd = null;
+                }
+            }
+        }
+        if (cwd == null) {
+            final Optional<TrailerWatch.Trailer> watched = watch == null ? Optional.empty() : watch.trailer();
+            if (watched.isEmpty()) {
+                return Optional.empty();
+            }
+            exitCode = watched.get().exitCode();
+            cwd = watched.get().cwd();
+        }
+        final List<String> extra = new ArrayList<>();
+        cwdNotice(cwd, run).ifPresent(extra::add);
+        final Capture out = capped(outcome.stdout(), outcome.stdout().length, outcome.stdoutTruncated(), run);
+        final Capture err = capped(stderr, stderrEnd, outcome.stderrTruncated(), run);
+        return Optional.of(new ShellCommandResult(exitCode, out.content, err.content, duration,
+                out.truncated || err.truncated, extra));
+    }
+
+    /** The first {@code length} bytes of a stream, cut to the run's cap. */
+    private static Capture capped(byte[] bytes, int length, boolean providerTruncated, Run run) {
+        final int kept = (int) Math.min(length, run.max);
+        return new Capture(new String(bytes, 0, kept, run.charset), providerTruncated || length > run.max);
     }
 
     /**
@@ -468,9 +795,17 @@ final class SandboxShell implements VirtualShell {
                 : "; the command ran in " + fallback));
     }
 
-    private ShellTimeoutException timeout(SandboxFiles files, Run run) {
-        final Capture stdout = readRunFile(files, run.prefix + ".out", run).orElse(Capture.EMPTY);
-        final Capture stderr = readRunFile(files, run.prefix + ".err", run).orElse(Capture.EMPTY);
+    /**
+     * The timeout of a run, with what it had written: the run files of a model's command; the exec's own streams for
+     * a stream run, which has none ({@code files} unused).
+     */
+    private ShellTimeoutException timeout(SandboxFiles files, Run run, ExecOutcome outcome) {
+        final Capture stdout = run.mode.streams()
+                ? capped(outcome.stdout(), outcome.stdout().length, outcome.stdoutTruncated(), run)
+                : readRunFile(files, run.prefix + ".out", run).orElse(Capture.EMPTY);
+        final Capture stderr = run.mode.streams()
+                ? capped(outcome.stderr(), outcome.stderr().length, outcome.stderrTruncated(), run)
+                : readRunFile(files, run.prefix + ".err", run).orElse(Capture.EMPTY);
         return new ShellTimeoutException("the command timed out after " + run.timeout.toMillis() + "ms and was killed",
                 run.timeout, stdout.content, stderr.content, stdout.truncated || stderr.truncated,
                 List.of(KILLED_NOTICE));
@@ -479,17 +814,33 @@ final class SandboxShell implements VirtualShell {
     /**
      * A command stopped through its cancellation signal, with what it had written. The run files hold that; when they
      * are already gone — the kill landed in the wrapper's last lines, after it printed the output and removed them —
-     * the output is what the exec stream carried, or nothing when there is no outcome (the wait was interrupted).
+     * or the run is a stream run, which has none, the output is what the exec stream carried, or nothing when there is
+     * no outcome (the wait was interrupted).
      */
     private ShellCancelledException cancelled(SandboxFiles files, Run run, ExecOutcome outcome) {
-        final Capture stdout = readRunFile(files, run.prefix + ".out", run).orElseGet(() -> outcome == null
-                ? Capture.EMPTY
-                : new Capture(new String(outcome.stdout(), run.charset), outcome.stdoutTruncated()));
-        final Capture stderr = readRunFile(files, run.prefix + ".err", run).orElseGet(() -> outcome == null
-                ? Capture.EMPTY
-                : new Capture(new String(outcome.stderr(), run.charset), outcome.stderrTruncated()));
+        final Capture stdout = (run.mode.streams()
+                ? Optional.<Capture>empty()
+                : readRunFile(files, run.prefix + ".out", run))
+                .orElseGet(() -> outcome == null
+                        ? Capture.EMPTY
+                        : streamCapture(outcome.stdout(), outcome.stdoutTruncated(), run));
+        final Capture stderr = (run.mode.streams()
+                ? Optional.<Capture>empty()
+                : readRunFile(files, run.prefix + ".err", run))
+                .orElseGet(() -> outcome == null
+                        ? Capture.EMPTY
+                        : streamCapture(outcome.stderr(), outcome.stderrTruncated(), run));
         return new ShellCancelledException(CANCELLED_MESSAGE, stdout.content, stderr.content,
                 stdout.truncated || stderr.truncated, List.of(KILLED_NOTICE));
+    }
+
+    /**
+     * What an exec stream carried: cut to the cap for a stream run, as the wrapper's {@code head -c} cut it otherwise.
+     */
+    private static Capture streamCapture(byte[] bytes, boolean providerTruncated, Run run) {
+        return run.mode.streams()
+                ? capped(bytes, bytes.length, providerTruncated, run)
+                : new Capture(new String(bytes, run.charset), providerTruncated);
     }
 
     private static ShellCancelledException cancelledBeforeStart() {
@@ -559,18 +910,37 @@ final class SandboxShell implements VirtualShell {
     }
 
     /**
-     * Removes the run files of a run that ended without a trailer (a timeout or a cancellation, which read
-     * {@code .out}/{@code .err} first, a wrapper failure, a provider error): on the normal path the wrapper removes
-     * them itself.
+     * Removes what a run that ended without a trailer left (a timeout or a cancellation, which read
+     * {@code .out}/{@code .err} first, a wrapper failure, a provider error, a watchdog kill that skipped the wrapper's
+     * {@code EXIT} trap): on the normal path the wrapper removes it itself. A stream run has no run files, only its
+     * uploads and private directory; a private directory that cannot be removed is logged, not the command's failure.
      */
-    private static void cleanUp(SandboxFiles files, String prefix) {
-        for (String suffix : List.of(".out", ".err", ".in", ".cmd", ".timedout", ".cwd")) {
-            try {
-                if (files.stat(prefix + suffix).isPresent()) {
-                    files.delete(prefix + suffix, false);
-                }
-            } catch (RuntimeException e) {
-                log.debug("Could not remove run file {}{}: {}", prefix, suffix, e.getMessage());
+    private static void cleanUp(SandboxFiles files, Run run) {
+        if (!run.mode.streams()) {
+            for (String suffix : List.of(".out", ".err", ".in", ".cmd", ".timedout", ".cwd")) {
+                remove(files, run.prefix + suffix, false, false);
+            }
+        } else if (run.uploadedStdin) {
+            remove(files, run.prefix + ".in", false, false);
+        }
+        if (run.uploadedRunFiles) {
+            remove(files, run.prefix + ".files", true, false);
+        }
+        if (run.privateDirectory != null) {
+            remove(files, run.privateDirectory, true, true);
+        }
+    }
+
+    private static void remove(SandboxFiles files, String path, boolean recursive, boolean warn) {
+        try {
+            if (files.stat(path).isPresent()) {
+                files.delete(path, recursive);
+            }
+        } catch (RuntimeException e) {
+            if (warn) {
+                log.warn("Could not remove the run's private directory {}: {}", path, e.getMessage());
+            } else {
+                log.debug("Could not remove run file {}: {}", path, e.getMessage());
             }
         }
     }
@@ -608,7 +978,8 @@ final class SandboxShell implements VirtualShell {
     @Override
     public boolean supports(ShellFeature feature) {
         return feature == ShellFeature.PIPE || feature == ShellFeature.REDIRECTION
-                || feature == ShellFeature.CANCELLATION || feature == ShellFeature.ISOLATED_EXECUTION;
+                || feature == ShellFeature.CANCELLATION || feature == ShellFeature.ISOLATED_EXECUTION
+                || feature == ShellFeature.RUN_DIRECTORY;
     }
 
     /** Nothing to release: the environment is a view (§3.2). */

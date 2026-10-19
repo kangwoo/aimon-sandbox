@@ -156,6 +156,14 @@ class SandboxSeederTest {
     }
 
     @Test
+    @DisplayName("§13.3: the image contract names base64, which a hook's inline run files are decoded with")
+    void theImageContractNamesBase64() {
+        assertThat(seeder.script(profile, "/workspace/repo"))
+                .contains("for t in git rg flock sha256sum base64; do command -v \"$t\"")
+                .contains("it must provide git, rg, flock, sha256sum and base64");
+    }
+
+    @Test
     void theWorkspaceIsCheckedBeforeTheLockIsTaken() {
         final String script = seeder.script(profile, "/workspace/repo");
 

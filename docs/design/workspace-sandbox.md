@@ -424,7 +424,9 @@ API 에는 uid 인자가 없으므로, 명령만 다른 uid 로 돌리면 파일
 바이트로 센다. 바이트 수가 정확해야 하는 쪽은 그 수를 출력 안에 싣는다 — §9 의 트레일러가 그렇다. OpenSandbox 프로바이더가
 그렇게 한다(execd 는 출력을 줄 단위 이벤트로 보낸다). U+FFFD 는 3바이트이므로 정규화가 스트림을 최대 세 배로 키운다 —
 `SandboxShell` 은 프로바이더 쪽 상한을 `3 × max + 1 KiB` 로 두어, 래퍼의 `head -c {max}` 를 지난 출력 뒤에 오는 트레일러가
-잘리지 않게 한다. 계약 스위트의 `execTruncatesStdoutAndStderrSeparately` 는 줄바꿈으로 끝나는 출력을 쓴다. 바이트
+잘리지 않게 한다. 훅과 격리 실행(§9 의 스트림 래퍼)은 `head -c` 도 바이트 수도 없으므로 JVM 이 **받은**(정규화 뒤의)
+바이트로 `max` 를 자른다 — 원래 `max` 바이트였던 출력도 붙은 줄바꿈이나 U+FFFD 팽창 때문에 잘렸다고 보고될 수 있다(인정한
+부정확, [실행 디렉터리 설계](workspace-sandbox-run-directory.md) Q-E). 계약 스위트의 `execTruncatesStdoutAndStderrSeparately` 는 줄바꿈으로 끝나는 출력을 쓴다. 바이트
 그대로의 출력이 필요한 소비자가 생기면 래퍼의 `run.out` 을 files API 로 읽는 길이 남아 있다([스파이크](opensandbox-spike.md) §4-3).
 프로바이더는 `maxCaptureBytes` 를 넘는 출력을 버리고 잘림을 표시할 뿐 **명령을 끝내지 않는다** — 명령은 제 끝이나 타임아웃까지
 돈다([단계 4 구현 설계](workspace-sandbox-step4.md) D8. 스파이크 §3 의 "명령을 끝낸다" 는 따르지 않았다: 출력을 많이 낸 명령의 종료 코드를 바꾸고, 로컬 프로바이더와도
@@ -844,7 +846,15 @@ EE-42 — 등록된 정의의 `sandbox.slot` 은 스크립트가 바꾸지 못�
   heartbeat    rewritten by the owning node every activityWriteInterval while it holds the lock (§5.3)
   run-{id}.cmd / .out / .err / .in / .timedout / .cwd    one command's text, output, stdin and flags; the wrapper
                                                          deletes them before its trailer, SandboxShell only when
-                                                         there is no trailer (timeout, wrapper failure)
+                                                         there is no trailer (timeout, wrapper failure). Foreground
+                                                         and background only: a hook or isolated run has none (#33)
+  run-{id}.files/ , run-{id}.in                          a hook run's uploads, only past the inline limits; the
+                                                         wrapper removes them right after copying them
+/workspace/.aimon-shell/.run.{32 hex}/                   one run's private directory (mode 700, exclusive mkdir):
+  d/           RUN_DIRECTORY's files, exported in its variable
+  .stdin       a hook's uploaded stdin, after its digest check
+  r.cwd        the inner bash's cwd flag (hook and isolated runs)
+               removed by the wrapper's epilogue and EXIT trap, and by SandboxShell when the wrapper was killed first
 
 run(ExecSpec{ command: OUTER, workingDirectory: /workspace, timeout: commandTimeout + lockWait + 5s,
               maxCaptureBytes: max + 1 KiB }):
@@ -972,10 +982,52 @@ INNER:
   `BASH_ENV` · `LD_PRELOAD` 를 export 하거나 `cd` 해서 자기를 감시하는 운영자의 훅을 조종할 수 있다. 스킬이 선언한 훅은
   스킬 자신의 코드이므로 지금처럼 세션 상태에서 시작한다. 기능을 선언하고 지키지 않는 셸은 코어가 알아챌 수 없는 프로바이더
   버그다(코어 설계 F4) — `SandboxShellIT` 가 모델의 `cd`·`export` 가 격리 명령에 닿지 않고, 그 뒤의 포그라운드 명령에는
-  그대로 남는 것으로 이를 고정한다. 셸 상태 밖에서 남는 위험(run 파일 #33, 코어 F12)과 운영자의 선택은 §12.1 에 있다
-- `maxCaptureBytes` 는 샌드박스 쪽에서 자른다. 래퍼가 실행 파일에서 stdout·stderr 를 각각 상한까지만 내보내고 크기는
-  트레일러로 알린다. 수십 MB 로그를 JVM 까지 끌고 와서 자르지 않는다. `ExecSpec.maxCaptureBytes` 는 그 상한에 1 KiB 를
-  더한 값이라 프로바이더 쪽 잘림이 트레일러를 자르는 일이 없다
+  그대로 남는 것으로 이를 고정한다. 셸 상태 밖에서 남는 위험과 운영자의 선택은 §12.1 에 있다
+- **훅과 격리 실행은 셸 디렉터리에 아무것도 두지 않는다(#33).** 위의 run 파일은 같은 uid 인 에이전트의 셸이 실행 전에도
+  도중에도 읽고 고쳐 쓸 수 있으므로, 정책 훅의 판정(stdout · exit code)을 위조하는 통로였다. 훅(`hook` 모드)과 격리
+  실행(`iso` 모드)은 그래서 다른 래퍼 — **스트림 래퍼** — 를 쓴다. 명령은 `run.cmd` 가 아니라 안쪽 bash 의 여섯째
+  인자로 간다(따옴표를 친 명령이 64 KiB 를 넘으면 실행 전에 거부한다 — `hooks.json` 명령은 짧다). stdin 은 정확한 바이트의
+  base64 를 스크립트에 넣어 `/usr/bin/base64 -d` 로 안쪽 bash 에 파이프하고(NUL 도, 다른 문자 집합도 그대로 간다), 스크립트가
+  인자 예산(아래)을 넘으면 files API 로 올려 비공개 디렉터리로 복사하고 스크립트에 든 SHA-256 으로 확인한 뒤 넘긴다. 안쪽
+  bash 의 stdout · stderr 는 exec 자신의 스트림이고, 트레일러는 `\n{nonce} exit=N cwd=C` 다(바이트 수 없음). 상한은 JVM 이
+  받은 바이트로 자른다(§6.1 정규화 뒤의 바이트). 타임아웃은 `.timedout` 표지가 아니라 JVM 의 시계로 정한다 — 트레일러 없이
+  137 로 끝났고 명령 타임아웃이 지났으면 타임아웃이다. 에이전트가 쓸 수 있는 곳의 표지는 위조할 수 있기 때문이다. cwd
+  fallback 표시는 비공개 디렉터리의 `r.cwd` 에 두고 트레일러로 읽는다. 업로드(`run-{id}.files/` · `run-{id}.in`)만
+  `.aimon-shell/{h}/` 에 잠깐 나타나고, 래퍼가 복사한 즉시 지운다
+- **실행마다 비공개 디렉터리를 만든다.** 스트림 래퍼는 늘, 모델의 명령은 실행 디렉터리를 받았을 때만
+  `/workspace/.aimon-shell/.run.{32 hex}` 를 만든다. 이름은 JVM 이 고른 독립된 난수다 — `runPrefix` 의 접미사는 업로드
+  경로로 실행 전에 에이전트에게 보이므로 쓰지 않는다. 래퍼는 먼저 셸 루트를 `mkdir -p` 로 되살리고(모델의 명령이 지웠을 수
+  있다 — 그대로면 `failOpen` 이 아닌 `preTool` 가드가 모든 `Bash` 를 막아 되살릴 길이 없다), `umask 077` 아래에서
+  `mkdir -m 700` 으로 **배타적으로** 만든다(`-p` 없음 — 이미 있으면 실패). 지우는 것은 래퍼의 에필로그와 `EXIT` trap, 그리고
+  워치독의 `kill -KILL 0` 이 trap 을 건너뛴 경우의 `SandboxShell` 정리다(실패는 WARN 로그일 뿐 명령의 실패가 아니다)
+- **실행 디렉터리(`ShellFeature.RUN_DIRECTORY`, 코어 EE-109).** 코어는 훅의 파일을 경로가 아니라 바이트로
+  `ExecutionOptions.getRunDirectory()` 에 실어 보낸다 — `hooks.json` 의 `AIMON_HOOK_DIR`(격리 실행), 스킬 훅의
+  `AIMON_SKILL_DIR`. `SandboxShell` 은 이 기능을 선언한다. 파일은 비공개 디렉터리의 `d/` 에 놓인다. base64 와 manifest 가
+  16 KiB 안이면 스크립트에 넣어 `base64 -d` 로 풀고, 넘으면 files API 로 `run-{id}.files/` 에 올렸다가 `cat` 으로 복사한다.
+  놓는 동안은 noclobber(`set -C`)다 — 파일 시스템이 하나로 합치는 두 경로(대소문자만 다른 이름이 대소문자를 가리지 않는
+  파일 시스템에서, 같은 이름의 파일과 디렉터리)는 오류이고 명령은 돌지 않는다. 어느 쪽이든 JVM 이 바이트에서 계산해
+  스크립트에만 실은 SHA-256 manifest 로 `sha256sum -c --strict -` 를 돌리고, 파일 수를 센다. 다이제스트가 다르거나 파일이
+  빠졌거나 더 있으면 exit 73 → `RunDirectoryIntegrityException`(코어: `HOOK_FILES_TAMPERED`, `failOpen` 과 무관하게
+  막는다). 그 밖의 배치 실패(디스크, 없는 도구)는 exit 70 → 일반 `ShellExecutionException` 이다 — 환경 고장을 변조로
+  보고하지 않는다. manifest 는 here-document 가 아니라 `printf` 내장 명령의 파이프로 넣는다(here-document 는 `$TMPDIR` 에
+  임시 파일을 쓴다). 디렉터리 경로는 다른 명령별 변수 **뒤에** export 해서 같은 이름을 이긴다. 경로에 줄바꿈(`\n`, `\r`)이
+  있거나 합이 8 MiB 를 넘으면 연결 전에 거부한다(코어는 4 MiB 로 묶는다)
+- **스크립트 하나가 인자 하나다.** Linux 는 인자 하나를 128 KiB 로 묶고, 래퍼 스크립트 전체 — 명령(≤ 64 KiB), 명령별 환경
+  (≤ 32 KiB), 인라인 실행 파일(≤ 16 KiB), 인라인 stdin — 가 그 하나다. 스트림 래퍼는 조립한 스크립트의 길이를
+  `ARGUMENT_BUDGET`(120 KiB)과 견준다 — stdin 을 먼저 업로드로 돌리고, 그래도 넘으면 실행 파일을, 그래도 넘으면 연결 전에
+  거부한다
+- **훅이 남긴 작업은 훅과 함께 끝난다(동작 변경).** 스트림 래퍼에서는 exec 의 stdout 이 곧 훅의 stdout 이므로, 훅의
+  `cmd &` 가 exec 를 붙잡는다 — OpenSandbox 의 `await` 는 스트림을 쥔 자손이 모두 끝나야 돌아온다. 그래서 `SandboxShell` 은
+  exec 가 흐르는 동안 stderr 에서 트레일러를 지켜보다가(`TrailerWatch`), 트레일러가 오면 짧은 유예(500 ms, `await` 가 먼저
+  돌아오면 바로) 뒤에 exec 의 프로세스 그룹을 kill 한다. 유예는 execd 가 stdout 과 stderr 를 따로 읽어 트레일러가 훅의 마지막
+  stdout 줄보다 먼저 올 수 있기 때문이다. 결과적으로 `postTool` 훅의 `notify-send &` 같은 작업은 훅이 끝날 때 함께
+  끝난다. `setsid` · `set -m` 로 그룹을 떠난 작업은 전처럼 남는다. 트레일러는 끝이 아니라 표지에서 맞추므로, kill 이 닿기
+  전에 자손이 stderr 에 더 쓴 것은 버린다. 감시자는 파싱한 트레일러를 기억하므로, 훅이 프로바이더 쪽 캡처 상한
+  (`3 × max + 1 KiB`)보다 많은 stderr 를 써서 프로바이더가 트레일러를 잘라도 훅 자신의 결과(예: exit 2)가 그대로 나온다
+- 모델의 명령은 `maxCaptureBytes` 를 샌드박스 쪽에서 자른다. 래퍼가 실행 파일에서 stdout·stderr 를 각각 상한까지만
+  내보내고 크기는 트레일러로 알린다. 수십 MB 로그를 JVM 까지 끌고 와서 자르지 않는다. `ExecSpec.maxCaptureBytes` 는 그
+  상한의 세 배에 1 KiB 를 더한 값이라(§6.1) 프로바이더 쪽 잘림이 트레일러를 자르는 일이 없다. 훅과 격리 실행은 실행
+  파일이 없으므로 같은 프로바이더 쪽 상한까지 받은 바이트를 JVM 이 자른다 — 정규화된 스트림이면 정규화 뒤의 바이트다
 - `exec:` shellKey 의 상태 디렉터리는 노드 로컬 캐시가 기억한다. 코어 계약상 환경은 실행 끝을 알리지 않으므로,
   마지막 명령이 **끝난** 뒤 `execShellIdle`(기본 10분) 동안 다음 명령이 없는 `exec:` 디렉터리를 캐시가 지운다. 락이
   잡힌 디렉터리는 지우지 않는다. 노드가 죽어 남은 디렉터리는 수 KB 이고
@@ -1274,6 +1326,7 @@ owner 그대로)하며 "/workspace 가 초기화되었다" notice 를 붙인다.
   .worktrees/<key>/     git worktrees for parallel work inside one sandbox
   .aimon-staged/<name>/<contentKey>/   staged skill files (on demand; read-only to file tools)
   .aimon-shell/<h(shellKey)>/          shell state, lock, owner, heartbeat (§9)
+  .aimon-shell/.run.<hex>/             one hook run's private directory, removed after the run (§9)
 /shared                 workspace volume, mounted per profile (sharedAccess: rw | ro | none)
   git/repo.git          bare repository used to exchange commits between slots
   context/ plans/ artifacts/ results/
@@ -1395,7 +1448,7 @@ worktree 의 수명 규칙:
 provision(slot, gen) seed:                                   (every step idempotent)
   provider.verify(ref, required) || fail <step>               (egress enforcementMode, vault bindings — §6.1)
   flock /workspace/.aimon-seed.lock for the rest            (two nodes seeding one slot run one at a time)
-  command -v git rg flock sha256sum || fail "image contract"   (§13.3; permanent)
+  command -v git rg flock sha256sum base64 || fail "image contract"   (§13.3; permanent)
   uname -s matches profile.platform || fail "descriptor mismatch"   (§7; slot -> FAILED)
   [ "$(id -u)" != 0 ] || fail "runs as root"                 (§12.1; slot -> FAILED, unless insecure-allow)
   [ ! -e /var/run/secrets/kubernetes.io/serviceaccount/token ] || fail "service account token mounted"
@@ -1415,7 +1468,7 @@ developer slot:  git push origin HEAD:refs/heads/dev/<topic>
 review slot:     git fetch origin && git checkout dev/<topic>        (no external network needed)
 ```
 
-**3단계의 seed 는 이 절차의 부분집합이다.** 이미지 계약(`command -v git rg flock sha256sum`, seed 락보다 먼저 — `flock`
+**3단계의 seed 는 이 절차의 부분집합이다.** 이미지 계약(`command -v git rg flock sha256sum base64`, seed 락보다 먼저 — `flock`
 이 없는 이미지는 락 오류가 아니라 이미지 계약 위반으로 보고된다), `uname -s` 와 선언한 platform, 선언했을 때만
 `uname -sr` 와 osVersion(글롭으로, `Linux 6.x` 의 `x` 는 `*`), `HARDENED_SECURITY_CONTEXT` 를 면제하지 않았으면 uid 와
 서비스 계정 토큰, `.tmp-*` 정리, `mkdir -p` 까지다. 실패한 검사는 `permanent` 이고 그 샌드박스는 지운다(라벨 대조를
@@ -1565,9 +1618,14 @@ egress 정책이 허용하지 않는 host 의 바인딩을 거부하고 `default
   있는 스킬 포크는 **시작하지 않는다**(코어 EE-51 · EE-70). 관찰만 하는 훅에는 `failOpen: true` 를 준다. `hooks.json` 의
   훅도 실행 중 이벤트이면 코어(#273)가 그 실행의 환경에서 격리 실행으로 돌리므로(§9) 샌드박스에서 돈다. 호스트 셸에서 도는
   것은 `"shell": "host"` 를 준 핸들러, `"shell"` 없이 `asyncRewake` 를 선언한 핸들러(다시 깨울 수 있는 이벤트에서, 코어가
-  WARN 을 남긴다 — 코어 EE-48 §2.1 (*)), 실행이 없는 발화뿐이다. 격리 실행이 막는 것은 셸 상태(cwd · export)까지다 — 명령의
-  run 파일(`.aimon-shell`, #33)과 코어가 스테이징한 `AIMON_HOOK_DIR`(코어 F12)은 여전히 에이전트가 쓸 수 있으므로, 에이전트의
-  손이 닿으면 안 되는 스크립트에는 `"shell": "host"` 를 준다
+  WARN 을 남긴다 — 코어 EE-48 §2.1 (*)), 실행이 없는 발화뿐이다. 격리 실행이 막는 것은 셸 상태(cwd · export)이고, #33 이
+  실행 사이의 파일을 치웠다 — 훅과 격리 실행의 명령 · stdin · 출력 · 타임아웃 표지는 더는 `.aimon-shell` 의 run 파일에
+  있지 않고(§9), `AIMON_HOOK_DIR` · `AIMON_SKILL_DIR` 은 실행마다 새로 만들어 다이제스트로 확인하는 비공개 디렉터리다
+  (`RUN_DIRECTORY`, 코어 EE-109). 그래서 에이전트가 실행 **전에** 심어 두거나 실행 **사이에** 고쳐 둔 것은 훅에 닿지
+  않는다. 이것은 좁힌 것이지 권한 경계가 아니다. 훅이 **도는 동안**에는 같은 uid 의 프로세스가 그 비공개 디렉터리,
+  `/proc/<pid>/fd`, argv 에 든 트레일러 nonce 에 닿을 수 있고, 업로드를 지우거나 래퍼를 죽여 훅을 실패(`EXECUTION_FAILED` —
+  `failOpen` 가드는 통과)시킬 수도 있다. 에이전트와 훅을 uid 로 가르는 일은 aimon-sandbox#34(코어 EE-113)다. 그때까지
+  에이전트의 손이 도는 중에도 닿으면 안 되는 스크립트에는 `"shell": "host"` 를 준다
 - **가드의 판정은 샌드박스에서 나온다.** 훅 명령의 상대 경로는 샌드박스의 루트를 기준으로 하고, 종료 코드 2 는 도구
   호출을 막는다
 - **훅은 모델의 셸 세션 밖에서 돈다.** 코어(0.3.2 부터)가 훅 명령에 `ExecutionOptions.isHook()` 을 싣고, `SandboxShell`
@@ -1749,9 +1807,10 @@ aimon:
 
 ### 13.3 이미지와 배포 계약
 
-샌드박스 이미지가 지켜야 하는 것: `bash` · coreutils(`sha256sum`) · util-linux `flock` · `git` · `rg`(ripgrep) · uid 1000
+샌드박스 이미지가 지켜야 하는 것: `bash` · coreutils(`sha256sum`, `base64` — 둘 다 `/usr/bin` 에, 훅의 실행 파일을
+풀고 확인한다, §9) · util-linux `flock` · `git` · `rg`(ripgrep) · uid 1000
 `sandbox` 사용자 · 그 사용자 소유의 `/workspace`. OpenSandbox 가 execd 를 주입하므로 이미지가 execd 를 포함할 필요는
-없다 — execd 는 Docker 에서는 컨테이너에 복사되고 K8s 에서는 init 컨테이너가 넣는다(스파이크 확인). 계약을 벗어난 이미지는 첫 프로비저닝의 seed 단계에서 `command -v git rg flock sha256sum` 검사로 실패시킨다.
+없다 — execd 는 Docker 에서는 컨테이너에 복사되고 K8s 에서는 init 컨테이너가 넣는다(스파이크 확인). 계약을 벗어난 이미지는 첫 프로비저닝의 seed 단계에서 `command -v git rg flock sha256sum base64` 검사로 실패시킨다.
 실패를 늦게 발견하면 `Grep` 이 원인 모를 에러를 낸다. `/workspace` 가 없거나 쓸 수 없거나 그 안의 seed 락을 열 수 없는
 것도 같은 계약 위반이다. seed 는 락을 잡기 전에 이를 확인하고 FAILED(영구, step `workspace`)로 끝낸다 — 락 경합(일시
 장애)으로 보고해 매 호출마다 다시 시도하지 않는다.
@@ -1858,7 +1917,11 @@ workspace-purged · session-options-set · session-options-cleared)는
 | 세션도 실행 id 도 없는 요청 | 사용 불가 — 워크스페이스를 정할 수 없다(§8.2) |
 | owner 검사 실패(다른 테넌트·다른 사용자) | 사용 불가 · 도구 에러. 워크스페이스가 있다는 사실 외에는 알리지 않는다(§8.3). 없는 id 의 `close` 는 멱등이라 성공이므로, 남의 주체도 "not permitted" 와 성공으로 id 의 존재만은 알 수 있다 — id(`ws:{sessionId}`)는 추측할 수 없다 |
 | CLOSING 중인 워크스페이스의 `reopen` | 에러 — 닫힌 뒤에 reopen 하라. 첫 읽기 뒤 CAS 사이에 CLOSING 이 되어도 같다 |
-| 명령이 `.aimon-shell` 을 지워 실행 파일이 사라짐 | 래퍼 실패 에러 — 출력을 잃었다고 적는다. 빈 성공(exit 0)으로 보고하지 않는다(§9) |
+| 명령이 `.aimon-shell` 을 지워 실행 파일이 사라짐 | 포그라운드 · 백그라운드 명령만 — 래퍼 실패 에러, 출력을 잃었다고 적는다. 빈 성공(exit 0)으로 보고하지 않는다. 훅 · 격리 실행에는 실행 파일이 없고, 다음 실행이 셸 루트를 되살린다(§9) |
+| 훅의 실행 파일이나 업로드한 stdin 이 다이제스트와 다름(파일이 바뀌거나 빠지거나 더 있음) | `RunDirectoryIntegrityException`, 명령은 돌지 않는다. 코어는 `HOOK_FILES_TAMPERED` 로 보고 `failOpen` 과 무관하게 막는다(§9) |
+| 훅 명령 64 KiB 초과 · 실행 파일 경로의 줄바꿈 · 실행 파일 8 MiB 초과 · 스크립트가 인자 예산 초과 | 연결 전에 `ShellExecutionException`. 아무것도 프로비저닝하지 않는다(§9) |
+| 실행 파일을 놓지 못함(파일 시스템이 합치는 두 경로, 디스크, 업로드가 사라짐) | `ShellExecutionException`(exit 70 과 그 이유), 명령은 돌지 않는다. 변조로 보고하지 않는다(§9) |
+| 훅이 남긴 `cmd &` | 트레일러가 오면 exec 의 프로세스 그룹을 kill 한다 — 훅과 함께 끝난다(§9) |
 | 슬롯이 이미 다른 프로파일로 있음 | 사용 불가 — 요구한 프로파일과 실제 프로파일을 적는다(§8.3) |
 | `SandboxStart` 가 호출자보다 넓은 프로파일 · `primary` 를 요구 | 도구 에러(§8.5) |
 | 격리 브랜치의 작업 트리를 잃음(generation 변경) | 에러 — 파생 환경은 이어 가지 않는다(§11.2) |
@@ -1965,6 +2028,10 @@ CI 워크플로가 없으므로 "4단계의 첫 CI" 는 아직 오지 않았다(
 | 슬래시 커맨드(`/skill`)로 부른 스킬의 `Bash` (INLINE · FORK 모두) | 샌드박스에서 돈다 (호스트 아님). FORK 는 같은 워크스페이스 | 3 |
 | `Write /workspace/.aimon-staged/…` · `.aimon-shell/…` | "Access denied" 에러. 같은 경로에 `Bash` 로 쓰는 것은 된다 | 3 |
 | 셸로 `.aimon-staged/{name}/{contentKey}/` 에 다른 스크립트와 마커를 심은 뒤 스킬 활성화 | 해시 불일치로 다시 복사, 심은 내용은 돌지 않음 | 3 |
+| `hooks.json` 가드 `bash "$AIMON_HOOK_DIR/guard.sh"` 가 exit 2 | 샌드박스에서 돌고(`RUN_DIRECTORY_UNSUPPORTED` 아님) 도구를 막는다. `AIMON_HOOK_DIR` 은 `.aimon-shell/.run.*/d`, 실행 뒤 없음 | #33 |
+| 훅 실행이 업로드한 실행 파일이나 stdin 을 래퍼가 복사하기 전에 고쳐 씀 | `RunDirectoryIntegrityException`, 명령은 돌지 않고 비공개 디렉터리도 남지 않음 | #33 |
+| 백그라운드 명령이 `.aimon-shell/*/run-*.out` 을 계속 고쳐 씀 → 격리 명령 | 격리 명령의 stdout 과 exit code 는 그대로 — 고칠 run 파일이 없다 | #33 |
+| 훅이 `(sleep 2; touch late) & echo done` | `done` 으로 곧바로 돌아오고, `late` 는 생기지 않는다(트레일러 뒤 kill) | #33 |
 | 닫힌(CLOSED) 워크스페이스로 `connect` | "workspace closed". `reopen` 뒤에는 새 generation 으로 동작 | 3 |
 | close 도중 다른 실행의 `connect` | CLOSED 뒤에 남는 슬롯 없음 | 3 |
 | close 도중 노드 종료 | janitor 가 이어서 CLOSED 까지 | 3 |
@@ -2283,6 +2350,26 @@ docker 계층, K8s 에서만 드러나는 것은 k8s 계층 — 는 [`workspace-
   ([코어 0.3.3 이행 설계](workspace-sandbox-core-033.md) §6.3, §14)
 - **비동기 · 멱등 `create`** — 동기 `create` 는 `provisionTimeout` 까지 막는다. HTTP 호스트에는 PROVISIONING 을 바로 돌려주는
   경로와 응답을 잃어도 둘째 워크스페이스를 만들지 않는 멱등 키가 필요할 수 있다([관리 설계](workspace-sandbox-management.md) §12 Q3)
+- **훅이 남긴 작업을 훅과 함께 끝내는가** *(릴리스 전에 관리자가 정한다)* — 지금은 끝낸다(§9). 스트림 래퍼에서는 exec 의
+  stdout 이 곧 훅의 stdout 이라 `cmd &` 가 exec 를 붙잡고, 기다리면 그런 훅마다 최후 방어선(타임아웃 + 5초)만큼 도구 호출이
+  늘어진다. 대가는 `postTool` 훅의 `notify-send &` 같은 작업이 훅과 함께 죽는 동작 변경이다
+  ([실행 디렉터리 설계](workspace-sandbox-run-directory.md) §8, §11 Q8)
+- **훅 실행마다의 `DELETE /command`** — 트레일러를 보면 유예(500 ms) 뒤 exec 를 kill 한다. OpenSandbox 의 `kill()` 은 종료
+  이벤트가 이미 왔으면 아무것도 보내지 않으므로, `DELETE` 는 유예보다 오래 exec 를 붙잡는 훅 — 스트림을 쥔 자손을 남긴 훅 —
+  에만 든다. 유예 안에 `await` 가 돌아오지 않을 때만 kill 하면 로컬 프로바이더에서 자손이 살아남아 동작이 프로바이더마다
+  달라진다([실행 디렉터리 설계](workspace-sandbox-run-directory.md) §11 Q-C)
+- **남은 `.aimon-shell/.run.*`** — 워치독이 래퍼를 죽인 뒤 JVM 도 죽으면 비공개 디렉터리가 샌드박스가 사라질 때까지 남는다.
+  다음 실행이 믿지 않으므로(이름이 늘 새 난수다) 지금은 둔다. 쓸어 낸다면 seed 나 janitor 가, 다른 노드가 같은 샌드박스에서
+  훅을 돌리고 있을 수 있으므로 가장 긴 훅 방어선보다 오래된 것만 지워야 한다([실행 디렉터리 설계](workspace-sandbox-run-directory.md) §11 Q-B)
+- **파일 도구가 `.aimon-shell/.run.*` 을 읽을 수 있다** — 셸 상태 영역 규칙은 읽기 전용이지 거부가 아니다(§11.1). EE-109 의
+  범위에서 훅의 바이트는 비밀이 아니지만, 거부 규칙을 더할지 정하지 않았다([실행 디렉터리 설계](workspace-sandbox-run-directory.md) §11 Q-D)
+- **훅 출력의 상한은 정규화 뒤의 바이트로 잰다** — 스트림 래퍼에는 샌드박스 안의 바이트 수가 없으므로, 줄로 정규화하는
+  프로바이더에서는 정확히 `max` 바이트였던 출력도 잘렸다고 보고될 수 있다(§6.1). 정확한 수가 필요해지면 스트림에 샌드박스 안의
+  카운터를 붙여야 한다([실행 디렉터리 설계](workspace-sandbox-run-directory.md) §11 Q-E)
+- **훅을 다른 uid 로 돌리기** *(aimon-sandbox#34, 코어 EE-113)* — #33 은 실행 사이의 변조를 좁혔을 뿐 권한 경계가 아니다.
+  같은 uid 의 프로세스는 훅이 도는 동안 비공개 디렉터리 · `/proc/<pid>/fd` · argv 의 nonce 에 닿는다(§12.1). 경계는 execd 가
+  uid 를 바꿔 exec 하고, 훅 파일과 그 부모 디렉터리가 에이전트의 uid 로 쓸 수 없는 곳(`/workspace` 밖)에 있어야 선다
+  ([실행 디렉터리 설계](workspace-sandbox-run-directory.md) §1)
 - **`aimon-sandbox-testkit` 의 발행** *(3·4단계 릴리스에서 닫는다)* — 계약 스위트를 이 저장소 밖의 구현도 통과해야 하므로
   발행하기로 했다(`aimon.publishable`). 첫 릴리스 전까지는 되돌릴 수 있다(단계 3 구현 설계 §10 Q5)
 
@@ -2327,6 +2414,10 @@ docker 계층, K8s 에서만 드러나는 것은 k8s 계층 — 는 [`workspace-
 - **프로바이더 목록에서 한 번 빠졌다고 LOST 로 확정하지 말 것.** `status` 로 다시 확인한다(§10.4)
 - **명시적으로 닫힌 워크스페이스에 조용히 새 샌드박스를 만들지 말 것.** `reopen` 을 거친다. idle close 의 레코드는 `connect` 를 막지 않는다(§10.5)
 - **모델 명령에 셸 락 fd 를 넘기지 말 것.** 명령이 남긴 자손이 락을 쥔다(§9)
+- **훅 · 격리 실행의 명령 · 입력 · 출력 · 타임아웃 표지를 에이전트가 쓸 수 있는 파일에 두지 말 것.** 정책 훅의 판정을
+  위조하는 통로다. exec 의 인자와 스트림으로 나르고, 올려야 하는 것은 스크립트에 든 다이제스트로 확인한다(§9)
+- **환경 고장을 `RunDirectoryIntegrityException` 으로 보고하지 말 것.** 코어는 그것을 `failOpen` 과 무관하게 막는다.
+  다이제스트 불일치(exit 73)에만 쓴다(§9)
 - **결정적 실패를 backoff 로 재시도하지 말 것.** 프로파일이 바뀔 때까지 멈춘다(§10.1)
 - **janitor 가 scan 스냅숏만 보고 샌드박스를 지우지 말 것.** destroy 직전에 레코드를 다시 읽는다(§10.4)
 - **샌드박스 모드에서 스킬의 셸 액션 훅을 호스트에서 돌리지 말 것.** 코어 0.3.1 부터 그 훅은 실행의 샌드박스 셸에서 돈다.
@@ -2359,6 +2450,7 @@ docker 계층, K8s 에서만 드러나는 것은 k8s 계층 — 는 [`workspace-
 - [`workspace-sandbox-management.md`](workspace-sandbox-management.md) — 워크스페이스 관리(만들기 · 세션 옵션 · 관리 API)의 설계와 구현이 벗어난 점(§15, §16), 코어 0.3.3 이후 바뀐 점(§17)
 - [`workspace-sandbox-core-033.md`](workspace-sandbox-core-033.md) — aimon-core 0.3.3 의 세 이음매(요청 속성 · 세션 소유자와 삭제 이벤트 · 실행 환경 notice)를 따라간 변경의 설계, 열린 질문(§12)과 구현이 벗어난 점(§14)
 - [`workspace-sandbox-unannounced-reset.md`](workspace-sandbox-unannounced-reset.md) — 코어가 꺼내지 않는 경로(훅 · 워크플로 단계 · 스테이징)의 초기화 notice 를 세션 옵션에 남겨 다음 턴에 알리는 변경(#28)의 설계, 열린 질문(§11)과 구현이 벗어난 점(§12)
+- [`workspace-sandbox-run-directory.md`](workspace-sandbox-run-directory.md) — 코어의 `RUN_DIRECTORY` 를 구현하고 훅 · 격리 실행의 run 파일을 에이전트의 손에서 치운 변경(#33)의 설계, 열린 질문(§11)과 구현이 벗어난 점(§12)
 - [`opensandbox-spike.md`](opensandbox-spike.md) — 2단계(OpenSandbox 스파이크)의 결과와 근거
 - [`sandbox.md` @ `704013c`](https://github.com/kangwoo/aimon-sandbox/blob/704013c02cb14f16ec37ebf8c07f90d7e107db73/docs/design/sandbox.md) — 이 설계가 대체한 identifier 기반 설계(삭제됨)
 - [`scope-model.md`](https://github.com/kangwoo/aimon-core/blob/main/docs/overview/scope-model.md) — 수명과 소멸 책임

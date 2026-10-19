@@ -42,6 +42,9 @@ aimon-core `0.3.3` 이 필요하다(릴리스 전까지는 `0.3.3-SNAPSHOT`) —
 모든 도구 결과에 실리는 환경 notice(`drainNotices()`)를 쓴다
 ([`workspace-sandbox-core-033.md`](../../docs/design/workspace-sandbox-core-033.md)). 코어가 꺼내지 않는 훅 · 워크플로 단계 ·
 스테이징이 일으킨 초기화는 세션 옵션에 남겨 세션의 다음 도구 결과에 알린다
-([`workspace-sandbox-unannounced-reset.md`](../../docs/design/workspace-sandbox-unannounced-reset.md)).
+([`workspace-sandbox-unannounced-reset.md`](../../docs/design/workspace-sandbox-unannounced-reset.md)). 코어의
+`ShellFeature.RUN_DIRECTORY` 를 선언해 훅의 파일(`AIMON_HOOK_DIR` · `AIMON_SKILL_DIR`)을 실행마다 비공개 디렉터리에 놓고
+다이제스트로 확인하며, 훅과 격리 실행은 셸 디렉터리에 run 파일을 두지 않는다
+([`workspace-sandbox-run-directory.md`](../../docs/design/workspace-sandbox-run-directory.md)).
 
 옛 구현이 필요하면 `at.aimon.core:aimon-sandbox{,-docker,-kubernetes}:0.2.4` 가 Maven Central 에 그대로 있다.

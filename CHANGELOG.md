@@ -9,6 +9,35 @@ Requires aimon-core **0.3.3**. Until core releases it, `main` pins `0.3.3-SNAPSH
 which `scripts/release.sh` refuses to release
 ([`docs/design/workspace-sandbox-core-033.md`](docs/design/workspace-sandbox-core-033.md)).
 
+### Added: run directories for hooks, and hook runs off the shell directory (#33, kangwoo/aimon-core#275)
+
+- **`SandboxShell` declares `ShellFeature.RUN_DIRECTORY`.** Core hands a hook its files as bytes
+  (`ExecutionOptions.getRunDirectory()`) and runs a `hooks.json` handler that names `AIMON_HOOK_DIR` only on a shell that
+  declares it; until now such a handler was not run on the sandbox (`RUN_DIRECTORY_UNSUPPORTED`, so a guard blocked).
+  Skill hooks get `AIMON_SKILL_DIR` the same way instead of the staged copy under `.aimon-staged`. The files are placed
+  for the one run in a fresh private directory, `/workspace/.aimon-shell/.run.{hex}/d` (exclusive `mkdir`, mode 700),
+  inline in the exec when they fit and through an upload otherwise, checked against SHA-256 digests that travel only in
+  the exec, counted, exported in the run directory's variable after every other variable, and removed after the run
+  whatever its outcome. A digest or count mismatch throws `RunDirectoryIntegrityException` (core: `HOOK_FILES_TAMPERED`,
+  which blocks whatever `failOpen` says) and the command does not run; any other placement failure is a plain
+  `ShellExecutionException`. A file name with a newline, files over 8 MiB, and a script over the exec's single-argument
+  budget are refused before anything is provisioned.
+- **Changed: hook and isolated runs keep nothing in the shell directory.** Their command, a small stdin and their output
+  used to be run files under `/workspace/.aimon-shell/{h}/`, which the agent's shell (the same uid) could rewrite to
+  forge a policy hook's verdict. Now the command is an argument of the exec, stdin is base64 in the exec (or uploaded,
+  copied into the private directory and digest-checked), stdout and stderr are the exec's own streams capped in the JVM,
+  and a timeout is read from the JVM's clock rather than a marker file. A hook command over 64 KiB is refused. A stdin
+  with a NUL byte, or in a charset other than UTF-8, now reaches a hook as its exact bytes. Foreground and background
+  commands are unchanged. This narrows tampering; it is not a privilege boundary — a process of the same uid can still
+  reach a hook while it runs (#34).
+- **Behaviour change: a hook's background jobs end with the hook.** A hook's stdout is now the exec's, so a `cmd &` it
+  leaves behind would hold the exec open until its backstop. `SandboxShell` kills the exec's process group once the
+  hook's trailer has arrived (after a 500 ms drain grace): a `postTool` hook's `notify-send &` is killed when the hook
+  ends. A job that left the group (`setsid`, `set -m`) survives, as before.
+- **The image contract adds `base64`** (in `/usr/bin`, from coreutils, like `sha256sum`); the seed checks it.
+- Design record:
+  [`docs/design/workspace-sandbox-run-directory.md`](docs/design/workspace-sandbox-run-directory.md).
+
 ### Added: isolated execution for `hooks.json` commands (#31, kangwoo/aimon-core#273)
 
 - **`SandboxShell` declares `ShellFeature.ISOLATED_EXECUTION`.** Core runs an operator's `hooks.json` command on an

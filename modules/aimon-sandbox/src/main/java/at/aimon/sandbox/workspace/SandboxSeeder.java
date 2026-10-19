@@ -23,7 +23,7 @@ import at.aimon.sandbox.provider.SandboxProviderException;
  * <ul>
  * <li>{@code /workspace} is a writable directory, and the seed lock in it can be opened — the mount contract
  * (§13.3);</li>
- * <li>{@code command -v git rg flock sha256sum} — the image contract (§13.3);</li>
+ * <li>{@code command -v git rg flock sha256sum base64} — the image contract (§13.3);</li>
  * <li>{@code uname -s}, lower-cased, equals the declared platform; {@code uname -sr} matches the declared OS version
  * as a glob ({@code Linux 6.x} reads as {@code Linux 6.*}) when one is declared;</li>
  * <li>not root and no service-account token — skipped when {@code HARDENED_SECURITY_CONTEXT} is waived;</li>
@@ -128,8 +128,8 @@ final class SandboxSeeder {
                 .append("; }\n");
         // The mount contract (§13.3): without it the lock below cannot even be opened.
         s.append("[ -d /workspace ] && [ -w /workspace ] || fail workspace '/workspace is missing or not writable'\n");
-        s.append("for t in git rg flock sha256sum; do command -v \"$t\" >/dev/null 2>&1 || fail image-contract "
-                + "\"the image lacks $t (it must provide git, rg, flock and sha256sum)\"; done\n");
+        s.append("for t in git rg flock sha256sum base64; do command -v \"$t\" >/dev/null 2>&1 || fail image-contract "
+                + "\"the image lacks $t (it must provide git, rg, flock, sha256sum and base64)\"; done\n");
         // bash (not in POSIX mode) carries on after a failed exec redirection; flock would then report the missing
         // fd as lock contention, a transient failure retried forever.
         s.append("exec 8>/workspace/.aimon-seed.lock || fail workspace 'cannot open /workspace/.aimon-seed.lock'\n");

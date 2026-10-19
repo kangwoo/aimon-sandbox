@@ -21,7 +21,7 @@
 #
 # It is pinned to `0.3.3-SNAPSHOT` for `EnvironmentRequest#requestAttributes()` (kangwoo/aimon-core#252), the
 # recorded session owner and `SessionLifecycleListener` (kangwoo/aimon-core#253) and `ExecutionEnvironment.drainNotices()`
-# (kangwoo/aimon-core#254), resolved from Central's snapshot repository (the filtered block in build.gradle.kts). That
+# (kangwoo/aimon-core#254), and `ShellFeature.RUN_DIRECTORY` (kangwoo/aimon-core#275), resolved from Central's snapshot repository (the filtered block in build.gradle.kts). That
 # is a release blocker: scripts/release.sh refuses while any catalog version is a SNAPSHOT. Raising it to the released
 # 0.3.3 and deleting the repository block is a separate act, done together.
 [versions]
