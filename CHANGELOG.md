@@ -9,6 +9,13 @@ Requires aimon-core **0.3.3**. Until core releases it, `main` pins `0.3.3-SNAPSH
 which `scripts/release.sh` refuses to release
 ([`docs/design/workspace-sandbox-core-033.md`](docs/design/workspace-sandbox-core-033.md)).
 
+### Changed: follow core's run-directory cap and refusals (kangwoo/aimon-core#283)
+
+- `SandboxShell` takes a run directory's ceiling from core's `RunDirectory.MAX_TOTAL_BYTES` (4 MiB) instead of its own
+  8 MiB guess.
+- Core's `RunDirectory.Builder` now refuses control characters and file/directory overlaps itself, so the sandbox's
+  matching checks are a backstop; `SandboxShellRunDirectoryIT` pins the core refusal instead of the sandbox's.
+
 ### Added: run directories for hooks, and hook runs off the shell directory (#33, kangwoo/aimon-core#275)
 
 - **`SandboxShell` declares `ShellFeature.RUN_DIRECTORY`.** Core hands a hook its files as bytes

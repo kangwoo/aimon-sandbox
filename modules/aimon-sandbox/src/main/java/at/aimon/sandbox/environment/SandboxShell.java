@@ -147,8 +147,8 @@ final class SandboxShell implements VirtualShell {
     static final Duration TRAILER_KILL_GRACE = Duration.ofMillis(500);
     /** How often the trailer's kill looks again for a command that {@code run(...)} has not returned yet. */
     private static final Duration TRAILER_KILL_POLL = Duration.ofMillis(10);
-    /** A run directory's ceiling: core caps one at 4 MiB; the slack is for a core that raises it. */
-    static final long MAX_RUN_DIRECTORY_BYTES = 8L * 1024 * 1024;
+    /** A run directory's ceiling: core's, which its builder enforces. */
+    static final long MAX_RUN_DIRECTORY_BYTES = RunDirectory.MAX_TOTAL_BYTES;
     /** The exit code of a process group the watchdog killed: 128 + SIGKILL. */
     private static final int KILLED_EXIT = 137;
     private static final SecureRandom RANDOM = new SecureRandom();
@@ -252,9 +252,11 @@ final class SandboxShell implements VirtualShell {
     }
 
     /**
-     * The checks of a run directory that core makes too ({@link ShellFeature#RUN_DIRECTORY}), plus the sandbox's own:
-     * a newline or carriage return in a path cannot be a line of the {@code sha256sum} manifest, and the bytes must
-     * fit an upload. All are a bad argument, never the integrity failure.
+     * The checks of a run directory that core makes too ({@link ShellFeature#RUN_DIRECTORY}). Since core #283 its
+     * builder also refuses control characters (so no newline, carriage return or NUL reaches a {@code sha256sum}
+     * manifest line), file/directory overlaps and more than {@link RunDirectory#MAX_TOTAL_BYTES}; the matching checks
+     * here are kept as a backstop. Only confinement and placement failures the filesystem itself raises (a letter-case
+     * collision) remain the sandbox's own. All are a bad argument, never the integrity failure.
      */
     private static void checkRunDirectory(RunDirectory run) throws ShellExecutionException {
         if (!ShellWrapper.invalidNames(List.of(run.getVariable())).isEmpty()) {

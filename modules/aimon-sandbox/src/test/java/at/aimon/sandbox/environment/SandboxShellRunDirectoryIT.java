@@ -240,13 +240,10 @@ class SandboxShellRunDirectoryIT {
     }
 
     @Test
-    @DisplayName("22: a file and a directory of the same name collide on any filesystem; the command does not run")
-    void aFileAndADirectoryOfTheSameNameAreRefused() throws Exception {
-        assertThatThrownBy(() -> bash(env, "touch /workspace/ran",
-                hook().runDirectory(hookFiles("lib", "file", "lib/x", "child")).build()))
-                .isExactlyInstanceOf(ShellExecutionException.class).hasMessageContaining("cannot place lib/x");
-        assertThat(Files.exists(harness.host(session, "/workspace/ran"))).isFalse();
-        assertThat(leftovers()).isEmpty();
+    @DisplayName("22: a file and a directory of the same name cannot be built; core's builder refuses them (core #283)")
+    void aFileAndADirectoryOfTheSameNameAreRefused() {
+        assertThatThrownBy(() -> hookFiles("lib", "file", "lib/x", "child"))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test
@@ -272,10 +269,9 @@ class SandboxShellRunDirectoryIT {
         final SessionId fresh = SessionId.generate();
         final ExecutionEnvironment unprovisioned = harness.mainTurn(fresh, ALICE);
 
-        assertThatThrownBy(() -> bash(unprovisioned, "true", hook().runDirectory(hookFiles("a\nb", "1")).build()))
-                .isExactlyInstanceOf(ShellExecutionException.class).hasMessageContaining("newline");
-        assertThatThrownBy(() -> bash(unprovisioned, "true", hook().runDirectory(hookFiles("a\rb", "1")).build()))
-                .isExactlyInstanceOf(ShellExecutionException.class).hasMessageContaining("newline");
+        // A newline or carriage return in a path never reaches the shell: core's builder refuses it (core #283).
+        assertThatThrownBy(() -> hookFiles("a\nb", "1")).isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> hookFiles("a\rb", "1")).isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(
                 () -> bash(unprovisioned, "echo " + "x".repeat(ShellWrapper.INLINE_COMMAND_LIMIT), isolated().build()))
                 .isExactlyInstanceOf(ShellExecutionException.class)
