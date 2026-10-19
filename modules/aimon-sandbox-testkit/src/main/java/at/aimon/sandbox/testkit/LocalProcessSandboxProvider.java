@@ -6,13 +6,18 @@ import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.nio.file.attribute.PosixFilePermissions;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.EnumSet;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -140,10 +145,13 @@ public final class LocalProcessSandboxProvider implements SandboxProvider {
         final String sha = Stream
                 .of("/usr/bin/sha256sum", "/sbin/sha256sum", "/usr/local/bin/sha256sum", "/opt/homebrew/bin/sha256sum")
                 .filter(p -> Files.isExecutable(Path.of(p))).findFirst().orElse(null);
-        writeExecutable(shims.resolve("sha256sum"),
-                sha != null
-                        ? "#!/bin/sh\nexec " + sha + " \"$@\"\n"
-                        : "#!/bin/sh\nexec /usr/bin/shasum -a 256 \"$@\"\n");
+        if (sha != null) {
+            // A link, not a script: macOS assesses a freshly written executable on its first run, which can take
+            // longer than a seed's timeout.
+            Files.createSymbolicLink(shims.resolve("sha256sum"), Path.of(sha));
+        } else {
+            linkShared(shims.resolve("sha256sum"), "#!/bin/sh\nexec /usr/bin/shasum -a 256 \"$@\"\n");
+        }
     }
 
     private static void copyResource(String name, Path target) throws IOException {
@@ -151,8 +159,33 @@ public final class LocalProcessSandboxProvider implements SandboxProvider {
             if (in == null) {
                 throw new IOException("missing testkit resource " + name);
             }
-            writeExecutable(target, new String(in.readAllBytes(), StandardCharsets.UTF_8));
+            linkShared(target, new String(in.readAllBytes(), StandardCharsets.UTF_8));
         }
+    }
+
+    /**
+     * Links {@code target} to one host-wide copy of a shim script, keyed by its content: macOS assesses a freshly
+     * written executable on its first run, which under load takes longer than a seed's timeout, so every provider
+     * writing its own copy made each first {@code flock} a stall. A link to a copy that already ran starts at once.
+     */
+    private static void linkShared(Path target, String content) throws IOException {
+        final byte[] bytes = content.getBytes(StandardCharsets.UTF_8);
+        final String key;
+        try {
+            key = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes)).substring(0, 16);
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 is a required JDK algorithm", e);
+        }
+        final Path shared = Path.of(System.getProperty("java.io.tmpdir"), "aimon-sandbox-shims",
+                key + "-" + target.getFileName());
+        if (!Files.isExecutable(shared) || !Arrays.equals(Files.readAllBytes(shared), bytes)) {
+            Files.createDirectories(shared.getParent());
+            // Written aside and moved: a concurrent JVM never runs a half-written shim.
+            final Path temporary = Files.createTempFile(shared.getParent(), key, ".tmp");
+            writeExecutable(temporary, content);
+            Files.move(temporary, shared, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+        }
+        Files.createSymbolicLink(target, shared);
     }
 
     private static void writeExecutable(Path target, String content) throws IOException {
