@@ -44,9 +44,21 @@ import at.aimon.sandbox.workspace.WorkspaceView;
 public final class SandboxWorkspaces {
 
     private final SandboxWorkspaceManager manager;
+    private final SandboxWorkspaceFiles files;
 
     SandboxWorkspaces(SandboxWorkspaceManager manager) {
         this.manager = Objects.requireNonNull(manager, "manager must not be null");
+        this.files = SandboxWorkspaceFiles.owner(manager);
+    }
+
+    /**
+     * The files of a workspace's running sandbox, for a file explorer (docs/design/workspace-sandbox-files.md): every
+     * call needs the use right, never provisions, and records changes with the caller as the actor.
+     *
+     * @return the owner-facing files
+     */
+    public SandboxWorkspaceFiles files() {
+        return files;
     }
 
     /**

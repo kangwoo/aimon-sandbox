@@ -2046,6 +2046,98 @@ public final class SandboxWorkspaceManager {
         return true;
     }
 
+    // ---------------------------------------------------------------------------------------------------------------
+    // files (docs/design/workspace-sandbox-files.md §6.1) — a running sandbox's files, never provisioning
+    // ---------------------------------------------------------------------------------------------------------------
+
+    /**
+     * The files of the workspace's {@code primary} sandbox when it is RUNNING and seeded, for a caller with the use
+     * right. Unlike {@link #connect} it never creates a record, provisions, reopens an idle-closed workspace or waits
+     * for a provisioning: a file explorer looks at what runs, and must not start a sandbox — or reset one the model
+     * would then have to hear about — by looking.
+     *
+     * <p>
+     * <b>Internal.</b> Public only for use across this library's packages: not supported API, and it may change in
+     * any release. Use {@code SandboxWorkspaceFiles}.
+     *
+     * @param id
+     *            the workspace
+     * @param caller
+     *            the principal asking
+     * @return its running sandbox's files
+     * @throws WorkspaceFilesUnavailableException
+     *             with the reason when there is nothing running to reach
+     */
+    public RunningSlotFiles runningFiles(SandboxWorkspaceId id, Principal caller) {
+        return runningFiles(id, Acting.as(callers.callerOf(Optional.ofNullable(caller))));
+    }
+
+    private RunningSlotFiles runningFiles(SandboxWorkspaceId id, Acting acting) {
+        Objects.requireNonNull(id, "id must not be null");
+        final Optional<SandboxWorkspace> found;
+        try {
+            found = store.find(id);
+        } catch (RuntimeException e) {
+            throw WorkspaceFilesUnavailableException
+                    .unreachable("the workspace store cannot be read: " + e.getMessage(), e);
+        }
+        final SandboxWorkspace workspace = found.filter(w -> acting.mayUse(this, w))
+                .orElseThrow(WorkspaceFilesUnavailableException::notFound);
+        if (workspace.state() == WorkspaceState.CLOSING) {
+            throw new WorkspaceFilesUnavailableException(WorkspaceFilesUnavailableException.Reason.CLOSING,
+                    "the sandbox workspace is being closed", null);
+        }
+        if (workspace.state() != WorkspaceState.OPEN) {
+            throw new WorkspaceFilesUnavailableException(
+                    WorkspaceFilesUnavailableException.Reason.CLOSED, "the sandbox workspace is closed ("
+                            + workspace.closeCause().map(Enum::name).orElse("EXPLICIT") + "); its files are gone",
+                    null);
+        }
+        final SandboxSlot slot = workspace.slot(SandboxBinding.PRIMARY)
+                .orElseThrow(() -> WorkspaceFilesUnavailableException.notRunning("it was never provisioned", null));
+        if (slot.state() != SlotState.RUNNING) {
+            throw WorkspaceFilesUnavailableException.notRunning("its slot is " + slot.state(), null);
+        }
+        if (!slot.seeded()) {
+            throw WorkspaceFilesUnavailableException.notRunning("it is being prepared", null);
+        }
+        final SandboxProfile profile = profiles.find(slot.profile())
+                .orElseThrow(() -> new WorkspaceFilesUnavailableException(
+                        WorkspaceFilesUnavailableException.Reason.UNREACHABLE,
+                        "its profile '" + slot.profile() + "' is no longer configured", null));
+        final BoundActivity activity = new BoundActivity(workspace.id(), workspace.owner(), slot, profile);
+        final SandboxConnection connection;
+        try {
+            connection = connections.get(slot.providerRef().orElseThrow());
+        } catch (SandboxNotFoundException e) {
+            activity.markLost();
+            throw WorkspaceFilesUnavailableException.notRunning("the sandbox was lost", e);
+        } catch (SandboxProviderException e) {
+            throw new WorkspaceFilesUnavailableException(WorkspaceFilesUnavailableException.Reason.UNREACHABLE,
+                    "the sandbox cannot be reached: " + e.getMessage(), e);
+        }
+        return new RunningSlotFiles(workspace, slot, connection.files(), activity, () -> activity.touch(false),
+                cause -> emit(SandboxEvent.Type.FILES_CHANGED, workspace, slot, cause, acting.actor(), null));
+    }
+
+    /**
+     * {@link #runningFiles(SandboxWorkspaceId, Principal)} without the use check, recording {@code actor} on every
+     * change.
+     *
+     * <p>
+     * <b>Internal.</b> Public only for use across this library's packages: not supported API, and it may change in
+     * any release. Use {@code SandboxAdministration.files()}.
+     *
+     * @param id
+     *            the workspace
+     * @param actor
+     *            the operator, recorded
+     * @return its running sandbox's files
+     */
+    public RunningSlotFiles adminRunningFiles(SandboxWorkspaceId id, Principal actor) {
+        return runningFiles(id, administrator(actor));
+    }
+
     SandboxProvider provider() {
         return provider;
     }
