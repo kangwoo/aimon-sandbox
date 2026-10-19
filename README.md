@@ -9,6 +9,17 @@ run it that is not the host. The workspace sandbox gives it one without new tool
 picks, provisions and retires. The design is
 [`docs/design/workspace-sandbox.md`](docs/design/workspace-sandbox.md).
 
+## Guides
+
+- [User guide](docs/guide/user-guide.md) — concepts, configuration, managing workspaces, what the model sees,
+  troubleshooting
+- [Installing OpenSandbox on Kubernetes](docs/guide/opensandbox-kubernetes.md) — the chart, the hardened template,
+  network isolation, egress, and checking an install with the k8s test tier
+- [Integrating with aimon-core](docs/guide/aimon-core-integration.md) — wiring through a hand-built runtime,
+  aimon-bootstrap or the Spring Boot starter; session owners, session deletion, close order, hooks
+
+The guides are in Korean.
+
 ## Status
 
 **0.1.0 is the first release** (requires aimon-core 0.3.1; see [`CHANGELOG.md`](CHANGELOG.md)). It contains
