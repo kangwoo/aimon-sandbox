@@ -383,8 +383,9 @@ files.delete(ws.id(), "repo/tmp", true, alice);
 ([설계](../design/workspace-sandbox-files.md)).
 
 - **샌드박스를 띄우지 않는다.** RUNNING 이 아니면 `WorkspaceFilesUnavailableException` 이 나오고 `reason()` 이
-  `NOT_RUNNING` · `CLOSED` · `CLOSING` · `NOT_FOUND` · `UNREACHABLE` 중 하나다. 화면에는 "실행 중인 샌드박스 없음"으로
-  보여 주고, 다시 시도하는 루프를 돌리지 않는다. 열어 보는 것만으로 프로비저닝 · idle reopen · reset 이 일어나지 않으니
+  `NOT_RUNNING` · `CLOSED` · `CLOSING` · `NOT_FOUND` · `UNREACHABLE` 중 하나다. 앞의 넷은 화면에 "실행 중인 샌드박스
+  없음" 같은 상태로 보여 주고, 다시 시도하는 루프를 돌리지 않는다. `UNREACHABLE`(프로바이더나 저장소 장애)만 재시도할
+  만하다. 열어 보는 것만으로 프로비저닝 · idle reopen · reset 이 일어나지 않으니
   모델이 엉뚱한 reset 알림을 받는 일도 없다. 띄우려면 `workspaces.provision(id, caller)` 를 따로 부른다
 - **경로는 `/workspace` 기준 상대 경로다.** `""` 가 `/workspace` 자체다. `..` 로 벗어나는 경로, `/` 로 시작하는
   경로는 `InvalidPathException` 이다. 에이전트 파일 도구의 `repo/x` 와 여기의 `repo/x` 는 기본 root 에서 같은 파일이다
@@ -397,7 +398,11 @@ files.delete(ws.id(), "repo/tmp", true, alice);
   `SandboxEvent.Type.FILES_CHANGED` 를 행위자와 함께 남긴다. 읽기는 활동이 아니다 — 탐색기를 열어 둬도 샌드박스가
   idle 로 닫힌다
 - **모델에게는 알리지 않는다.** 대신 core 의 `Edit` · `Write` 가 "File changed since it was read" 로 거부하므로,
-  사람이 고친 파일을 모델이 모르고 덮어쓰지는 않는다
+  사람이 고친 파일을 모델이 파일 도구로 모르고 덮어쓰지는 않는다. 셸(`sed -i`, `>`)에는 이런 검사가 없다
+- **읽기는 4 MiB 씩 나눠 받는다.** 큰 파일을 내려받아도 호스트 메모리에 통째로 올리지 않는다. 중간에 실패하면
+  스트림의 `read()` 에서 `WorkspaceFilesUnavailableException` 이 나온다
+- `move` 는 대상의 없는 상위 디렉터리를 만든다. 쓰기가 끝난 뒤의 실패(타임아웃 등)는 변경이 이미 반영됐을 수 있고,
+  그때도 `FILES_CHANGED` 는 남는다
 - **업로드 크기 제한은 호스트가 한다.** `write` 의 `length` 는 모르면 `-1`
 - 목록은 `limit`(최대 10 000)을 넘으면 `truncated()` 가 true 이고, 검색은 10만 항목이 넘는 트리에서 실패한다.
   디렉터리 전체 사용량 요약은 없다

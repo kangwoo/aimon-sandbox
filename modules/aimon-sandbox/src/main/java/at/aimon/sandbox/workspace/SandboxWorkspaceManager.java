@@ -2074,7 +2074,14 @@ public final class SandboxWorkspaceManager {
 
     private RunningSlotFiles runningFiles(SandboxWorkspaceId id, Acting acting) {
         Objects.requireNonNull(id, "id must not be null");
-        final SandboxWorkspace workspace = store.find(id).filter(w -> acting.mayUse(this, w))
+        final Optional<SandboxWorkspace> found;
+        try {
+            found = store.find(id);
+        } catch (RuntimeException e) {
+            throw WorkspaceFilesUnavailableException
+                    .unreachable("the workspace store cannot be read: " + e.getMessage(), e);
+        }
+        final SandboxWorkspace workspace = found.filter(w -> acting.mayUse(this, w))
                 .orElseThrow(WorkspaceFilesUnavailableException::notFound);
         if (workspace.state() == WorkspaceState.CLOSING) {
             throw new WorkspaceFilesUnavailableException(WorkspaceFilesUnavailableException.Reason.CLOSING,
@@ -2098,7 +2105,7 @@ public final class SandboxWorkspaceManager {
                 .orElseThrow(() -> new WorkspaceFilesUnavailableException(
                         WorkspaceFilesUnavailableException.Reason.UNREACHABLE,
                         "its profile '" + slot.profile() + "' is no longer configured", null));
-        final SlotActivity activity = activity(workspace, slot, profile);
+        final BoundActivity activity = new BoundActivity(workspace.id(), workspace.owner(), slot, profile);
         final SandboxConnection connection;
         try {
             connection = connections.get(slot.providerRef().orElseThrow());
@@ -2109,7 +2116,7 @@ public final class SandboxWorkspaceManager {
             throw new WorkspaceFilesUnavailableException(WorkspaceFilesUnavailableException.Reason.UNREACHABLE,
                     "the sandbox cannot be reached: " + e.getMessage(), e);
         }
-        return new RunningSlotFiles(workspace, slot, connection.files(), activity,
+        return new RunningSlotFiles(workspace, slot, connection.files(), activity, () -> activity.touch(false),
                 cause -> emit(SandboxEvent.Type.FILES_CHANGED, workspace, slot, cause, acting.actor(), null));
     }
 

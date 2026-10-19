@@ -2,9 +2,10 @@ package at.aimon.sandbox.workspace;
 
 /**
  * Activity recording for one slot generation — the public seam between the environment layer and the manager
- * (docs/design/workspace-sandbox.md §5.3, §10.3). Only reachable through a {@link ConnectedSlot}, i.e. after
- * {@code connect}'s owner check, and bound to the generation and sandbox it was handed out for: once the slot moves on,
- * its writes are no-ops.
+ * (docs/design/workspace-sandbox.md §5.3, §10.3). Only reachable through a {@link ConnectedSlot} or a
+ * {@link RunningSlotFiles}, i.e. after {@code connect}'s or {@code runningFiles}' use check, and bound to the
+ * generation
+ * and sandbox it was handed out for: once the slot moves on, its writes are no-ops.
  * <p>
  * <b>Internal.</b> Public only for use across this library's packages: not supported API, and it may change in
  * any release.

@@ -1886,7 +1886,8 @@ span 속성: `aimon.sandbox.workspace` · `aimon.sandbox.slot` · `aimon.sandbox
 감사는 별도 서브시스템을 만들지 않는다. 명령·파일 쓰기의 감사는 코어의 도구 훅(PostToolUse)과 tracing 이
 이미 남기며, 거기에 위 span 속성이 붙는다. 샌드박스 수명 이벤트(provisioned · paused · terminated · lost ·
 orphan-destroyed · duplicate-destroyed · volume-deleted · workspace-closed · workspace-reopened · workspace-created ·
-workspace-purged · session-options-set · session-options-cleared)는
+workspace-purged · session-options-set · session-options-cleared · files-changed — `SandboxWorkspaceFiles` 로 사람이 바꾼 파일만, 도구 훅이 없으므로.
+[`workspace-sandbox-files.md`](workspace-sandbox-files.md) §8)는
 `SandboxEventListener` 로 내보낸다. 애플리케이션은 그것을 자기 감사 로그로 보낸다. 이벤트는 `workspaceId` · `slot` ·
 `generation` · `owner` · `profile` · 원인을 담고, 주체가 요청한 것 — owner 의 close · reopen · purge 와 운영자의 모든 쓰기,
 그 close 가 낸 terminated 까지 — 에는 `actor`(`tenant/TYPE:id`, 테넌트를 모르면 `TYPE:id`)를, 세션 옵션 이벤트에는

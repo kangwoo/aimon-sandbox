@@ -27,7 +27,10 @@ public final class WorkspaceFilesUnavailableException extends SandboxUnavailable
         CLOSING,
         /** The workspace is closed, after being idle or explicitly; its files are gone. */
         CLOSED,
-        /** The sandbox runs but the provider cannot be reached, or its profile is no longer configured. */
+        /**
+         * The sandbox runs but cannot be reached right now — the provider or the workspace store fails or is busy — or
+         * its profile is no longer configured. Unlike the other reasons, worth retrying.
+         */
         UNREACHABLE
     }
 
@@ -54,6 +57,10 @@ public final class WorkspaceFilesUnavailableException extends SandboxUnavailable
     static WorkspaceFilesUnavailableException notFound() {
         return new WorkspaceFilesUnavailableException(Reason.NOT_FOUND,
                 "the sandbox workspace does not exist or this principal may not use it", null);
+    }
+
+    static WorkspaceFilesUnavailableException unreachable(String message, Throwable cause) {
+        return new WorkspaceFilesUnavailableException(Reason.UNREACHABLE, message, cause);
     }
 
     static WorkspaceFilesUnavailableException notRunning(String why, Throwable cause) {

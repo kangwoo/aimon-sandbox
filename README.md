@@ -207,14 +207,17 @@ files.write(ws.id(), "repo/input.csv", upload, size, false, alice);         // F
 ```
 
 - **It never provisions.** A workspace whose sandbox is not RUNNING throws `WorkspaceFilesUnavailableException` with a
-  `reason()` — `NOT_RUNNING`, `CLOSED`, `CLOSING`, `NOT_FOUND`, `UNREACHABLE` — to show, not retry. Looking never
-  starts a sandbox, reopens an idle-closed workspace or resets one the model would hear about.
+  `reason()`: `NOT_RUNNING`, `CLOSED`, `CLOSING` and `NOT_FOUND` are states to show, not to retry in a loop;
+  `UNREACHABLE` (the provider or the store failing) is worth a retry. Looking never starts a sandbox, reopens an
+  idle-closed workspace or resets one the model would hear about.
+- **Reads stream** 4 MiB at a time, so a large download is not held in memory.
 - **Paths are relative to `/workspace`** and cannot leave it. `/workspace` itself and the sandbox's `.aimon-*`
   entries are read-only.
 - **Use right, like attaching a session.** A session's own `ws:{sessionId}` is browsable by the session's owner.
   `SandboxAdministration.files()` checks nothing and records the operator.
 - **Changes count as activity** (reads do not) and publish `SandboxEvent.Type.FILES_CHANGED`. The model is not told;
-  core's `Edit`/`Write` refuse to overwrite a file changed since the model read it.
+  core's `Edit`/`Write` refuse to overwrite a file changed since the model read it (the agent's shell has no such
+  check).
 
 ### Administration
 

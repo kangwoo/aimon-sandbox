@@ -1,5 +1,7 @@
 package at.aimon.sandbox;
 
+import java.io.ByteArrayInputStream;
+import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.FileSystems;
 import java.nio.file.Path;
@@ -71,6 +73,9 @@ public final class SandboxWorkspaceFiles {
 
     /** The most matches one {@link #search} returns. */
     public static final int MAX_SEARCH = 1_000;
+
+    /** How many bytes {@link #read} fetches from the provider at a time. */
+    public static final int READ_CHUNK = 4 * 1024 * 1024;
 
     /** The most entries a {@link #search} walks before it fails rather than answer from part of the tree. */
     static final int SEARCH_SCAN_LIMIT = 100_000;
@@ -168,7 +173,9 @@ public final class SandboxWorkspaceFiles {
      *            {@link WorkspaceFile#size()}
      * @param caller
      *            the principal asking
-     * @return the bytes; the caller closes the stream
+     * @return the bytes, fetched from the provider {@value #READ_CHUNK} bytes at a time as the caller reads, so a large
+     *         download is never held in memory whole; the caller closes the stream. A fetch that fails throws
+     *         {@link WorkspaceFilesUnavailableException} from {@code read()}
      * @throws FileNotFoundException
      *             when it does not exist
      * @throws InvalidPathException
@@ -185,17 +192,16 @@ public final class SandboxWorkspaceFiles {
         if (stat.directory()) {
             throw new InvalidPathException(path, "is a directory");
         }
-        return files.call(f -> f.read(absolute(relative), offset, length));
+        return new ChunkedRead(files, absolute(relative), offset, length);
     }
 
     /**
-     * Files and directories under {@code directory}, at any depth, whose name matches {@code pattern}. A pattern with
-     * a glob character ({@code *}, {@code ?}, {@code [} or <code>{</code>) is a glob over the name, as core's
-     * {@code Glob} reads it; any other pattern matches names that contain it, ignoring case.
+     * Files and directories under {@code directory}, at any depth, whose name matches {@code pattern}. The pattern is
+     * sanitised as core's {@code Glob} sanitises it; if {@code *} or {@code ?} is left, it is a glob over the name,
+     * otherwise it matches names that contain it, ignoring case.
      *
      * @param id
      *            the workspace
-     *
      * @param directory
      *            where to look; {@code ""} for {@code /workspace}
      * @param pattern
@@ -228,6 +234,10 @@ public final class SandboxWorkspaceFiles {
         }
         final List<WorkspaceFile> found = new ArrayList<>();
         for (FileStat stat : tree) {
+            if (stat.path().equals(absolute(relative))) {
+                // A provider that lists the directory itself: it is where the search looks, not a match.
+                continue;
+            }
             final WorkspaceFile file = view(stat);
             if (matcher.matches(file.name())) {
                 found.add(file);
@@ -251,7 +261,7 @@ public final class SandboxWorkspaceFiles {
      * @param path
      *            the file
      * @param content
-     *            the bytes; read to its end, not closed
+     *            the bytes; the provider reads it to its end and closes it
      * @param length
      *            how many bytes {@code content} holds, or {@code -1} when unknown. A host caps uploads itself
      * @param overwrite
@@ -263,6 +273,9 @@ public final class SandboxWorkspaceFiles {
      *             when it exists and {@code overwrite} is false
      * @throws InvalidPathException
      *             when a directory is at the path
+     * @throws WorkspaceFilesUnavailableException
+     *             when the provider fails; the file may have been written, and {@code FILES_CHANGED} is published
+     *             whenever the write itself returned
      */
     public WorkspaceFile write(SandboxWorkspaceId id, String path, InputStream content, long length, boolean overwrite,
             Principal caller) {
@@ -282,9 +295,10 @@ public final class SandboxWorkspaceFiles {
                     overwrite ? WriteMode.CREATE_OR_REPLACE : WriteMode.CREATE_NEW);
             return null;
         });
-        final WorkspaceFile written = statAfter(files, relative, path);
-        files.changed((existing.isPresent() ? "replaced " : "wrote ") + relative + " (" + written.size() + " bytes)");
-        return written;
+        // Published before the stat that follows: the file is written even if that stat fails.
+        files.changed((existing.isPresent() ? "replaced " : "wrote ") + relative
+                + (length >= 0 ? " (" + length + " bytes)" : ""));
+        return statAfter(files, relative, path);
     }
 
     /**
@@ -355,6 +369,17 @@ public final class SandboxWorkspaceFiles {
             throw new FileAlreadyExistsException(to, SANDBOX);
         }
         files.beforeChange();
+        final int slash = target.lastIndexOf('/');
+        if (slash > 0) {
+            // Not every provider's move creates the destination's parents (the SPI does not promise it): do it here.
+            final String parent = absolute(target.substring(0, slash));
+            if (files.call(f -> f.stat(parent)).isEmpty()) {
+                files.call(f -> {
+                    f.createDirectories(parent);
+                    return null;
+                });
+            }
+        }
         files.call(f -> {
             f.move(absolute(source), absolute(target), overwrite);
             return null;
@@ -478,16 +503,95 @@ public final class SandboxWorkspaceFiles {
         }
 
         static NameMatcher of(String pattern) {
-            if (pattern.chars().anyMatch(c -> c == '*' || c == '?' || c == '[' || c == '{')) {
-                // Core's own sanitising, so this search and core's Glob never read a pattern differently.
-                return new NameMatcher(
-                        FileSystems.getDefault().getPathMatcher("glob:" + SearchPatterns.sanitize(pattern)), null);
+            // Core's own sanitising, so this search and core's Glob never read a pattern differently. It strips what
+            // it does not allow ([, {), so whether a glob is meant is decided on what is left.
+            final String sanitized = SearchPatterns.sanitize(pattern);
+            if (sanitized.indexOf('*') >= 0 || sanitized.indexOf('?') >= 0) {
+                return new NameMatcher(FileSystems.getDefault().getPathMatcher("glob:" + sanitized), null);
             }
             return new NameMatcher(null, pattern.toLowerCase(Locale.ROOT));
         }
 
         boolean matches(String name) {
             return glob != null ? glob.matches(Path.of(name)) : name.toLowerCase(Locale.ROOT).contains(substring);
+        }
+    }
+
+    /**
+     * A file read {@value #READ_CHUNK} bytes at a time, each fetch a provider call with the same failure mapping as
+     * every other. It ends at the requested length or at the first short chunk — the end of the file as it is now.
+     */
+    private static final class ChunkedRead extends InputStream {
+        private final RunningSlotFiles files;
+        private final String path;
+        /** Bytes still to read; negative reads to the end. */
+        private long remaining;
+        private long position;
+        private InputStream chunk;
+        private long chunkLeft;
+        private boolean lastChunk;
+        private boolean closed;
+
+        private ChunkedRead(RunningSlotFiles files, String path, long offset, long length) {
+            this.files = files;
+            this.path = path;
+            this.position = offset;
+            this.remaining = length;
+        }
+
+        /** @return false at the end */
+        private boolean ready() throws IOException {
+            if (closed) {
+                throw new IOException("stream closed");
+            }
+            while (chunk == null || chunkLeft == 0) {
+                chunk = null;
+                if (lastChunk || remaining == 0) {
+                    return false;
+                }
+                final long ask = remaining < 0 ? READ_CHUNK : Math.min(READ_CHUNK, remaining);
+                final byte[] bytes;
+                try (InputStream in = files.call(f -> f.read(path, position, ask))) {
+                    bytes = in.readNBytes((int) ask);
+                }
+                lastChunk = bytes.length < ask;
+                if (bytes.length == 0) {
+                    return false;
+                }
+                chunk = new ByteArrayInputStream(bytes);
+                chunkLeft = bytes.length;
+                position += bytes.length;
+                if (remaining > 0) {
+                    remaining -= bytes.length;
+                }
+            }
+            return true;
+        }
+
+        @Override
+        public int read() throws IOException {
+            final byte[] one = new byte[1];
+            return read(one, 0, 1) < 0 ? -1 : one[0] & 0xff;
+        }
+
+        @Override
+        public int read(byte[] buffer, int offset, int length) throws IOException {
+            Objects.checkFromIndexSize(offset, length, buffer.length);
+            if (length == 0) {
+                return 0;
+            }
+            if (!ready()) {
+                return -1;
+            }
+            final int n = chunk.read(buffer, offset, (int) Math.min(length, chunkLeft));
+            chunkLeft -= n;
+            return n;
+        }
+
+        @Override
+        public void close() {
+            closed = true;
+            chunk = null;
         }
     }
 }

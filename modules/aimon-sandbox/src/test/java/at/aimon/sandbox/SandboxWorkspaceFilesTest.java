@@ -403,4 +403,131 @@ class SandboxWorkspaceFilesTest {
         assertThat(reasonOf(() -> adminFiles().list(SandboxWorkspaceId.of("wsm:missing"), "", 10, OPERATOR)))
                 .isEqualTo(Reason.NOT_FOUND);
     }
+
+    // ----------------------------------------------------------------------------------------------------------------
+    // review of PR #40
+    // ----------------------------------------------------------------------------------------------------------------
+
+    @Test
+    @DisplayName("PR #40 review: only top-level .aimon-* is read-only, however the path is spelled")
+    void onlyTopLevelReservedEntriesAreReadOnly() {
+        assertThatThrownBy(() -> files().write(ws, "repo/../.aimon-shell/x", bytes("x"), 1, true, ALICE))
+                .isInstanceOf(FileAccessDeniedException.class);
+        assertThatThrownBy(() -> files().createDirectory(ws, ".aimon-anything", ALICE))
+                .isInstanceOf(FileAccessDeniedException.class);
+
+        final WorkspaceFile nested = files().write(ws, "repo/.aimon-notes", bytes("n"), 1, false, ALICE);
+
+        assertThat(nested.readOnly()).isFalse();
+    }
+
+    @Test
+    @DisplayName("PR #40 review: a read larger than one chunk streams across chunks, ranges included")
+    void readsAcrossChunks() throws IOException {
+        final int size = SandboxWorkspaceFiles.READ_CHUNK * 2 + 123;
+        final byte[] content = new byte[size];
+        for (int i = 0; i < size; i++) {
+            content[i] = (byte) (i * 31);
+        }
+        final Path big = host("/workspace/repo/big.bin");
+        Files.createDirectories(big.getParent());
+        Files.write(big, content);
+        harness.faults.resetCounts();
+
+        try (InputStream in = files().read(ws, "repo/big.bin", 0, -1, ALICE)) {
+            assertThat(in.readAllBytes()).isEqualTo(content);
+        }
+        assertThat(harness.faults.calls(Operation.FILES_READ)).isEqualTo(3);
+
+        final long from = SandboxWorkspaceFiles.READ_CHUNK - 10L;
+        try (InputStream in = files().read(ws, "repo/big.bin", from, 20, ALICE)) {
+            assertThat(in.readAllBytes()).isEqualTo(java.util.Arrays.copyOfRange(content, (int) from, (int) from + 20));
+        }
+        try (InputStream in = files().read(ws, "repo/big.bin", size + 5L, -1, ALICE)) {
+            assertThat(in.read()).isEqualTo(-1);
+        }
+    }
+
+    @Test
+    @DisplayName("PR #40 review: a fetch that fails mid-stream is UNREACHABLE, not a raw provider exception")
+    void aFailedChunkFetchIsMapped() throws IOException {
+        hostWrite("/workspace/repo/a.txt", "abc");
+        harness.faults.injectOnce(Operation.FILES_READ, Fault.fail(SandboxProviderException.Kind.TRANSIENT));
+
+        try (InputStream in = files().read(ws, "repo/a.txt", 0, -1, ALICE)) {
+            assertThat(reasonOf(() -> {
+                try {
+                    in.read();
+                } catch (IOException e) {
+                    throw new java.io.UncheckedIOException(e);
+                }
+            })).isEqualTo(Reason.UNREACHABLE);
+        }
+    }
+
+    @Test
+    @DisplayName("PR #40 review: a write that landed publishes FILES_CHANGED even when the stat after it fails")
+    void aWriteThatLandedIsPublishedEvenIfTheStatAfterFails() throws IOException {
+        harness.faults.resetCounts();
+        // The first stat is the precondition check; the second is the one after the write.
+        harness.faults.injectAt(Operation.FILES_STAT, 2, Fault.fail(SandboxProviderException.Kind.TRANSIENT));
+
+        assertThat(reasonOf(() -> files().write(ws, "repo/landed.txt", bytes("abc"), 3, false, ALICE)))
+                .isEqualTo(Reason.UNREACHABLE);
+        assertThat(Files.readString(host("/workspace/repo/landed.txt"))).isEqualTo("abc");
+        assertThat(fileEvents()).extracting(SandboxEvent::cause).containsExactly("wrote repo/landed.txt (3 bytes)");
+    }
+
+    @Test
+    @DisplayName("PR #40 review: move creates the destination's missing parents")
+    void moveCreatesMissingParents() throws IOException {
+        hostWrite("/workspace/repo/d/inner.txt", "i");
+
+        files().move(ws, "repo/d", "repo/archive/2026/d", false, ALICE);
+
+        assertThat(Files.readString(host("/workspace/repo/archive/2026/d/inner.txt"))).isEqualTo("i");
+        assertThat(Files.exists(host("/workspace/repo/d"))).isFalse();
+    }
+
+    @Test
+    @DisplayName("PR #40 review: bracket characters core strips do not turn a search into an exact glob")
+    void bracketsInAPatternStayASubstring() throws IOException {
+        hostWrite("/workspace/repo/report[1].txt", "r");
+
+        assertThat(files().search(ws, "repo", "report[1]", 10, ALICE)).extracting(WorkspaceFile::path)
+                .containsExactly("repo/report[1].txt");
+        assertThat(files().search(ws, "repo", "port", 10, ALICE)).extracting(WorkspaceFile::path)
+                .containsExactly("repo/report[1].txt");
+    }
+
+    @Test
+    @DisplayName("PR #40 review: a CLOSING workspace and a slot not yet seeded answer without waiting or provisioning")
+    void closingAndNotSeeded() {
+        final var record = harness.store.find(ws).orElseThrow();
+        final var slot = record.slot("primary").orElseThrow();
+        final var unseeded = harness.store.update(ws, record.version(),
+                record.withSlot(slot.toBuilder().seeded(false).build()));
+        final int sandboxes = harness.local.sandboxCount();
+
+        assertThat(reasonOf(() -> files().list(ws, "", 10, ALICE))).isEqualTo(Reason.NOT_RUNNING);
+
+        harness.store.update(ws, unseeded.version(), unseeded.toBuilder().state(WorkspaceState.CLOSING).build());
+
+        assertThat(reasonOf(() -> files().list(ws, "", 10, ALICE))).isEqualTo(Reason.CLOSING);
+        assertThat(harness.local.sandboxCount()).isEqualTo(sandboxes);
+    }
+
+    @Test
+    @DisplayName("PR #40 review: a change that finds the sandbox gone on the expiry push changes nothing")
+    void aChangeFindingTheSandboxGoneChangesNothing() {
+        harness.clock.advance(Duration.ofMinutes(5));
+        harness.faults.injectOnce(Operation.EXTEND_EXPIRY, Fault.notFound());
+
+        assertThat(reasonOf(() -> files().write(ws, "repo/x.txt", bytes("x"), 1, false, ALICE)))
+                .isEqualTo(Reason.NOT_RUNNING);
+        assertThat(Files.exists(host("/workspace/repo/x.txt"))).isFalse();
+        assertThat(fileEvents()).isEmpty();
+        assertThat(harness.store.find(ws).orElseThrow().slot("primary").orElseThrow().state())
+                .isEqualTo(SlotState.TERMINATED);
+    }
 }

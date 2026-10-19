@@ -1,6 +1,6 @@
 # Workspace files design — a file explorer's backend for a workspace's running sandbox
 
-> Status: **DRAFT r1** — implemented with this document; not yet reviewed.
+> Status: **r2** — implemented with this document; revised after the PR #40 review (§11 maps each finding).
 >
 > Scope: a host-facing API to list, stat, read, search, write, create, move and delete files under `/workspace` of a
 > workspace's running `primary` sandbox, for a person using a file explorer, not for an agent. It adds no provider
@@ -159,11 +159,19 @@ generation; every provider call through it gets the same mapping.
 - `list` stats the directory (missing → `FileNotFoundException`, a file → `InvalidPathException`), asks the provider
   for `limit + 1` entries without recursion, and reports `truncated` when it got more than `limit`. It sorts what it
   keeps; which entries made the cut is the provider's order.
-- `read` stats first (missing, directory) and returns the provider's ranged stream.
+- `read` stats first (missing, directory) and returns a stream that fetches the file **4 MiB at a time**
+  (`READ_CHUNK`) with ranged provider reads as the caller reads, so a download is never held in host memory whole —
+  OpenSandbox's files API answers a range as one byte array. Each fetch is a provider call with the usual mapping, so
+  a failure mid-download surfaces from `read()` as `WorkspaceFilesUnavailableException`. The stream ends at the asked
+  length or at the first short chunk; a file that grows during the download is read as far as it was when that chunk
+  was fetched.
 - `search` walks the tree under `directory` with one recursive listing of at most 100 000 entries — more fails, as
-  `ProviderFileSystem` does, rather than answer from part of the tree — and matches each entry's **name**. A pattern
-  with a glob character (`* ? [ {`) is a glob, sanitised by core's `SearchPatterns` so it reads as core's `Glob`
-  would; any other pattern is a case-insensitive substring, which is what a search box means. Directories match too.
+  `ProviderFileSystem` does, rather than answer from part of the tree — and matches each entry's **name**. The pattern
+  is first sanitised by core's `SearchPatterns`, so it reads as core's `Glob` would; if a `*` or `?` is left it is a
+  glob, otherwise the original pattern is a case-insensitive substring, which is what a search box means (`[` and `{`,
+  which core strips, therefore do not turn `report[1]` into an exact match). Directories match too; the searched
+  directory itself, should a provider list it, does not. OpenSandbox's recursive listing stops at depth 64, so deeper
+  entries are not searched.
 
 Reads record no activity: an explorer left open does not keep a sandbox from its idle close.
 
@@ -190,15 +198,21 @@ and can make `repo/x` a symlink to `.aimon-shell`, which the provider follows li
    and the provider expiry, like an agent's file call). A sandbox found gone here is `NOT_RUNNING`;
 2. make the change;
 3. publish `SandboxEvent.Type.FILES_CHANGED` with the workspace, slot, generation, the actor and a cause naming the
-   operation and path(s), e.g. `wrote repo/in/data.csv (4 bytes)`, `moved repo/a to repo/b`. A no-op
-   (`createDirectory` of an existing directory) publishes nothing.
+   operation and path(s), e.g. `wrote repo/in/data.csv (4 bytes)` (the length the caller gave; none when `-1`),
+   `moved repo/a to repo/b`. It is published as soon as the change returned, before the `stat` that builds the
+   result, so a failure of that stat cannot hide a change that was made. A no-op (`createDirectory` of an existing
+   directory) publishes nothing.
+
+A failure in step 1 that is not a lost sandbox — the workspace store busy past its CAS retries, or failing — is
+`UNREACHABLE`, never "lost": the sandbox is fine and a retry may work. `move` creates the destination's missing
+parents itself before it moves, because the SPI does not promise that a provider's move does.
 
 The checks and the change are not atomic: an agent running at the same time can change the same path in between, and
 the provider's own answer then decides (`CREATE_NEW` still refuses an existing file). The model is not told that a
 person changed something. Core's `Edit` and `Write` refuse to overwrite a file whose `modifiedAt`/`etag` changed since
-the model read it ("File changed since it was read; Read it again", core `FileStamps`), so the usual collision
-surfaces as a stale-read error for the model, not a silent overwrite. Hosts that want
-the model to know can tell it in the next prompt.
+the model read it ("File changed since it was read; Read it again", core `FileStamps`), so a collision with the
+model's file tools surfaces as a stale-read error, not a silent overwrite. The agent's shell (`sed -i`, `>`) has no
+such check. Hosts that want the model to know can tell it in the next prompt.
 
 `write` takes `length` as the provider does (`-1` when unknown); the host caps upload size before calling.
 
@@ -216,7 +230,9 @@ nothing, requires the actor and records it, like every other `SandboxAdministrat
 | Situation | Result |
 |---|---|
 | sandbox expired at the provider between record read and call | slot marked lost, `NOT_RUNNING`; the next agent turn recreates it |
-| provider down or slow | `UNREACHABLE`; nothing written |
+| provider down or slow before the change | `UNREACHABLE`; nothing changed |
+| provider fails during or after the change (a timeout after the write ran) | `UNREACHABLE`; the change may have landed — `FILES_CHANGED` is published whenever the provider call returned |
+| workspace store busy or failing on the activity write | `UNREACHABLE`; nothing changed; the slot stays RUNNING |
 | idle close runs while a person browses | next call `CLOSED`; nothing reopened |
 | person writes while the agent edits the same file | the person's write lands; the agent's next `Edit`/`Write` is refused as stale |
 | directory with more than `limit` entries | first `limit` in provider order, `truncated = true` |
@@ -224,8 +240,14 @@ nothing, requires the actor and records it, like every other `SandboxAdministrat
 
 ## 8. Departures from WS
 
-None. WS §6.1's files API and §8.3's use right are applied as they are. `FILES_CHANGED` is a new event type, which
-WS §14 leaves open.
+WS §6.1's files API and §8.3's use right are applied as they are. One departure:
+
+- **`FILES_CHANGED` is a lifecycle-adjacent event for file writes.** WS rejects a unified workspace event stream
+  (commands, file changes, commits) because the audit of an agent's command and file writes already comes from core's
+  tool hooks (PostToolUse) and tracing (WS §14, rejected alternatives). A person's change through this API has no
+  tool call and so no hook: without this event it would leave no audit at all. It stays one event per change on the
+  existing `SandboxEventListener`, with the same fields as the other actor-bearing events — not a stream with its own
+  store, order or retention. Agent writes still publish nothing. WS §14's list of events gains `files-changed`.
 
 ## 9. Test strategy
 
@@ -237,6 +259,7 @@ WS §14 leaves open.
   refused, into itself, missing source), delete (non-empty refused, recursive), the `FILES_CHANGED` causes and actor;
 - read-only rule and path rules (`..`, absolute, NUL, normalisation);
 - activity: reads leave `lastActivityAt`, a change moves it;
+- review 1: the cases §11 lists, and `StoreFailureFilesTest` for a failing workspace store;
 - no provisioning: a terminated slot stays terminated with no new sandbox, a closed workspace stays closed, a session's
   workspace is not created by looking and is browsable after its first command;
 - provider faults: not-found marks lost, a transient failure is `UNREACHABLE` and changes nothing;
@@ -251,3 +274,25 @@ No docker-tier test is added: every provider call used is covered by `SandboxPro
 - **Telling the model.** A host-chosen notice on the session's next tool result (`PendingNotices`) would need a
   session to attach it to; a workspace can have many or none.
 - **Slots and `/shared`.** With step 5 the API grows a slot parameter and a second root.
+- **A file-level stat error on OpenSandbox.** `OpenSandboxFiles.stat` treats only 404 as "absent". If execd answers
+  another status for a path through a file (`a.txt/b`, `ENOTDIR`), it surfaces as `UNREACHABLE`. Not verified
+  against execd; pin it with a docker-tier case before relying on the reason there.
+
+## 11. Review 1 (PR #40) — resolution
+
+| Finding | Resolution |
+|---|---|
+| `write` could change a file yet publish nothing and report failure (stat before event) | event before the result stat; cause uses the caller's length (§6.4); §7 no longer says "nothing written" |
+| a busy/interrupted/failing store on the activity write reported "lost" (`NOT_RUNNING`) | `RunningSlotFiles.beforeChange` reads `touch`'s live flag: false is `NOT_RUNNING`, a thrown store failure `UNREACHABLE`; `runningFiles` wraps store read failures too |
+| downloads buffered whole in host memory on OpenSandbox | chunked ranged reads, 4 MiB at a time (§6.2) |
+| design said "no departures" though WS rejects a file-change stream | §8 records the departure and why; WS §14's list gains `files-changed` |
+| `move` without overwrite into a missing parent not promised by the SPI | `move` creates the parents itself (§6.4) |
+| file-level stat error on OpenSandbox maps to `UNREACHABLE` (uncertain) | left open (§10): needs execd's actual status |
+| `write` javadoc said the stream is not closed | corrected: the provider reads and closes it |
+| `[`/`{` triggered a glob that core then stripped | glob decided after sanitising, on `*`/`?` only |
+| OpenSandbox's recursive depth cap undocumented | §6.2 |
+| stale `SlotActivity` javadoc | names `RunningSlotFiles` too |
+| README told callers never to retry any reason | only `NOT_RUNNING`/`CLOSED`/`CLOSING`/`NOT_FOUND`; `UNREACHABLE` is retryable |
+| stale-read guarantee overstated | the file tools refuse; the agent's shell can still overwrite |
+| test gaps | added: path spellings, chunked and failing reads, event after a failed stat, move into new parents, bracket search, `CLOSING`, unseeded, lost on the expiry push, failing store (`StoreFailureFilesTest`) |
+

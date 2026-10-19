@@ -1,6 +1,7 @@
 package at.aimon.sandbox.workspace;
 
 import java.util.Objects;
+import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -23,14 +24,16 @@ public final class RunningSlotFiles {
     private final SandboxSlot slot;
     private final SandboxFiles files;
     private final SlotActivity activity;
+    private final BooleanSupplier touch;
     private final Consumer<String> changed;
 
     RunningSlotFiles(SandboxWorkspace workspace, SandboxSlot slot, SandboxFiles files, SlotActivity activity,
-            Consumer<String> changed) {
+            BooleanSupplier touch, Consumer<String> changed) {
         this.workspace = Objects.requireNonNull(workspace, "workspace must not be null");
         this.slot = Objects.requireNonNull(slot, "slot must not be null");
         this.files = Objects.requireNonNull(files, "files must not be null");
         this.activity = Objects.requireNonNull(activity, "activity must not be null");
+        this.touch = Objects.requireNonNull(touch, "touch must not be null");
         this.changed = Objects.requireNonNull(changed, "changed must not be null");
     }
 
@@ -60,17 +63,20 @@ public final class RunningSlotFiles {
 
     /**
      * Records a change as activity — throttled like an agent's file call, so it pushes the idle close and the provider
-     * expiry out — before the change is made.
+     * expiry out — before the change is made. A sandbox the expiry push finds gone is {@code NOT_RUNNING}; a busy or
+     * failing store is {@code UNREACHABLE}, never "lost".
      */
     public void beforeChange() {
-        guarded(() -> {
-            try {
-                activity.record(false);
-            } catch (SandboxUnavailableException e) {
-                throw WorkspaceFilesUnavailableException.notRunning("the sandbox was lost", e);
-            }
-            return null;
-        });
+        final boolean live;
+        try {
+            live = touch.getAsBoolean();
+        } catch (RuntimeException e) {
+            throw WorkspaceFilesUnavailableException
+                    .unreachable("the sandbox workspace record cannot be updated right now: " + e.getMessage(), e);
+        }
+        if (!live) {
+            throw WorkspaceFilesUnavailableException.notRunning("the sandbox was lost", null);
+        }
     }
 
     /**
@@ -90,8 +96,7 @@ public final class RunningSlotFiles {
             activity.markLost();
             throw WorkspaceFilesUnavailableException.notRunning("the sandbox was lost", e);
         } catch (SandboxProviderException e) {
-            throw new WorkspaceFilesUnavailableException(WorkspaceFilesUnavailableException.Reason.UNREACHABLE,
-                    "the sandbox cannot be reached: " + e.getMessage(), e);
+            throw WorkspaceFilesUnavailableException.unreachable("the sandbox cannot be reached: " + e.getMessage(), e);
         }
     }
 }

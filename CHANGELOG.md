@@ -14,15 +14,17 @@ which `scripts/release.sh` refuses to release
 - **`SandboxWorkspaceFiles`**, from `SandboxWorkspaces.files()` (use right) and `SandboxAdministration.files()` (no
   check, actor recorded): `stat`, `list` (one level, directories first, `truncated` past the limit), ranged `read`,
   name `search` (glob or case-insensitive substring), `write` (create-new or overwrite), `createDirectory`, `move` and
-  `delete` under `/workspace` of a workspace's `primary` sandbox
+  `delete` under `/workspace` of a workspace's `primary` sandbox. Reads stream in 4 MiB ranged fetches
   ([`docs/design/workspace-sandbox-files.md`](docs/design/workspace-sandbox-files.md)).
 - **It reaches only a RUNNING, seeded sandbox** and never creates, provisions, reopens or waits:
   `WorkspaceFilesUnavailableException.reason()` says `NOT_FOUND`, `NOT_RUNNING`, `CLOSING`, `CLOSED` or
-  `UNREACHABLE`. A sandbox found gone is marked lost, as from a file tool.
+  `UNREACHABLE` (only this one is worth retrying: the provider or the workspace store failing or busy). A sandbox found
+  gone is marked lost, as from a file tool.
 - **Paths are relative to `/workspace`**; `..` out of it, absolute paths and NUL bytes are `InvalidPathException`.
   `/workspace` itself and the top-level `.aimon-*` entries are read-only (`FileAccessDeniedException`).
 - **Changes** record activity like an agent's file call (reads do not) and publish the new
-  `SandboxEvent.Type.FILES_CHANGED` with the actor and the operation in `cause()`. A listener that switches over
+  `SandboxEvent.Type.FILES_CHANGED` with the actor and the operation in `cause()`, as soon as the change returned. It
+  is for a person's changes only (a departure from WS's lifecycle-only events: such a change has no tool hook). A listener that switches over
   `SandboxEvent.Type` exhaustively sees a new constant.
 - New views `WorkspaceFile` and `WorkspaceFileListing`.
 
