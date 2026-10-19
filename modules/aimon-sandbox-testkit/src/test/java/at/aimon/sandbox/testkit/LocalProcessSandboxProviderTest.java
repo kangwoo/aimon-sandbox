@@ -7,8 +7,10 @@ import java.io.ByteArrayInputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.time.Duration;
 import java.util.Map;
+import java.util.stream.Stream;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -152,6 +154,27 @@ class LocalProcessSandboxProviderTest {
                     .await(Duration.ofSeconds(10));
             assertThat(rg.exitCode()).isEqualTo(2);
             assertThat(new String(rg.stderr(), StandardCharsets.UTF_8)).contains("ripgrep is not installed");
+        }
+    }
+
+    @Test
+    void shimsAreSharedOnlyThroughADirectoryOfThisUsersOwnClosedToOthers(@TempDir Path dir) throws Exception {
+        final Path own = dir.resolve("own");
+        final Path links = Files.createDirectory(dir.resolve("links"));
+
+        LocalProcessSandboxProvider.linkShared(links.resolve("a"), "#!/bin/sh\necho a\n", own);
+        assertThat(Files.isSymbolicLink(links.resolve("a"))).isTrue();
+        assertThat(Files.getPosixFilePermissions(own)).isEqualTo(PosixFilePermissions.fromString("rwx------"));
+        assertThat(Files.readString(links.resolve("a"))).isEqualTo("#!/bin/sh\necho a\n");
+
+        // A directory others can write (a shared /tmp's): the provider keeps its own copy instead.
+        final Path open = Files.createDirectory(dir.resolve("open"));
+        Files.setPosixFilePermissions(open, PosixFilePermissions.fromString("rwxrwxrwx"));
+        LocalProcessSandboxProvider.linkShared(links.resolve("b"), "#!/bin/sh\necho b\n", open);
+        assertThat(Files.isSymbolicLink(links.resolve("b"))).isFalse();
+        assertThat(Files.isExecutable(links.resolve("b"))).isTrue();
+        try (Stream<Path> entries = Files.list(open)) {
+            assertThat(entries).isEmpty();
         }
     }
 

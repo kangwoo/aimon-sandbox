@@ -46,7 +46,9 @@ import at.aimon.sandbox.workspace.SandboxWorkspaceManager;
  * <li>Under a node-local lock per {@code (sandbox, target)}, verify an existing copy <i>inside the sandbox</i>: one
  * stateless exec (fixed {@code PATH}, {@code /usr/bin/sha256sum}) recomputes the content key over the expected file
  * list with core's algorithm and lists the files; the copy is reused only when the key matches and the file set is
- * exactly the resource's plus the marker. A marker alone proves nothing — the shell can write here.</li>
+ * exactly the resource's plus the marker. A marker alone proves nothing — the shell can write here. Verified on every
+ * call — core's {@code ExecutionEnvironment.stage()} contract since EE-109; never trusted because an earlier call
+ * checked it.</li>
  * <li>Otherwise copy into {@code .tmp-{key}-{nonce}}, re-hashing the bytes as they are copied (a skill changed on
  * disk after it was loaded is refused, as core refuses it), write the marker last, and move the directory into place.
  * The target only ever appears complete.</li>
@@ -134,7 +136,8 @@ final class SandboxStaging {
         }
     }
 
-    private static boolean confined(String relPath) {
+    /** A relative path with no empty, {@code .} or {@code ..} segment and no backslash: it stays below its base. */
+    static boolean confined(String relPath) {
         if (relPath.isEmpty() || relPath.startsWith("/") || relPath.contains("\\")) {
             return false;
         }

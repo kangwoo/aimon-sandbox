@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
@@ -19,6 +20,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import at.aimon.core.agent.DefaultAgent;
+import at.aimon.core.agent.InvokerType;
 import at.aimon.core.agent.impl.orca.OrcaAgentExecutionRequest;
 import at.aimon.core.agent.impl.orca.OrcaAgentExecutionResult;
 import at.aimon.core.agent.impl.orca.OrcaAgentExecutor;
@@ -30,11 +32,15 @@ import at.aimon.core.agent.tool.DefaultToolExecutionManager;
 import at.aimon.core.agent.tool.DefaultToolRegistry;
 import at.aimon.core.command.DefaultCommandExecutionManager;
 import at.aimon.core.command.DefaultCommandRegistry;
+import at.aimon.core.environment.ExecutionEnvironment;
+import at.aimon.core.environment.StagedResource;
+import at.aimon.core.filesystem.VirtualFileSystems;
 import at.aimon.core.filesystem.impl.local.LocalFileSystem;
 import at.aimon.core.filesystem.impl.local.LocalFileSystemConfig;
 import at.aimon.core.hook.DefaultHookExecutionManager;
 import at.aimon.core.hook.DefaultHookRegistry;
 import at.aimon.core.hook.HookEventType;
+import at.aimon.core.hook.event.PreToolContext;
 import at.aimon.core.llm.LlmCallMetadata;
 import at.aimon.core.llm.LlmClient;
 import at.aimon.core.llm.LlmModel;
@@ -48,9 +54,14 @@ import at.aimon.core.skill.Skill;
 import at.aimon.core.skill.SkillContent;
 import at.aimon.core.skill.SkillMetadata;
 import at.aimon.core.skill.SkillRegistry;
+import at.aimon.core.skill.hook.action.HookScriptDirectory;
+import at.aimon.core.skill.hook.action.ShellAction;
+import at.aimon.core.skill.hook.declarative.DeclarativePreToolHook;
 import at.aimon.core.skill.hook.declarative.DefaultShellActionExecutor;
 import at.aimon.core.skill.hook.declarative.IsolatedShellActionExecutor;
 import at.aimon.core.skill.hook.declarative.ShellActionExecutor;
+import at.aimon.core.skill.hook.declarative.ShellHookOutcome;
+import at.aimon.core.skill.hook.declarative.predicate.NameOnlyPredicate;
 import at.aimon.core.skill.parser.MarkdownSkillParser;
 import at.aimon.core.skill.parser.SkillHookSetParser;
 import at.aimon.core.skill.render.ShellArgumentTokenizer;
@@ -332,6 +343,54 @@ class OrcaRuntimeSandboxE2ETest {
         assertThat(harness.host(session, "/workspace/repo/src/hook-saw.txt")).doesNotExist();
         assertThat(recorder.runs).filteredOn(spec -> spec.command().contains("hook-saw.txt")).hasSize(2)
                 .allMatch(spec -> !spec.command().contains("flock") && spec.command().contains("\" iso '"));
+    }
+
+    @Test
+    @DisplayName("#33: a hooks.json guard running \"$AIMON_HOOK_DIR/guard.sh\" runs in the sandbox and blocks with exit 2")
+    void hooksJsonGuardFromItsHookDirectoryRunsAndBlocks() throws Exception {
+        // Before RUN_DIRECTORY this handler was not run on the sandbox (RUN_DIRECTORY_UNSUPPORTED): blocked unread.
+        final Path layer = Files.createDirectories(tempDir.resolve("project/.aimon/hooks")).getParent();
+        Files.writeString(layer.resolve("hooks/guard.sh"), "echo \"guarded from $AIMON_HOOK_DIR\" >&2; exit 2\n");
+        hookRegistry.register(HookEventType.PRE_TOOL,
+                new DeclarativePreToolHook(
+                        "hooks.json", NameOnlyPredicate.ANY, new ShellAction("bash \"$AIMON_HOOK_DIR/guard.sh\"",
+                                Duration.ofSeconds(10), HookScriptDirectory.of(layer, "hooks-project")),
+                        new IsolatedShellActionExecutor()));
+        llm.respond(LlmResponse.tools(List.of(ToolUse.of("t1", "Bash", Map.of("command", "echo x > blocked.txt")))));
+        llm.respond(LlmResponse.text("Acknowledged."));
+        final SessionId session = SessionId.generate();
+
+        final OrcaAgentExecutionResult result = executor.execute(runtime(), OrcaAgentExecutionRequest.builder()
+                .userInput("go").sessionId(session).principal(SandboxHarness.ALICE).build());
+
+        assertThat(result.isSuccess()).as(result.getErrorMessage()).isTrue();
+        assertThat(llm.toolResults).anyMatch(text -> text.contains("guarded from /workspace/.aimon-shell/.run."));
+        assertThat(harness.host(session, "/workspace/repo/blocked.txt")).doesNotExist();
+        assertThat(recorder.runs).filteredOn(spec -> spec.command().contains("guard.sh")).singleElement()
+                .matches(spec -> spec.command().contains("\" iso '") && !spec.command().contains("$r.out"));
+        assertThat(harness.host(session, "/workspace/.aimon-staged")).isEmptyDirectory();
+    }
+
+    @Test
+    @DisplayName("#33: a skill hook's AIMON_SKILL_DIR is a private run directory, not a staged copy")
+    void aSkillHooksDirectoryIsAPrivateRunDirectory() throws Exception {
+        final Path source = Files.createDirectories(tempDir.resolve("skills/demo/scripts"));
+        Files.writeString(source.resolve("check.sh"), "echo skill-script\n");
+        final StagedResource skill = StagedResource.scan(VirtualFileSystems.readOnlyLocal(tempDir.resolve("skills")),
+                "demo", "demo");
+        final SessionId session = SessionId.generate();
+        final ExecutionEnvironment environment = harness.mainTurn(session, SandboxHarness.ALICE);
+
+        final ShellHookOutcome outcome = new DefaultShellActionExecutor().run(
+                new ShellAction("echo \"$AIMON_SKILL_DIR\"; bash \"$AIMON_SKILL_DIR/scripts/check.sh\"",
+                        Duration.ofSeconds(10)),
+                PreToolContext.builder().executorType(InvokerType.MAIN_AGENT).invokerName("agent")
+                        .hookRegistry(new DefaultHookRegistry()).executionEnvironment(environment)
+                        .toolUse(ToolUse.of("call-1", "Bash", Map.of())).iterationCount(1).build(),
+                Map.of(), null, Optional.of(skill));
+
+        assertThat(outcome.getStdout()).startsWith("/workspace/.aimon-shell/.run.").endsWith("/d\nskill-script\n");
+        assertThat(harness.host(session, "/workspace/.aimon-staged/demo")).doesNotExist();
     }
 
     @Test

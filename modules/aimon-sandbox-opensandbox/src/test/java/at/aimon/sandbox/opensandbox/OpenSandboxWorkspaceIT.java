@@ -26,9 +26,11 @@ import at.aimon.core.environment.EnvironmentRequest;
 import at.aimon.core.environment.ExecutionEnvironment;
 import at.aimon.core.environment.ExecutionEnvironments;
 import at.aimon.core.shell.ExecutionOptions;
+import at.aimon.core.shell.RunDirectory;
 import at.aimon.core.shell.ShellCancellationSource;
 import at.aimon.core.shell.ShellCommandResult;
 import at.aimon.core.shell.ShellFeature;
+import at.aimon.core.shell.exception.RunDirectoryIntegrityException;
 import at.aimon.core.shell.exception.ShellCancelledException;
 import at.aimon.core.shell.exception.ShellExecutionException;
 import at.aimon.core.shell.exception.ShellTimeoutException;
@@ -42,6 +44,8 @@ import at.aimon.sandbox.provider.OutputSink;
 import at.aimon.sandbox.provider.ProviderSandboxRef;
 import at.aimon.sandbox.provider.ResourceSpec;
 import at.aimon.sandbox.provider.SandboxConnection;
+import at.aimon.sandbox.provider.SandboxProvider;
+import at.aimon.sandbox.testkit.FaultInjectingSandboxProvider;
 import at.aimon.sandbox.testkit.ManualClock;
 import at.aimon.sandbox.testkit.ManualScheduler;
 import at.aimon.sandbox.workspace.InMemorySandboxWorkspaceStore;
@@ -53,7 +57,8 @@ import at.aimon.sandbox.workspace.SandboxWorkspaceStore;
  * {@code WorkspaceSandbox} end to end on a real OpenSandbox server (Docker runtime) — the implementation-step-4 rows of
  * docs/design/workspace-sandbox.md §16 that need the real server: labels accepted for a {@code ws:{uuid}} workspace,
  * shell state across calls, timeout kill, cancellation of a running background command, reconciliation of a restarted
- * node's orphan, resource limits, and the line normalization of output.
+ * node's orphan, resource limits, the line normalization of output, and hook runs with their run directories
+ * (kangwoo/aimon-sandbox#33).
  */
 @Tag("docker")
 class OpenSandboxWorkspaceIT {
@@ -89,6 +94,10 @@ class OpenSandboxWorkspaceIT {
     }
 
     private WorkspaceSandbox assembly(SandboxProfile profile, SandboxWorkspaceStore store) {
+        return assembly(profile, store, provider);
+    }
+
+    private WorkspaceSandbox assembly(SandboxProfile profile, SandboxWorkspaceStore store, SandboxProvider provider) {
         final SandboxSettings settings = SandboxSettings.builder().deployment(OpenSandboxTestServer.DEPLOYMENT)
                 .nodeId("it-" + UUID.randomUUID()).profiles(List.of(profile)).defaultProfile(profile.name())
                 .closeWait(Duration.ofSeconds(20)).build();
@@ -232,5 +241,88 @@ class OpenSandboxWorkspaceIT {
             assertThat(new String(outcome.stdout(), StandardCharsets.UTF_8)).isEqualTo("x\nyA\nB\n\nC\n");
             assertThat(new String(outcome.stderr(), StandardCharsets.UTF_8)).isEqualTo("�\n");
         }
+    }
+
+    @Test
+    @DisplayName("#33: RUN_DIRECTORY inline, uploaded, tampered; a hook's & job killed at its trailer; timeout")
+    void hookAndIsolatedRunsOnARealServer() throws Exception {
+        // One sandbox for every row: provisioning it is the expensive part, and its seed checks base64 too. Faults
+        // are injected only for the tamper row.
+        final FaultInjectingSandboxProvider faults = new FaultInjectingSandboxProvider(provider);
+        final WorkspaceSandbox assembly = assembly(profile().build(), new InMemorySandboxWorkspaceStore(), faults);
+        final ExecutionEnvironment env = mainTurn(assembly, SessionId.generate());
+        final ExecutionOptions.Builder hook = ExecutionOptions.builder().timeout(Duration.ofSeconds(60)).hook(true);
+        final String large = "x".repeat(40 * 1024);
+        final RunDirectory files = RunDirectory.builder().variable("AIMON_HOOK_DIR")
+                .file("guard.sh", "echo guarded\n".getBytes(StandardCharsets.UTF_8))
+                .file("lib/스크립트.txt", "한글".getBytes(StandardCharsets.UTF_8)).build();
+        final RunDirectory uploaded = RunDirectory.builder().variable("AIMON_HOOK_DIR")
+                .file("big", large.getBytes(StandardCharsets.UTF_8)).build();
+
+        final ShellCommandResult inline = env.shell().execute(
+                () -> "bash \"$AIMON_HOOK_DIR/guard.sh\"; cat \"$AIMON_HOOK_DIR/lib/스크립트.txt\"; echo; echo \"$AIMON_HOOK_DIR\"",
+                hook.isolated(true).runDirectory(files).build());
+        assertThat(inline.stdout()).startsWith("guarded\n한글\n/workspace/.aimon-shell/.run.").endsWith("/d\n");
+        assertThat(env.shell().execute(() -> "wc -c < \"$AIMON_HOOK_DIR/big\"", hook.runDirectory(uploaded).build())
+                .stdout()).isEqualTo(large.length() + "\n");
+        assertThat(bash(env, "ls -A /workspace/.aimon-shell | grep -c '^\\.run\\.' || true").stdout())
+                .as("no private directory left").isEqualTo("0\n");
+
+        // execd holds the exec open while any holder of its streams lives: the kill on the trailer ends it.
+        final long started = System.nanoTime();
+        final ShellCommandResult backgrounded = env.shell().execute(() -> "sleep 30 & echo done",
+                ExecutionOptions.builder().timeout(Duration.ofSeconds(60)).hook(true).build());
+        assertThat(backgrounded.stdout()).isEqualTo("done\n");
+        assertThat(Duration.ofNanos(System.nanoTime() - started)).isLessThan(Duration.ofSeconds(10));
+
+        // Many stdout lines then an immediate exit: the drain grace lets execd forward them before the kill.
+        final ShellCommandResult lines = env.shell().execute(() -> "seq 1 40000",
+                ExecutionOptions.builder().timeout(Duration.ofSeconds(60)).hook(true).isolated(true).build());
+        assertThat(lines.stdout()).startsWith("1\n2\n").endsWith("\n39999\n40000\n");
+        assertThat(lines.stdout().split("\n")).hasSize(40000);
+        assertThat(lines.outputTruncated()).isFalse();
+
+        final ShellCommandResult exact = env.shell().execute(() -> "printf 'a\\nb\\n'; printf 'e\\n' >&2; exit 2",
+                ExecutionOptions.builder().timeout(Duration.ofSeconds(60)).hook(true).isolated(true).build());
+        assertThat(exact.stdout()).isEqualTo("a\nb\n");
+        assertThat(exact.stderr()).isEqualTo("e\n");
+        assertThat(exact.exitCode()).isEqualTo(2);
+
+        // The timeout of a stream run is the JVM's clock plus execd's report of the watchdog's SIGKILL (137): were it
+        // reported otherwise, a hook's timeout would read as a wrapper failure, which a failOpen guard passes.
+        assertThatThrownBy(() -> env.shell().execute(() -> "echo started; sleep 30",
+                ExecutionOptions.builder().timeout(Duration.ofSeconds(1)).hook(true).isolated(true).build()))
+                .isInstanceOfSatisfying(ShellTimeoutException.class,
+                        e -> assertThat(e.stdout()).isEqualTo("started\n"));
+
+        // A same-uid writer rewrites the uploaded blob in the window between the upload and the exec — held open here
+        // by a delay on the exec — and the wrapper's digest check refuses it: the command does not run.
+        final CompletableFuture<Object> writer = CompletableFuture.supplyAsync(() -> {
+            try {
+                return env.shell().execute(() -> ": > /workspace/writer-up; for i in $(seq 1 300); do"
+                        + " for f in /workspace/.aimon-shell/*/run-*.blob; do [ -f \"$f\" ] && echo Zm9yZ2Vk > \"$f\";"
+                        + " done; sleep 0.05; done",
+                        ExecutionOptions.builder().timeout(Duration.ofMinutes(2)).background(true).build());
+            } catch (ShellExecutionException e) {
+                return e;
+            }
+        });
+        final long deadline = System.nanoTime() + Duration.ofSeconds(30).toNanos();
+        while (!env.fileSystem().exists("/workspace/writer-up") && System.nanoTime() < deadline) {
+            Thread.sleep(100);
+        }
+        faults.inject(FaultInjectingSandboxProvider.Operation.RUN,
+                FaultInjectingSandboxProvider.Fault.delay(Duration.ofSeconds(3)));
+        try {
+            assertThatThrownBy(
+                    () -> env.shell().execute(() -> "touch /workspace/ran", hook.runDirectory(uploaded).build()))
+                    .isExactlyInstanceOf(RunDirectoryIntegrityException.class);
+        } finally {
+            faults.clear();
+        }
+        assertThat(env.fileSystem().exists("/workspace/ran")).isFalse();
+        assertThat(bash(env, "ls -A /workspace/.aimon-shell | grep -c '^\\.run\\.' || true").stdout())
+                .as("no private directory left").isEqualTo("0\n");
+        writer.cancel(true);
     }
 }

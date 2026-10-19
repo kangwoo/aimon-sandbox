@@ -90,6 +90,12 @@ SessionSpec.builder().lifecycleListener(sandbox.sessionLifecycleListener());   /
   options and told on the session's next tool result, a turn later if need be, so a custom `SessionOptionsStore` must
   persist `unannouncedReset`
   ([`docs/design/workspace-sandbox-unannounced-reset.md`](docs/design/workspace-sandbox-unannounced-reset.md)).
+- **Hooks get their files for the run, and a hook's background jobs end with it.** The sandbox shell declares
+  `RUN_DIRECTORY`: a `hooks.json` handler that runs `"$AIMON_HOOK_DIR/…"` now runs in the sandbox, and a skill hook's
+  `AIMON_SKILL_DIR` is a private directory placed and digest-checked for that run. Hook and isolated runs keep no
+  files in `/workspace/.aimon-shell/{h}/` and their exec is killed once the hook has ended, so a `cmd &` a hook leaves
+  behind is killed with it. Sandbox images must provide `base64` in `/usr/bin`
+  ([`docs/design/workspace-sandbox-run-directory.md`](docs/design/workspace-sandbox-run-directory.md)).
 
 - **Use `shared(...)`, not `provider(Supplier)`.** The host owns the `WorkspaceSandbox` and closes it; the stack
   must not. `ExecutionEnvironmentSpec.factory` no longer exists in aimon-core 0.3.1.

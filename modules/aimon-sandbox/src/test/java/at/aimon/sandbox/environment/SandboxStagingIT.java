@@ -109,6 +109,17 @@ class SandboxStagingIT {
     }
 
     @Test
+    @DisplayName("EE-109: a copy this instance staged and the agent rewrote is checked again and copied again")
+    void aCopyRewrittenBetweenTwoStagesIsCopiedAgain() throws Exception {
+        final String target = env.stage(skill);
+        // The agent's shell, as the same uid: rewrite a staged file in place, nothing added.
+        bash(env, "printf tampered > " + ShellWrapper.quote(target + "/run.sh"));
+
+        assertThat(env.stage(skill)).isEqualTo(target);
+        assertThat(harness.hostFile(session, target + "/run.sh")).isEqualTo("echo genuine\n");
+    }
+
+    @Test
     void aPredictedKeyWithAPlantedMarkerIsNotTrusted() throws Exception {
         bash(env,
                 "mkdir -p " + target() + " && echo planted > " + target() + "/run.sh && mkdir -p " + target()
