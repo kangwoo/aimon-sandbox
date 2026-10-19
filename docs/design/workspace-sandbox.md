@@ -864,6 +864,7 @@ INNER:
   base = export -p                                            # profile env, execd variables
   read cmd < run.cmd
   . state, or cd root for a new shell                         # restore cwd and exported variables
+                                                              # (iso: never . state, always cd root)
   readonly __aimon_*                                          # the wrapper's own state, out of the command's reach
   trap 'save cwd + (exported variables minus unchanged base) atomically (tmp + mv)' EXIT   # fg only
   eval "$cmd"                                                 # same process: cd / export persist
@@ -954,13 +955,24 @@ INNER:
   shellKey 의 다음 명령이 기다리지 않는다. 도는 동안은 heartbeat 가 활동을 기록한다(§5.3, 상한 `backgroundHeartbeatLimit`).
   명령은 `backgroundCommandTimeout`(§5.3)에서 끝나고, 그 전에는 모델이 코어의 `KillShell` 로 끝낼 수 있다
 - **훅의 명령도 락을 잡지 않는다.** 코어가 `ExecutionOptions.isHook()` 을 켜서 넘긴 명령(셸 훅 — 코어
-  `ShellActionRunner`. 샌드박스 셸에 닿는 것은 스킬이 선언한 훅이고, `hooks.json` 훅은 호스트 셸에서 돈다 — §12.1)은
+  `ShellActionRunner`. 스킬이 선언한 훅이다 — `hooks.json` 훅은 다음 항목의 격리 실행으로 온다, §12.1)은
   백그라운드 명령과 같은 길로 돈다 — 세션의 cwd·환경 변수에서 시작하고, 락을 기다리지 않고, 상태를 저장하지 않는다. 훅은
   모델의 명령 사이에 런타임이 끼워 넣는 것이라 모델의 셸을 잡을 이유가 없다(§12.1). 다른 점은 워치독 하나다 — 래퍼가
   포그라운드와 같은 워치독을 띄워 명령을 훅 액션의 타임아웃에서 끝낸다. exec 최후 방어선(타임아웃 + 5초)에만 맡기면 훅이
   5초 늦게 끝난다. 타임아웃이 코어의 훅 정책 시한(기본 30초) 이상이면 — 셸 훅의 기본 타임아웃이 바로 30초다 — 코어가 훅에
   건 바깥 시한(선언한 예산 + 5초)과 같은 순간이라 둘이 경주한다. heartbeat 는 백그라운드 쪽이다(락이 없으니 락의
   heartbeat 파일은 쓰지 않는다)
+- **격리 실행은 세션의 상태를 읽지도 않는다.** 코어(0.3.3, 코어 #273)는 운영자의 `hooks.json` 명령을 실행 중 이벤트
+  (`preTool`, `postTool` …)에서 그 실행의 환경으로 보내며 `ExecutionOptions.isIsolated()` 와 `isHook()` 을 함께 켜고,
+  셸이 `ShellFeature.ISOLATED_EXECUTION` 을 선언하지 않으면 명령을 돌리지 않는다(가드는 `failOpen` 이 아니면 막는다).
+  `SandboxShell` 은 이 기능을 선언한다. 격리 명령은 훅과 같은 길 — 락 없음, 저장 없음, 워치독 — 로 돌되, 안쪽 bash 가
+  `iso` 모드로 상태 파일을 읽지 않고 새 셸처럼 root 에서 시작한다(root 가 없으면 같은 fallback). 명령별 작업 디렉터리가
+  있으면 그리로 간다. 환경은 기준 환경(프로파일의 exec 환경, execd 가 준 변수, `GIT_SSL_CAINFO`)과 명령별 변수뿐이고, 세션
+  에서 오는 것은 없다. 이유는 정책 훅이다 — 훅의 명령은 세션의 cwd·export 에서 시작하므로, 그대로라면 모델이 `PATH` ·
+  `BASH_ENV` · `LD_PRELOAD` 를 export 하거나 `cd` 해서 자기를 감시하는 운영자의 훅을 조종할 수 있다. 스킬이 선언한 훅은
+  스킬 자신의 코드이므로 지금처럼 세션 상태에서 시작한다. 기능을 선언하고 지키지 않는 셸은 코어가 알아챌 수 없는 프로바이더
+  버그다(코어 설계 F4) — `SandboxShellIT` 가 모델의 `cd`·`export` 가 격리 명령에 닿지 않고, 그 뒤의 포그라운드 명령에는
+  그대로 남는 것으로 이를 고정한다. 셸 상태 밖에서 남는 위험(run 파일 #33, 코어 F12)과 운영자의 선택은 §12.1 에 있다
 - `maxCaptureBytes` 는 샌드박스 쪽에서 자른다. 래퍼가 실행 파일에서 stdout·stderr 를 각각 상한까지만 내보내고 크기는
   트레일러로 알린다. 수십 MB 로그를 JVM 까지 끌고 와서 자르지 않는다. `ExecSpec.maxCaptureBytes` 는 그 상한에 1 KiB 를
   더한 값이라 프로바이더 쪽 잘림이 트레일러를 자르는 일이 없다
@@ -1551,14 +1563,20 @@ egress 정책이 허용하지 않는 host 의 바인딩을 거부하고 `default
 - **가드는 fail-closed 다.** 샌드박스가 사용 불가(`ExecutionEnvironmentUnavailableException` — 바인딩 거부, 프로비저닝
   실패, 프로바이더 접속 불가)이면 스킬의 `preTool` 셸 가드가 걸린 도구 호출은 이유와 함께 **막히고**, `onStart` 셸 가드가
   있는 스킬 포크는 **시작하지 않는다**(코어 EE-51 · EE-70). 관찰만 하는 훅에는 `failOpen: true` 를 준다. `hooks.json` 의
-  훅은 호스트 셸에서 돌고 샌드박스의 가용성과 무관하다
+  훅도 실행 중 이벤트이면 코어(#273)가 그 실행의 환경에서 격리 실행으로 돌리므로(§9) 샌드박스에서 돈다. 호스트 셸에서 도는
+  것은 `"shell": "host"` 를 준 핸들러, `"shell"` 없이 `asyncRewake` 를 선언한 핸들러(다시 깨울 수 있는 이벤트에서, 코어가
+  WARN 을 남긴다 — 코어 EE-48 §2.1 (*)), 실행이 없는 발화뿐이다. 격리 실행이 막는 것은 셸 상태(cwd · export)까지다 — 명령의
+  run 파일(`.aimon-shell`, #33)과 코어가 스테이징한 `AIMON_HOOK_DIR`(코어 F12)은 여전히 에이전트가 쓸 수 있으므로, 에이전트의
+  손이 닿으면 안 되는 스크립트에는 `"shell": "host"` 를 준다
 - **가드의 판정은 샌드박스에서 나온다.** 훅 명령의 상대 경로는 샌드박스의 루트를 기준으로 하고, 종료 코드 2 는 도구
   호출을 막는다
 - **훅은 모델의 셸 세션 밖에서 돈다.** 코어(0.3.2 부터)가 훅 명령에 `ExecutionOptions.isHook()` 을 싣고, `SandboxShell`
   은 그 명령을 셸 락 없이 돌린다(§9). 그래서 모델의 명령이 셸을 쥐고 있어도 가드가 "shell is busy" 를 만나 차단으로 읽는
   일이 없다. 훅은 세션의 cwd 와 환경 변수에서 시작하지만, 그 `cd` 와 `export` 는 남지 않는다 — 코어가 훅마다
   `AIMON_*` 변수를 붙여 넘기므로 래퍼가 명령을 서브셸에서 돌리고, 상태는 저장되지도 않는다. `OrcaRuntimeSandboxE2ETest`
-  가 실제 `OrcaAgentExecutor` 로, 훅의 실행이 락을 잡지 않고 모델의 셸 상태를 바꾸지 않는 것을 확인한다
+  가 실제 `OrcaAgentExecutor` 로, 훅의 실행이 락을 잡지 않고 모델의 셸 상태를 바꾸지 않는 것을 확인한다. `hooks.json` 의
+  명령은 한 걸음 더 나아가 모델의 cwd·export 를 읽지도 않는다(격리 실행, §9) — 같은 테스트가 코어의
+  `IsolatedShellActionExecutor` 로 만든 가드로 확인한다
 
 ### 12.2 쿼터
 
@@ -1928,6 +1946,8 @@ CI 워크플로가 없으므로 "4단계의 첫 CI" 는 아직 오지 않았다(
 | 명령이 `sleep 600 &` 같은 자손을 남기고 끝남 → 같은 shellKey 의 다음 명령 | 락 대기 없이 바로 돈다 | 3 |
 | 명령 타임아웃 5초, 앞 명령이 락을 3초 더 쥠 | 락 대기는 타임아웃에 들어가지 않는다 | 3 |
 | 백그라운드 명령 실행 중 같은 세션의 다음 `Bash` | 기다리지 않고 바로 돈다 | 3 |
+| `cd src && export X=1 BASH_ENV=…` → 격리 명령(`ExecutionOptions.isIsolated()`) → 다음 `Bash` | 격리 명령은 root 에서 돌고 `X` · `BASH_ENV` 가 없다. 다음 `Bash` 는 여전히 `src`, `X=1`(격리 명령은 저장하지 않는다) | #31 |
+| 포그라운드 명령이 셸 락을 쥔 동안 격리 명령 | 기다리지 않고 바로 돈다 | #31 |
 | 백그라운드 명령이 `backgroundHeartbeatLimit` 넘게 돔 | 그 뒤 idle 정책대로 전이. 백그라운드 명령은 셸 락 heartbeat 를 갱신하지 않음 | 3 |
 | 도는 백그라운드 명령에 취소 신호 | 명령과 그룹에 남은 자식이 끝나고, 그때까지의 출력을 실은 `ShellCancelledException`. SIGTERM 을 무시하는 명령도 끝난다 | 코어 0.3.1 |
 | 도는 포그라운드 명령에 취소 신호 | 같은 예외와 notice. 다음 명령은 직전 셸 상태로, 락 대기 없이 돈다 | 코어 0.3.1 |

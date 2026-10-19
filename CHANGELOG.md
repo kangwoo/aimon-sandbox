@@ -9,6 +9,18 @@ Requires aimon-core **0.3.3**. Until core releases it, `main` pins `0.3.3-SNAPSH
 which `scripts/release.sh` refuses to release
 ([`docs/design/workspace-sandbox-core-033.md`](docs/design/workspace-sandbox-core-033.md)).
 
+### Added: isolated execution for `hooks.json` commands (#31, kangwoo/aimon-core#273)
+
+- **`SandboxShell` declares `ShellFeature.ISOLATED_EXECUTION`.** Core runs an operator's `hooks.json` command on an
+  in-execution event (`preTool`, `postTool`, …) in the execution's environment only on a shell that declares it; until
+  now the sandbox did not, so with `HookHotReloadBootstrap` and this provider every tool call a `hooks.json` guard
+  matched was blocked unless the handler said `"shell": "host"`.
+- An isolated command (`ExecutionOptions.isIsolated()`) runs like a hook's — no session lock, no state save, the
+  watchdog at its own timeout — but starts as a new shell would: in the root (or its own working directory), with the
+  profile's exec environment and its own variables. It never reads the session's state file, so the model's `cd` and
+  exports (`PATH`, `BASH_ENV`, `LD_PRELOAD`) cannot steer an operator's policy hook. Skill-declared hooks are unchanged:
+  they still start from the session's cwd and exports.
+
 ### Changed: the session owner is read alone (kangwoo/aimon-core#262)
 
 - `SessionOwnerLookup.recorded(...)` (and so `WorkspaceSandbox.Builder.sessionRecords(...)`) reads the owner with core's

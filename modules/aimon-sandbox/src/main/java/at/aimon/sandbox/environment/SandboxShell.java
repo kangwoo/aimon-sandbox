@@ -61,8 +61,13 @@ import at.aimon.sandbox.workspace.SandboxWorkspaceManager;
  * ({@link ExecutionOptions#isBackground()}) and a hook's command ({@link ExecutionOptions#isHook()}) take no lock
  * and save no state: they start from the session's cwd and exports, and their own {@code cd} and {@code export} end
  * with them. A hook's command keeps the foreground's in-sandbox watchdog, so it ends at its own timeout rather than at
- * the exec's backstop. A timeout or interrupt kills the command's process group; the state from before the command
- * remains, and the result says so.
+ * the exec's backstop. Core marks an operator's {@code hooks.json} command isolated
+ * ({@link ExecutionOptions#isIsolated()}, along with {@code isHook()}) and sends it only to a shell that declares
+ * {@link ShellFeature#ISOLATED_EXECUTION}. Such a command takes the hook's path but starts as a new shell would: in the
+ * root, with the profile's exec environment and its own variables, never the session's cwd or exports, so the model's
+ * {@code cd} and exports cannot steer an operator's policy hook. (Its run files still live in the agent-writable shell
+ * directory: kangwoo/aimon-sandbox#33.) A timeout or interrupt kills the command's process group; the state from before
+ * the command remains, and the result says so.
  *
  * <p>
  * <b>Cancellation</b> ({@link ShellFeature#CANCELLATION}, foreground and background alike). The signal of
@@ -172,9 +177,10 @@ final class SandboxShell implements VirtualShell {
         }
         final ConnectedSlot slot = pending.connect(manager, binding);
         slot.activity().record(false);
-        if (options.isBackground() || options.isHook()) {
-            // Neither may hold the session's shell: a background command outlives the call, and a hook runs on behalf
-            // of the runtime between the model's own commands (§9, §12.1). Both read the session's state, save none.
+        if (options.isBackground() || options.isHook() || options.isIsolated()) {
+            // None may hold the session's shell: a background command outlives the call, and a hook or an isolated
+            // command runs on behalf of the runtime between the model's own commands (§9, §12.1). None saves state;
+            // only an isolated command does not read it either.
             return run(slot, text, options, false);
         }
         final SandboxConnectionCache.Lease lease;
@@ -239,10 +245,13 @@ final class SandboxShell implements VirtualShell {
                 upload(files, runPrefix + ".in", options.getStdin().getBytes(options.getCharset()), "stdin");
                 invocation.stdinPath(runPrefix + ".in");
             }
-            final Mode mode = foreground ? Mode.FOREGROUND : options.isHook() ? Mode.HOOK : Mode.BACKGROUND;
+            final Mode mode = foreground
+                    ? Mode.FOREGROUND
+                    : options.isIsolated() ? Mode.ISOLATED : options.isHook() ? Mode.HOOK : Mode.BACKGROUND;
             final String script = switch (mode) {
                 case FOREGROUND -> ShellWrapper.foreground(invocation);
                 case HOOK -> ShellWrapper.hook(invocation);
+                case ISOLATED -> ShellWrapper.isolated(invocation);
                 case BACKGROUND -> ShellWrapper.background(invocation);
             };
             final Duration backstop = (timeout != null ? timeout : NO_TIMEOUT_BACKSTOP)
@@ -293,7 +302,9 @@ final class SandboxShell implements VirtualShell {
         /** A background command: none of the three; the exec's backstop is its timeout. */
         BACKGROUND,
         /** A hook's command: no lock and no save, but the watchdog, so it ends at its own timeout. */
-        HOOK
+        HOOK,
+        /** An isolated command: a hook's command that does not read the session's state either. */
+        ISOLATED
     }
 
     /** One invocation's identity and limits. */
@@ -597,7 +608,7 @@ final class SandboxShell implements VirtualShell {
     @Override
     public boolean supports(ShellFeature feature) {
         return feature == ShellFeature.PIPE || feature == ShellFeature.REDIRECTION
-                || feature == ShellFeature.CANCELLATION;
+                || feature == ShellFeature.CANCELLATION || feature == ShellFeature.ISOLATED_EXECUTION;
     }
 
     /** Nothing to release: the environment is a view (§3.2). */

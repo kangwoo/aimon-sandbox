@@ -297,6 +297,86 @@ class SandboxShellIT {
         assertThat(Duration.ofNanos(System.nanoTime() - started)).isLessThan(Duration.ofMillis(4000));
     }
 
+    private static ExecutionOptions.Builder isolated() {
+        // As core's hooks.json path sets it: an isolated exec is also a hook's command.
+        return ExecutionOptions.builder().timeout(Duration.ofSeconds(10)).hook(true).isolated(true);
+    }
+
+    @Test
+    @DisplayName("§9: an isolated command sees no cd/export of the session, and saves none of its own")
+    void isolatedCommandNeitherReadsNorSavesTheSessionsState() throws Exception {
+        bash(env, "mkdir -p src && cd src && export SEEN=yes BASH_ENV=/workspace/repo/evil PATH=/nowhere:$PATH");
+
+        final ShellCommandResult isolated = bash(env,
+                "pwd; echo \"[$SEEN] [${BASH_ENV-}]\"; case :$PATH: in *:/nowhere:*) echo steered;; esac;"
+                        + " export ISO=1; cd /tmp",
+                isolated().build());
+        final ShellCommandResult next = bash(env, "pwd; echo \"SEEN=$SEEN ISO=$ISO\"");
+
+        assertThat(isolated.stdout()).isEqualTo("/workspace/repo\n[] []\n");
+        assertThat(next.stdout()).as("the session's state is untouched")
+                .isEqualTo("/workspace/repo/src\nSEEN=yes ISO=\n");
+    }
+
+    @Test
+    @DisplayName("§9: an isolated command starts in the root wherever the session's shell is, or in its own directory")
+    void isolatedCommandStartsInTheRootOrItsOwnWorkingDirectory() throws Exception {
+        bash(env, "mkdir -p /workspace/repo/sub && cd /workspace");
+
+        final ShellCommandResult rooted = bash(env, "pwd", isolated().build());
+        final ShellCommandResult scoped = bash(env, "pwd; echo $ONLY",
+                isolated().workingDirectory("/workspace/repo/sub").environment(Map.of("ONLY", "here")).build());
+
+        assertThat(rooted.stdout()).isEqualTo("/workspace/repo\n");
+        assertThat(rooted.notices()).isEmpty();
+        assertThat(scoped.stdout()).isEqualTo("/workspace/repo/sub\nhere\n");
+        assertThat(bash(env, "pwd").stdout()).isEqualTo("/workspace\n");
+    }
+
+    @Test
+    @DisplayName("§9: an isolated command runs while the session's shell is busy, without waiting for its lock")
+    void isolatedCommandTakesNoLock() throws Exception {
+        final Future<ShellCommandResult> model = executor
+                .submit(() -> bash(env, ": > /workspace/model-running; sleep 3; echo done"));
+        awaitHostFile("/workspace/model-running");
+
+        final long started = System.nanoTime();
+        final ShellCommandResult isolated = bash(env, "echo guarded", isolated().build());
+
+        assertThat(isolated.stdout()).isEqualTo("guarded\n");
+        assertThat(Duration.ofNanos(System.nanoTime() - started)).isLessThan(Duration.ofMillis(1500));
+        assertThat(model.isDone()).isFalse();
+        assertThat(model.get(20, TimeUnit.SECONDS).stdout()).isEqualTo("done\n");
+    }
+
+    @Test
+    @DisplayName("§9: isolation alone, without hook(true), still takes no lock and saves nothing")
+    void isolationAloneTakesNoLockAndSavesNothing() throws Exception {
+        final Future<ShellCommandResult> model = executor
+                .submit(() -> bash(env, ": > /workspace/model-running; sleep 3; echo done"));
+        awaitHostFile("/workspace/model-running");
+
+        final long started = System.nanoTime();
+        final ShellCommandResult isolated = bash(env, "export ISO=1; cd /tmp; echo guarded",
+                ExecutionOptions.builder().timeout(Duration.ofSeconds(10)).isolated(true).build());
+
+        assertThat(isolated.stdout()).isEqualTo("guarded\n");
+        assertThat(Duration.ofNanos(System.nanoTime() - started)).isLessThan(Duration.ofMillis(1500));
+        assertThat(model.get(20, TimeUnit.SECONDS).stdout()).isEqualTo("done\n");
+        assertThat(bash(env, "pwd; echo \"ISO=$ISO\"").stdout()).isEqualTo("/workspace/repo\nISO=\n");
+    }
+
+    @Test
+    @DisplayName("§9: an isolated command ends at its own timeout, like a hook's")
+    void isolatedCommandEndsAtItsTimeout() {
+        final long started = System.nanoTime();
+
+        assertThatThrownBy(() -> bash(env, "echo started; sleep 30", isolated().timeout(Duration.ofSeconds(1)).build()))
+                .isInstanceOfSatisfying(ShellTimeoutException.class,
+                        e -> assertThat(e.stdout()).isEqualTo("started\n"));
+        assertThat(Duration.ofNanos(System.nanoTime() - started)).isLessThan(Duration.ofMillis(4000));
+    }
+
     @Test
     void aCommandChangingIfsKeepsEveryPersistedExport() throws Exception {
         bash(env, "export FOO=1 BAR='two words'");
@@ -708,6 +788,11 @@ class SandboxShellIT {
     @Test
     void supportsCancellation() {
         assertThat(env.shell().supports(ShellFeature.CANCELLATION)).isTrue();
+    }
+
+    @Test
+    void supportsIsolatedExecution() {
+        assertThat(env.shell().supports(ShellFeature.ISOLATED_EXECUTION)).isTrue();
     }
 
     @Test
