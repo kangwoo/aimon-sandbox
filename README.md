@@ -55,7 +55,7 @@ Maven Central and still works; its design document was deleted with it and survi
 The dependency runs one way: this repository compiles against a released `at.aimon.core:aimon-core` from
 Maven Central (one line in [`gradle/libs.versions.toml`](gradle/libs.versions.toml)), and aimon-core has no
 reference to anything here. The workspace sandbox implements aimon-core's execution-environment SPI
-(design §7), which aimon-core has since 0.3.1. `main` needs 0.3.3 — pinned as `0.3.3-SNAPSHOT` until it is released —
+(design §7), which aimon-core has since 0.3.1. `main` needs 0.3.3
 for per-request attributes (kangwoo/aimon-core#252), the recorded session owner and the session deletion event
 (kangwoo/aimon-core#253) and environment notices on every tool result (kangwoo/aimon-core#254)
 ([`docs/design/workspace-sandbox-core-033.md`](docs/design/workspace-sandbox-core-033.md)).

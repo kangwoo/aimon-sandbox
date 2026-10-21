@@ -5,9 +5,12 @@ All notable aimon-sandbox changes are recorded here. The format is loosely based
 
 ## [Unreleased]
 
-Requires aimon-core **0.3.3**. Until core releases it, `main` pins `0.3.3-SNAPSHOT` from Central's snapshot repository,
-which `scripts/release.sh` refuses to release
-([`docs/design/workspace-sandbox-core-033.md`](docs/design/workspace-sandbox-core-033.md)).
+Requires aimon-core **0.3.3**
+([`docs/design/workspace-sandbox-core-033.md`](docs/design/workspace-sandbox-core-033.md)). `aimon-sandbox` exposes core
+as an `api` dependency, so upgrading from 0.1.0 also raises core from 0.3.1 to 0.3.3, which core itself declares
+incompatible with 0.3.2 — upgrade it as you would across a minor: the auto-compact buffer and ratio members are gone
+(kangwoo/aimon-core#285), and the session log is written as version 2 by default, so a mixed-version cluster must pin
+`v1` (kangwoo/aimon-core#286). See core's [0.3.3 release notes](https://github.com/kangwoo/aimon-core/releases/tag/v0.3.3).
 
 ### Added: workspace files for a file explorer
 

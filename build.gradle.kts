@@ -8,25 +8,6 @@ allprojects {
 
     repositories {
         mavenCentral()
-        // Only for the aimon-core SNAPSHOT pinned in gradle/libs.versions.toml. Filtered to that group and to
-        // snapshots so no other coordinate, and no release, can be served from here instead of from Central.
-        // Delete this block together with the SNAPSHOT pin -- keeping it is a release blocker.
-        maven("https://central.sonatype.com/repository/maven-snapshots/") {
-            name = "centralSnapshots"
-            content {
-                includeGroup("at.aimon.core")
-            }
-            mavenContent {
-                snapshotsOnly()
-            }
-        }
-    }
-
-    // Re-check the pinned SNAPSHOT on every build. Gradle's default keeps a resolved snapshot for 24 hours, so a CI
-    // cache restored from yesterday compiled against a core without the API just published. Only the aimon-core
-    // SNAPSHOT is a changing module here. Delete together with the SNAPSHOT pin.
-    configurations.all {
-        resolutionStrategy.cacheChangingModulesFor(0, "seconds")
     }
 }
 
