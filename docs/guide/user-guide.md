@@ -72,7 +72,7 @@ dependencies {
 | aimon-sandbox | 필요한 aimon-core |
 |---|---|
 | `0.1.0` | `0.3.1` |
-| `main`(다음 릴리스) | `0.3.3` — 세션 소유자 기록, 세션 삭제 리스너, 요청 속성, 모든 도구 결과의 notice, 훅 실행 디렉터리를 쓴다. 0.3.3 이 릴리스되기 전까지 `main` 은 Central 스냅숏 저장소의 `0.3.3-SNAPSHOT` 을 쓴다 |
+| `main`(다음 릴리스) | `0.3.3` — 세션 소유자 기록, 세션 삭제 리스너, 요청 속성, 모든 도구 결과의 notice, 훅 실행 디렉터리를 쓴다 |
 
 이 가이드는 `main` 을 기준으로 쓴다. `0.1.0` 에는 `sessionRecords(...)` · `sessionLifecycleListener()` · 요청 속성이
 없다. 바뀐 점은 [`CHANGELOG.md`](../../CHANGELOG.md) 에 있다.

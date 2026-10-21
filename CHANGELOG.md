@@ -5,8 +5,7 @@ All notable aimon-sandbox changes are recorded here. The format is loosely based
 
 ## [Unreleased]
 
-Requires aimon-core **0.3.3**. Until core releases it, `main` pins `0.3.3-SNAPSHOT` from Central's snapshot repository,
-which `scripts/release.sh` refuses to release
+Requires aimon-core **0.3.3**
 ([`docs/design/workspace-sandbox-core-033.md`](docs/design/workspace-sandbox-core-033.md)).
 
 ### Added: workspace files for a file explorer
