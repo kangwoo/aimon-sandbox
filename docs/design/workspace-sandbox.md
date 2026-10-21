@@ -2321,7 +2321,7 @@ docker 계층, K8s 에서만 드러나는 것은 k8s 계층 — 는 [`workspace-
   스냅샷 저장소에서 받던 `0.3.2-SNAPSHOT` 을 릴리스된 0.3.2 로 올리고 `build.gradle.kts` 의 저장소 블록을 지웠다
 - ~~**aimon-core 0.3.3-SNAPSHOT 고정**~~ *(닫았다)* — 요청 속성 · 세션 소유자와 삭제 이벤트 · `drainNotices()`(코어
   #252 · #253 · #254) 때문에 Central 의 스냅샷 저장소에서 받던 `0.3.3-SNAPSHOT` 을 릴리스된 0.3.3 으로 올리고
-  `build.gradle.kts` 의 저장소 블록을 지웠다
+  `build.gradle.kts` 의 저장소 블록과 SNAPSHOT 재확인(`cacheChangingModulesFor(0)`)을 지웠다
 - ~~**요청 단위 실행 옵션**~~ *(코어 0.3.3 으로 닫았다)* — 코어가 `environment.*` 실행 속성을 `EnvironmentRequest.requestAttributes()`
   로 넘기고(kangwoo/aimon-core#252), 메인 턴과 루틴이 `environment.sandbox.workspace` · `environment.sandbox.unattached` 로 실행
   하나를 옮긴다. 세션 옵션은 세션 단위 기본값으로 남는다(§8.1, [관리 설계](workspace-sandbox-management.md) §12 Q1,

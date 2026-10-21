@@ -36,7 +36,7 @@
 저장소(6단계), pause/resume · worktree 격리(7단계). 그런 설정은 조용히 무시하지 않고 기동 시 거부한다. 구현 설계와 설계에서
 벗어난 점은 [`workspace-sandbox-step3.md`](../../docs/design/workspace-sandbox-step3.md) 에 있다.
 
-aimon-core `0.3.3` 이 필요하다(릴리스 전까지는 `0.3.3-SNAPSHOT`) — 훅 표시 `ExecutionOptions.isHook()`(0.3.2)와
+aimon-core `0.3.3` 이 필요하다 — 훅 표시 `ExecutionOptions.isHook()`(0.3.2)와
 `hooks.json` 명령의 격리 실행 `isIsolated()` 에 더해, 실행 하나를 옮기는 요청 속성(`SandboxRequestAttributes`), 코어가
 기록한 세션 소유자(`WorkspaceSandbox.Builder.sessionRecords`)와 세션 삭제 리스너(`WorkspaceSandbox.sessionLifecycleListener()`),
 모든 도구 결과에 실리는 환경 notice(`drainNotices()`)를 쓴다
