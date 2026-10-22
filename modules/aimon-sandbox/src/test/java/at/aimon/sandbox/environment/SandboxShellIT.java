@@ -286,6 +286,68 @@ class SandboxShellIT {
     }
 
     @Test
+    @DisplayName("STREAMING: stdout lines reach the listener while the command runs; the trailer never does")
+    void streamedLinesArriveWhileTheCommandRuns() throws Exception {
+        assertThat(env.shell().supports(ShellFeature.STREAMING)).isTrue();
+        final List<String> lines = new CopyOnWriteArrayList<>();
+        final CountDownLatch first = new CountDownLatch(1);
+        final ShellCancellationSource source = ShellCancellationSource.create();
+        final Future<ShellCommandResult> streamed = executor
+                .submit(() -> env.shell().execute(() -> "echo one; echo two >&2; echo three; sleep 30",
+                        cancellable(source).background(true).build(), line -> {
+                            lines.add(line);
+                            first.countDown();
+                        }));
+
+        assertThat(first.await(15, TimeUnit.SECONDS)).as("a line before the command ends").isTrue();
+        assertThat(streamed.isDone()).isFalse();
+        source.cancel();
+
+        assertThat(failureOf(streamed)).isInstanceOf(ShellCancelledException.class);
+        assertThat(lines).containsExactly("one", "three");
+        assertNoRunFiles();
+    }
+
+    @Test
+    @DisplayName("STREAMING: a streamed command starts from the session's state, saves none, and reports its exit")
+    void streamedCommandReadsStateButDoesNotSaveIt() throws Exception {
+        bash(env, "mkdir -p src && cd src && export SEEN=yes");
+        final List<String> lines = new CopyOnWriteArrayList<>();
+
+        final ShellCommandResult result = env.shell().execute(
+                () -> "pwd; echo $SEEN; cd /tmp; export STREAMED=1; printf 'tail'; exit 3",
+                ExecutionOptions.builder().timeout(Duration.ofSeconds(10)).background(true).build(), lines::add);
+        final ShellCommandResult next = bash(env, "pwd; echo \"STREAMED=$STREAMED\"");
+
+        // The local test provider maps host paths back to /workspace in the collected outcome only, not in the chunks
+        // its sink receives; a real sandbox prints its own path. Hence the suffix.
+        assertThat(lines).hasSize(3);
+        assertThat(lines.get(0)).endsWith("/workspace/repo/src");
+        assertThat(lines.subList(1, 3)).containsExactly("yes", "tail");
+        assertThat(result.exitCode()).isEqualTo(3);
+        assertThat(next.stdout()).isEqualTo("/workspace/repo/src\nSTREAMED=\n");
+    }
+
+    @Test
+    @DisplayName("STREAMING: a streamed command ends at its timeout, after the lines it printed reached the listener")
+    void streamedCommandEndsAtItsTimeout() {
+        final List<String> lines = new CopyOnWriteArrayList<>();
+
+        assertThatThrownBy(() -> env.shell().execute(() -> "echo started; sleep 30",
+                ExecutionOptions.builder().timeout(Duration.ofSeconds(1)).background(true).build(), lines::add))
+                .isInstanceOf(ShellTimeoutException.class);
+        assertThat(lines).containsExactly("started");
+    }
+
+    @Test
+    @DisplayName("STREAMING: a foreground streamed command is refused — it would lose its cd and export")
+    void foregroundStreamingIsRefused() {
+        assertThatThrownBy(() -> env.shell().execute(() -> "cd /tmp",
+                ExecutionOptions.builder().timeout(Duration.ofSeconds(5)).build(), line -> {
+                })).isInstanceOf(ShellExecutionException.class).hasMessageContaining("background commands only");
+    }
+
+    @Test
     @DisplayName("§12.1: a hook's command ends at its own timeout, not at the exec's backstop seconds later")
     void hookCommandEndsAtItsTimeout() {
         final long started = System.nanoTime();
