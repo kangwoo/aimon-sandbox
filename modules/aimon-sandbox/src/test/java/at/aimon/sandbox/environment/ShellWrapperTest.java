@@ -120,7 +120,8 @@ class ShellWrapperTest {
             // The command is the inner bash's sixth argument, after root and working directory.
             assertThat(script).contains("\"$d\" \"$p/r\" ").contains(" '/workspace/repo' '' 'echo '\\''x'\\'''")
                     .contains("printf '\\n%s exit=%d cwd=%d\\n' 'AIMON-n' \"$rc\" \"$c\" >&2\n");
-            assertThat(script.indexOf("rm -rf -- \"$p\"\n")).isLessThan(script.indexOf("printf '\\n%s exit="));
+            assertThat(script.indexOf("rm -rf -- \"$p\" 2>/dev/null\n"))
+                    .isLessThan(script.indexOf("printf '\\n%s exit="));
         }
         assertThat(ShellWrapper.hook(stream("true").stdinInline("aGk=")))
                 .contains("printf '%s' 'aGk=' | /usr/bin/base64 -d 2>/dev/null | /bin/bash -c")
@@ -215,7 +216,7 @@ class ShellWrapperTest {
 
         assertThat(script).contains(">\"$r.out\" 2>\"$r.err\"").contains("\" fg '/workspace/repo' '' 'V'\"=$p/d\"")
                 .contains("\"$r.timedout\"");
-        assertThat(script.indexOf("rm -rf -- \"$p\"\n")).isLessThan(script.indexOf("printf '\\n%s exit="));
+        assertThat(script.indexOf("rm -rf -- \"$p\" 2>/dev/null\n")).isLessThan(script.indexOf("printf '\\n%s exit="));
         // Placed once the lock is held: nothing of the run exists through the lock wait or a busy lock.
         assertThat(script.indexOf("flock -w ")).isLessThan(script.indexOf("mkdir -m 700 -- \"$p\""));
         assertThat(script.indexOf("> \"$d/owner\"")).isLessThan(script.indexOf("p='/workspace/.aimon-shell/.run.9'"));
