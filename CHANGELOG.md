@@ -14,6 +14,9 @@ incompatible with 0.3.2 — upgrade it as you would across a minor: the auto-com
 
 ### Added: streaming shell output
 
+- **Standard error streams too** (`ShellLineListener#onStderrLine`, aimon-core 0.3.4), without the wrapper's trailer
+  line — so a failed monitor reports the *last* lines of stderr. `StdoutLines` is now `StreamLines`, one per stream.
+
 - **`SandboxShell` declares `ShellFeature.STREAMING`** and implements `VirtualShell#execute(ShellCommand,
   ExecutionOptions, ShellLineListener)` (aimon-core 0.3.4): a command's stdout reaches the listener line by line as the
   provider delivers it. A streamed command takes a hook command's stream path — no shell lock, no state save, the

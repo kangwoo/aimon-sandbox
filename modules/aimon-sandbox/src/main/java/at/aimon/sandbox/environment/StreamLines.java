@@ -4,19 +4,19 @@ import java.io.ByteArrayOutputStream;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.util.Objects;
+import java.util.function.Consumer;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import at.aimon.core.shell.ShellLineListener;
-
 /**
- * Splits a streamed run's standard output into lines for a {@link ShellLineListener}
- * ({@link at.aimon.core.shell.ShellFeature#STREAMING}).
+ * Splits one stream of a streamed run's output — stdout, or stderr — into lines for a
+ * {@link at.aimon.core.shell.ShellLineListener} ({@link at.aimon.core.shell.ShellFeature#STREAMING}).
  *
  * <p>
- * A stream run's stdout is the command's own: its trailer goes to stderr ({@link TrailerWatch}), so nothing has to be
- * taken out of it here. Lines are split on the {@code \n} byte and handed over without their terminator
+ * A stream run's stdout is the command's own; its stderr carries the wrapper's trailer too ({@link TrailerWatch}),
+ * which {@code SandboxShell} takes out of the lines this hands over. Lines are split on the {@code \n} byte and handed
+ * over without their terminator
  * ({@code \n} or {@code \r\n}); a run of {@link #MAX_LINE_BYTES} bytes without one is handed over as a line of its own,
  * cut — in UTF-8 — at the start of the character it ends inside, so no character is split. {@link #finish()} hands
  * over an unterminated last line.
@@ -25,14 +25,14 @@ import at.aimon.core.shell.ShellLineListener;
  * Called from provider threads. {@code accept} and {@code finish} are synchronized, so the listener is called one line
  * at a time and in order, as its contract asks. A listener that throws loses its line; the run goes on.
  */
-final class StdoutLines {
+final class StreamLines {
 
     /** Longest run of output without a line terminator handed over as one line. */
     static final int MAX_LINE_BYTES = 64 * 1024;
 
-    private static final Logger log = LoggerFactory.getLogger(StdoutLines.class);
+    private static final Logger log = LoggerFactory.getLogger(StreamLines.class);
 
-    private final ShellLineListener listener;
+    private final Consumer<String> listener;
     private final Charset charset;
     private final ByteArrayOutputStream pending = new ByteArrayOutputStream();
     /** The last byte ended a line forced out at the cap: a terminator right after it ends nothing more. */
@@ -40,7 +40,7 @@ final class StdoutLines {
     /** {@link #finish()} ran: output a provider still delivers after the exec is over is dropped. */
     private boolean finished;
 
-    StdoutLines(ShellLineListener listener, Charset charset) {
+    StreamLines(Consumer<String> listener, Charset charset) {
         this.listener = Objects.requireNonNull(listener, "listener must not be null");
         this.charset = Objects.requireNonNull(charset, "charset must not be null");
     }
@@ -124,7 +124,7 @@ final class StdoutLines {
             line = line.substring(0, line.length() - 1);
         }
         try {
-            listener.onStdoutLine(line);
+            listener.accept(line);
         } catch (RuntimeException e) {
             log.warn("Shell line listener failed; the line is dropped ({})", e.toString());
         }

@@ -194,8 +194,10 @@ final class SandboxShell implements VirtualShell {
      * <p>
      * A streamed command takes the stream path of a hook's command (§9): no shell lock and no state save, the
      * session's cwd and exports to start from, the watchdog for its timeout, and its output in the exec's own streams.
-     * Its stdout reaches the listener as the provider delivers it ({@link StdoutLines}); its trailer is on stderr and
-     * never reaches the listener. The result keeps stdout capped as any stream run's is.
+     * Its stdout and stderr reach the listener as the provider delivers them ({@link StreamLines}); the wrapper's
+     * trailer
+     * line is taken out of stderr and never reaches the listener. The result keeps stdout capped as any stream run's
+     * is.
      */
     @Override
     public ShellCommandResult execute(ShellCommand command, ExecutionOptions options, ShellLineListener listener)
@@ -609,7 +611,26 @@ final class SandboxShell implements VirtualShell {
                 ? new TrailerWatch(run.nonce, () -> killAfterTrailer(running, awaited))
                 : null;
         // Only a stream run streams: its stdout is the command's own, the trailer being on stderr.
-        final StdoutLines lines = listener != null ? new StdoutLines(listener, run.charset) : null;
+        final StreamLines lines = listener != null ? new StreamLines(listener::onStdoutLine, run.charset) : null;
+        // Stderr streams too, without the wrapper's trailer: it is the run's, not the command's. The trailer is printed
+        // as "\n<nonce> exit=…", so an empty line right before it is the wrapper's as well — held until the next line
+        // says which it was.
+        final String trailerPrefix = run.nonce + " ";
+        final AtomicBoolean heldBlank = new AtomicBoolean();
+        final StreamLines errLines = listener != null ? new StreamLines(line -> {
+            if (line.startsWith(trailerPrefix)) {
+                heldBlank.set(false);
+                return;
+            }
+            if (heldBlank.getAndSet(false)) {
+                listener.onStderrLine("");
+            }
+            if (line.isEmpty()) {
+                heldBlank.set(true);
+                return;
+            }
+            listener.onStderrLine(line);
+        }, run.charset) : null;
         final OutputSink sink = watch == null
                 ? OutputSink.DISCARD
                 : lines == null ? watch : (stream, bytes, offset, length) -> {
@@ -617,6 +638,7 @@ final class SandboxShell implements VirtualShell {
                         lines.accept(bytes, offset, length);
                     } else {
                         watch.accept(stream, bytes, offset, length);
+                        errLines.accept(bytes, offset, length);
                     }
                 };
         final ExecOutcome outcome;
@@ -667,6 +689,7 @@ final class SandboxShell implements VirtualShell {
         if (lines != null) {
             // The exec is over: what it printed without a final newline is a line too.
             lines.finish();
+            errLines.finish();
         }
         if (cancelled.get()) {
             // Ahead of the lost and timed-out answers: a command its caller asked to stop was stopped, whatever else
