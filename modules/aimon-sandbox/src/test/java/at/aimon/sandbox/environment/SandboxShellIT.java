@@ -35,6 +35,7 @@ import at.aimon.core.shell.ExecutionOptions;
 import at.aimon.core.shell.ShellCancellationSource;
 import at.aimon.core.shell.ShellCommandResult;
 import at.aimon.core.shell.ShellFeature;
+import at.aimon.core.shell.ShellLineListener;
 import at.aimon.core.shell.exception.ShellCancelledException;
 import at.aimon.core.shell.exception.ShellExecutionException;
 import at.aimon.core.shell.exception.ShellTimeoutException;
@@ -326,6 +327,30 @@ class SandboxShellIT {
         assertThat(lines.subList(1, 3)).containsExactly("yes", "tail");
         assertThat(result.exitCode()).isEqualTo(3);
         assertThat(next.stdout()).isEqualTo("/workspace/repo/src\nSTREAMED=\n");
+    }
+
+    @Test
+    @DisplayName("STREAMING: stderr lines stream to onStderrLine, without the wrapper's trailer")
+    void streamedStderrHasNoTrailer() throws Exception {
+        final List<String> out = new CopyOnWriteArrayList<>();
+        final List<String> err = new CopyOnWriteArrayList<>();
+
+        env.shell().execute(() -> "echo out; echo first >&2; echo last >&2; exit 2",
+                ExecutionOptions.builder().timeout(Duration.ofSeconds(10)).background(true).build(),
+                new ShellLineListener() {
+                    @Override
+                    public void onStdoutLine(String line) {
+                        out.add(line);
+                    }
+
+                    @Override
+                    public void onStderrLine(String line) {
+                        err.add(line);
+                    }
+                });
+
+        assertThat(out).containsExactly("out");
+        assertThat(err).containsExactly("first", "last");
     }
 
     @Test

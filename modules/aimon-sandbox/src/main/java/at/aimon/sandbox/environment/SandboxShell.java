@@ -194,8 +194,10 @@ final class SandboxShell implements VirtualShell {
      * <p>
      * A streamed command takes the stream path of a hook's command (§9): no shell lock and no state save, the
      * session's cwd and exports to start from, the watchdog for its timeout, and its output in the exec's own streams.
-     * Its stdout reaches the listener as the provider delivers it ({@link StdoutLines}); its trailer is on stderr and
-     * never reaches the listener. The result keeps stdout capped as any stream run's is.
+     * Its stdout and stderr reach the listener as the provider delivers them ({@link StreamLines}); the wrapper's
+     * trailer
+     * line is taken out of stderr and never reaches the listener. The result keeps stdout capped as any stream run's
+     * is.
      */
     @Override
     public ShellCommandResult execute(ShellCommand command, ExecutionOptions options, ShellLineListener listener)
@@ -609,7 +611,16 @@ final class SandboxShell implements VirtualShell {
                 ? new TrailerWatch(run.nonce, () -> killAfterTrailer(running, awaited))
                 : null;
         // Only a stream run streams: its stdout is the command's own, the trailer being on stderr.
-        final StdoutLines lines = listener != null ? new StdoutLines(listener, run.charset) : null;
+        // Stderr streams too, without the wrapper's trailer (StderrTrailerFilter). Both streams call one listener,
+        // which
+        // is promised one call at a time: a provider may deliver stdout and stderr on different threads, and the last
+        // lines are flushed from the waiting thread.
+        final ShellLineListener serial = listener != null ? serialized(listener) : null;
+        final StreamLines lines = serial != null ? new StreamLines(serial::onStdoutLine, run.charset) : null;
+        final StderrTrailerFilter trailerFilter = serial != null
+                ? new StderrTrailerFilter(run.nonce, serial::onStderrLine)
+                : null;
+        final StreamLines errLines = serial != null ? new StreamLines(trailerFilter, run.charset) : null;
         final OutputSink sink = watch == null
                 ? OutputSink.DISCARD
                 : lines == null ? watch : (stream, bytes, offset, length) -> {
@@ -617,6 +628,7 @@ final class SandboxShell implements VirtualShell {
                         lines.accept(bytes, offset, length);
                     } else {
                         watch.accept(stream, bytes, offset, length);
+                        errLines.accept(bytes, offset, length);
                     }
                 };
         final ExecOutcome outcome;
@@ -667,6 +679,8 @@ final class SandboxShell implements VirtualShell {
         if (lines != null) {
             // The exec is over: what it printed without a final newline is a line too.
             lines.finish();
+            errLines.finish();
+            trailerFilter.finish();
         }
         if (cancelled.get()) {
             // Ahead of the lost and timed-out answers: a command its caller asked to stop was stopped, whatever else
@@ -683,6 +697,26 @@ final class SandboxShell implements VirtualShell {
         return run.mode.streams()
                 ? classifyStream(outcome, run, duration, watch)
                 : classify(slot, outcome, run, duration);
+    }
+
+    /** A listener whose calls, from any thread, run one at a time. */
+    private static ShellLineListener serialized(ShellLineListener listener) {
+        final Object lock = new Object();
+        return new ShellLineListener() {
+            @Override
+            public void onStdoutLine(String line) {
+                synchronized (lock) {
+                    listener.onStdoutLine(line);
+                }
+            }
+
+            @Override
+            public void onStderrLine(String line) {
+                synchronized (lock) {
+                    listener.onStderrLine(line);
+                }
+            }
+        };
     }
 
     /**

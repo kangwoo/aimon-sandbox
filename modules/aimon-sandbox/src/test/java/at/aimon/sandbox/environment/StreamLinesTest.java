@@ -9,11 +9,11 @@ import java.util.List;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
-@DisplayName("StdoutLines — chunks to lines")
-class StdoutLinesTest {
+@DisplayName("StreamLines — chunks to lines")
+class StreamLinesTest {
 
     private final List<String> lines = new ArrayList<>();
-    private final StdoutLines splitter = new StdoutLines(lines::add, StandardCharsets.UTF_8);
+    private final StreamLines splitter = new StreamLines(lines::add, StandardCharsets.UTF_8);
 
     private void feed(String text) {
         final byte[] bytes = text.getBytes(StandardCharsets.UTF_8);
@@ -46,11 +46,11 @@ class StdoutLinesTest {
     @Test
     @DisplayName("a line of exactly the cap, then its terminator, is one line — not a line and an empty one")
     void terminatorRightAfterTheCapEndsNothingMore() {
-        feed("x".repeat(StdoutLines.MAX_LINE_BYTES));
+        feed("x".repeat(StreamLines.MAX_LINE_BYTES));
         feed("\r\nnext\n");
 
         assertThat(lines).hasSize(2);
-        assertThat(lines.get(0)).hasSize(StdoutLines.MAX_LINE_BYTES);
+        assertThat(lines.get(0)).hasSize(StreamLines.MAX_LINE_BYTES);
         assertThat(lines.get(1)).isEqualTo("next");
     }
 
@@ -69,7 +69,7 @@ class StdoutLinesTest {
     @DisplayName("a listener that throws loses its line, not the following ones")
     void throwingListenerLosesOneLine() {
         final List<String> kept = new ArrayList<>();
-        final StdoutLines failing = new StdoutLines(line -> {
+        final StreamLines failing = new StreamLines(line -> {
             if (line.equals("bad")) {
                 throw new IllegalStateException("boom");
             }

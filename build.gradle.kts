@@ -21,6 +21,13 @@ allprojects {
             }
         }
     }
+
+    // Same lifetime as the block above. A SNAPSHOT is a changing module, which Gradle caches for 24 hours by default
+    // -- and CI restores that cache, so a build right after a core snapshot is republished compiles against the old
+    // one. Re-check on every build instead; delete this together with the snapshot repository.
+    configurations.configureEach {
+        resolutionStrategy.cacheChangingModulesFor(0, "seconds")
+    }
 }
 
 // Module-wide quality, formatting and publishing config lives in pre-compiled script plugins under

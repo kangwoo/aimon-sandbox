@@ -482,7 +482,7 @@ final class ShellWrapper {
             appendWatchdogStop(s);
         }
         s.append("c=0; [ -e \"$p/r.cwd\" ] && read -r c < \"$p/r.cwd\"\n");
-        s.append("rm -rf -- \"$p\"\n");
+        s.append("rm -rf -- \"$p\" 2>/dev/null\n"); // the EXIT trap tries again; its noise is not the command's stderr
         s.append("printf '\\n%s exit=%d cwd=%d\\n' ").append(quote(in.nonce)).append(" \"$rc\" \"$c\" >&2\n");
         return s.toString();
     }
