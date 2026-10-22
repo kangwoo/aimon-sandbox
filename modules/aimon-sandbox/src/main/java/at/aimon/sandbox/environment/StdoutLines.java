@@ -35,6 +35,10 @@ final class StdoutLines {
     private final ShellLineListener listener;
     private final Charset charset;
     private final ByteArrayOutputStream pending = new ByteArrayOutputStream();
+    /** The last byte ended a line forced out at the cap: a terminator right after it ends nothing more. */
+    private boolean forced;
+    /** {@link #finish()} ran: output a provider still delivers after the exec is over is dropped. */
+    private boolean finished;
 
     StdoutLines(ShellLineListener listener, Charset charset) {
         this.listener = Objects.requireNonNull(listener, "listener must not be null");
@@ -43,14 +47,24 @@ final class StdoutLines {
 
     /** Takes one chunk of stdout; complete lines go to the listener. */
     synchronized void accept(byte[] bytes, int offset, int length) {
+        if (finished) {
+            return;
+        }
         for (int i = offset; i < offset + length; i++) {
             final byte b = bytes[i];
+            if (forced && pending.size() == 0 && (b == '\n' || b == '\r')) {
+                // The line this terminates was already handed over at the cap.
+                forced = b == '\r';
+                continue;
+            }
+            forced = false;
             if (b == '\n') {
                 deliver(take(pending.size()));
             } else {
                 pending.write(b);
                 if (pending.size() >= MAX_LINE_BYTES) {
                     deliverOverlong();
+                    forced = pending.size() == 0;
                 }
             }
         }
@@ -58,6 +72,10 @@ final class StdoutLines {
 
     /** Hands over what is left once the run has ended. */
     synchronized void finish() {
+        if (finished) {
+            return;
+        }
+        finished = true;
         if (pending.size() > 0) {
             deliver(take(pending.size()));
         }

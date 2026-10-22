@@ -232,6 +232,12 @@ final class SandboxShell implements VirtualShell {
                     + " to pass to the sandbox (" + inline + " bytes, at most " + ShellWrapper.INLINE_ENVIRONMENT_LIMIT
                     + "); pass large values through a file");
         }
+        if (listener != null && !options.isBackground() && !options.isHook() && !options.isIsolated()) {
+            // The stream path takes no shell lock and saves no state, so a foreground command's cd and export would be
+            // lost without a word. Refused rather than silently weakened; a monitor streams background work.
+            throw new ShellExecutionException("streaming is supported for background commands only"
+                    + " (ExecutionOptions.background(true)): a streamed command does not keep cd or export");
+        }
         final boolean streams = options.isHook() || options.isIsolated() || listener != null;
         if (streams && !ShellWrapper.embeddable(text)) {
             // A stream run's command travels as an argument, never as a run file the agent could rewrite.
@@ -618,7 +624,11 @@ final class SandboxShell implements VirtualShell {
             if (cancelled.get()) {
                 throw cancelledBeforeStart();
             }
-            final Heartbeat heartbeat = slot.activity().startHeartbeat(!run.foreground,
+            // A streamed run with a timeout of its own is bounded by its watchdog, so it keeps the sandbox awake for as
+            // long as it runs: past the background heartbeat limit the idle policy would reap the sandbox under a
+            // monitor that is still watching.
+            final boolean bounded = listener != null && run.commandTimeout;
+            final Heartbeat heartbeat = slot.activity().startHeartbeat(!run.foreground && !bounded,
                     run.foreground ? () -> writeHeartbeat(slot.connection().files(), heartbeatFile) : null, () -> {
                         lost.set(true);
                         final RunningCommand command = running.get();

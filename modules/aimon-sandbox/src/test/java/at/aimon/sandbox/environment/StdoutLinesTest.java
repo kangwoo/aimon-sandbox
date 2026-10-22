@@ -44,6 +44,28 @@ class StdoutLinesTest {
     }
 
     @Test
+    @DisplayName("a line of exactly the cap, then its terminator, is one line — not a line and an empty one")
+    void terminatorRightAfterTheCapEndsNothingMore() {
+        feed("x".repeat(StdoutLines.MAX_LINE_BYTES));
+        feed("\r\nnext\n");
+
+        assertThat(lines).hasSize(2);
+        assertThat(lines.get(0)).hasSize(StdoutLines.MAX_LINE_BYTES);
+        assertThat(lines.get(1)).isEqualTo("next");
+    }
+
+    @Test
+    @DisplayName("output delivered after finish is dropped, so a late tail is not split into two lines")
+    void outputAfterFinishIsDropped() {
+        feed("tail");
+        splitter.finish();
+        feed(" late\n");
+        splitter.finish();
+
+        assertThat(lines).containsExactly("tail");
+    }
+
+    @Test
     @DisplayName("a listener that throws loses its line, not the following ones")
     void throwingListenerLosesOneLine() {
         final List<String> kept = new ArrayList<>();

@@ -1053,8 +1053,17 @@ stream 경로**를 탄다. 잠금도 상태 저장도 없이 세션의 cwd 와 e
 출력은 exec 자신의 스트림으로 온다. stream 스크립트의 trailer 는 stderr 에 있으므로 stdout 은 명령의 출력 그대로이고,
 provider 가 `OutputSink` 로 넘기는 stdout 조각을 `StdoutLines` 가 줄로 나눠 listener 에 넘긴다(§6.2 의 "출력이
 도착하는 대로" 계약을 그대로 쓴다). 개행 없이 64 KiB 를 넘는 출력은 UTF-8 문자 경계에서 잘라 한 줄로 넘기고,
-exec 가 끝나면 남은 꼬리를 넘긴다. 결과의 stdout 은 다른 stream 실행과 똑같이 상한까지만 남는다. 취소는 기존 경로
-(`RunningCommand.kill()`)로 프로세스 그룹을 죽인다.
+exec 가 끝나면 남은 꼬리를 넘긴다(그 뒤에 늦게 도착한 출력은 버린다). 결과의 stdout 은 다른 stream 실행과 똑같이
+상한까지만 남는다. 취소는 기존 경로(`RunningCommand.kill()`)로 프로세스 그룹을 죽인다.
+
+- **백그라운드만.** stream 경로는 셸 잠금도 상태 저장도 없으므로, `background(false)` 인 스트리밍 호출은 cd 와 export 를
+  말없이 잃는 대신 거절한다. 모니터는 백그라운드로 부른다
+- **하트비트에 상한이 없다.** 타임아웃이 있는 스트리밍 실행은 워치독이 끝을 정하므로 `backgroundHeartbeatLimit` 을
+  적용하지 않는다. 그렇지 않으면 한도보다 긴 모니터 밑에서 유휴 정책이 샌드박스를 거둔다
+- **provider 마다 줄 경계가 다를 수 있다.** OpenSandbox 는 출력을 줄 단위로 정규화한다(step-4 §5.3) — 개행 없는
+  진행 표시나 홀로 있는 `\r` 이 줄로 갈라질 수 있다
+- **trailer 뒤 500ms.** trailer 를 본 뒤 `TRAILER_KILL_GRACE` 가 지나면 exec 를 죽이므로, stdout 과 stderr 를 따로
+  넘기는 provider 에서 그보다 늦게 오는 마지막 줄은 잃을 수 있다
 
 ## 10. 수명 관리
 

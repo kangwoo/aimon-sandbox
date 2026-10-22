@@ -329,6 +329,25 @@ class SandboxShellIT {
     }
 
     @Test
+    @DisplayName("STREAMING: a streamed command ends at its timeout, after the lines it printed reached the listener")
+    void streamedCommandEndsAtItsTimeout() {
+        final List<String> lines = new CopyOnWriteArrayList<>();
+
+        assertThatThrownBy(() -> env.shell().execute(() -> "echo started; sleep 30",
+                ExecutionOptions.builder().timeout(Duration.ofSeconds(1)).background(true).build(), lines::add))
+                .isInstanceOf(ShellTimeoutException.class);
+        assertThat(lines).containsExactly("started");
+    }
+
+    @Test
+    @DisplayName("STREAMING: a foreground streamed command is refused — it would lose its cd and export")
+    void foregroundStreamingIsRefused() {
+        assertThatThrownBy(() -> env.shell().execute(() -> "cd /tmp",
+                ExecutionOptions.builder().timeout(Duration.ofSeconds(5)).build(), line -> {
+                })).isInstanceOf(ShellExecutionException.class).hasMessageContaining("background commands only");
+    }
+
+    @Test
     @DisplayName("§12.1: a hook's command ends at its own timeout, not at the exec's backstop seconds later")
     void hookCommandEndsAtItsTimeout() {
         final long started = System.nanoTime();
