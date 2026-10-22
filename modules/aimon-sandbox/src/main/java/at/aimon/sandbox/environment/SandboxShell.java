@@ -32,6 +32,7 @@ import at.aimon.core.shell.ShellCancellation;
 import at.aimon.core.shell.ShellCommand;
 import at.aimon.core.shell.ShellCommandResult;
 import at.aimon.core.shell.ShellFeature;
+import at.aimon.core.shell.ShellLineListener;
 import at.aimon.core.shell.VirtualShell;
 import at.aimon.core.shell.exception.RunDirectoryIntegrityException;
 import at.aimon.core.shell.exception.ShellCancelledException;
@@ -112,6 +113,13 @@ import at.aimon.sandbox.workspace.SandboxWorkspaceManager;
  * own ({@code setsid}, {@code set -m}) outlives it until the sandbox goes; the exec server offers nothing wider (§9).
  *
  * <p>
+ * <b>Streaming</b> ({@link ShellFeature#STREAMING}). A command run through
+ * {@link #execute(ShellCommand, ExecutionOptions, ShellLineListener)} takes a hook's stream path whatever its flags —
+ * no lock, no state save, the watchdog — and its stdout reaches the listener line by line as the provider delivers it.
+ * This is what a background monitor runs on; it relies on the provider calling its {@link OutputSink} as output
+ * arrives, which the SPI already asks of it (§6.2).
+ *
+ * <p>
  * <b>Notices.</b> A result or exception carries only what is true of its own command: {@link #KILLED_NOTICE} and a
  * working-directory fallback. What {@code connect} reported is queued in the environment's {@link PendingNotices}, and
  * core delivers it through {@code drainNotices()} after the tool call — after the PostTool hooks, so a hook's command
@@ -177,6 +185,26 @@ final class SandboxShell implements VirtualShell {
 
     @Override
     public ShellCommandResult execute(ShellCommand command, ExecutionOptions options) throws ShellExecutionException {
+        return runCommand(command, options, null);
+    }
+
+    /**
+     * {@inheritDoc}
+     *
+     * <p>
+     * A streamed command takes the stream path of a hook's command (§9): no shell lock and no state save, the
+     * session's cwd and exports to start from, the watchdog for its timeout, and its output in the exec's own streams.
+     * Its stdout reaches the listener as the provider delivers it ({@link StdoutLines}); its trailer is on stderr and
+     * never reaches the listener. The result keeps stdout capped as any stream run's is.
+     */
+    @Override
+    public ShellCommandResult execute(ShellCommand command, ExecutionOptions options, ShellLineListener listener)
+            throws ShellExecutionException {
+        return runCommand(command, options, Objects.requireNonNull(listener, "listener must not be null"));
+    }
+
+    private ShellCommandResult runCommand(ShellCommand command, ExecutionOptions options, ShellLineListener listener)
+            throws ShellExecutionException {
         Objects.requireNonNull(command, "command must not be null");
         Objects.requireNonNull(options, "options must not be null");
         final String text = command.asString();
@@ -204,18 +232,18 @@ final class SandboxShell implements VirtualShell {
                     + " to pass to the sandbox (" + inline + " bytes, at most " + ShellWrapper.INLINE_ENVIRONMENT_LIMIT
                     + "); pass large values through a file");
         }
-        final boolean streams = options.isHook() || options.isIsolated();
+        final boolean streams = options.isHook() || options.isIsolated() || listener != null;
         if (streams && !ShellWrapper.embeddable(text)) {
-            // A hook's command travels as an argument, never as a run file the agent could rewrite.
-            throw new ShellExecutionException(
-                    "a hook command over " + ShellWrapper.INLINE_COMMAND_LIMIT / 1024 + " KiB is not supported");
+            // A stream run's command travels as an argument, never as a run file the agent could rewrite.
+            throw new ShellExecutionException((listener != null ? "a streamed command over " : "a hook command over ")
+                    + ShellWrapper.INLINE_COMMAND_LIMIT / 1024 + " KiB is not supported");
         }
         if (options.getRunDirectory().isPresent()) {
             checkRunDirectory(options.getRunDirectory().get());
         }
         final boolean foreground = !options.isBackground() && !streams;
         // Before connect, like the checks above: a run that cannot be passed to the sandbox provisions nothing.
-        final Plan plan = plan(text, options, foreground);
+        final Plan plan = plan(text, options, foreground, listener);
         final ShellCancellation cancellation = options.getCancellation();
         if (cancellation.isCancelled()) {
             // Before connect: a command that is not to run provisions nothing and records no activity.
@@ -286,10 +314,14 @@ final class SandboxShell implements VirtualShell {
      * a script still over the budget is refused. The digests are computed here, from the bytes core handed over, and
      * travel only in the script.
      */
-    private Plan plan(String text, ExecutionOptions options, boolean foreground) throws ShellExecutionException {
+    private Plan plan(String text, ExecutionOptions options, boolean foreground, ShellLineListener listener)
+            throws ShellExecutionException {
+        // A streamed command that is neither a hook's nor isolated runs as a hook's would: the stream path (§9).
         final Mode mode = foreground
                 ? Mode.FOREGROUND
-                : options.isIsolated() ? Mode.ISOLATED : options.isHook() ? Mode.HOOK : Mode.BACKGROUND;
+                : options.isIsolated()
+                        ? Mode.ISOLATED
+                        : options.isHook() || listener != null ? Mode.HOOK : Mode.BACKGROUND;
         final String directory = ShellWrapper.directory(binding.shellKey().directoryName());
         final String runPrefix = directory + "/run-" + randomHex(6);
         final String nonce = "AIMON-" + randomHex(16);
@@ -371,7 +403,7 @@ final class SandboxShell implements VirtualShell {
         final Duration backstop = (timeout != null ? timeout : NO_TIMEOUT_BACKSTOP)
                 .plus(foreground ? settings.shellLockWait() : Duration.ZERO).plus(BACKSTOP_SLACK);
         return new Plan(script, backstop, uploads, new Run(runPrefix, nonce, timeout != null ? timeout : backstop, max,
-                mode, options, new Placement(privateDirectory, filesUploaded, stdinUploaded)));
+                mode, options, new Placement(privateDirectory, filesUploaded, stdinUploaded)), listener);
     }
 
     private static String script(Mode mode, ShellWrapper.Invocation invocation) {
@@ -402,12 +434,15 @@ final class SandboxShell implements VirtualShell {
         private final Duration backstop;
         private final List<Upload> uploads;
         private final Run run;
+        /** Receives stdout line by line, or {@code null} for a run whose output is only in its result. */
+        private final ShellLineListener listener;
 
-        private Plan(String script, Duration backstop, List<Upload> uploads, Run run) {
+        private Plan(String script, Duration backstop, List<Upload> uploads, Run run, ShellLineListener listener) {
             this.script = script;
             this.backstop = backstop;
             this.uploads = uploads;
             this.run = run;
+            this.listener = listener;
         }
     }
 
@@ -441,7 +476,7 @@ final class SandboxShell implements VirtualShell {
             final ExecSpec spec = ExecSpec.builder().command(plan.script).workingDirectory(ShellWrapper.EXEC_DIRECTORY)
                     .environment(slot.profile().environment()).timeout(plan.backstop)
                     .maxCaptureBytes(captureBackstop(plan.run.max)).build();
-            final ShellCommandResult result = await(slot, spec, options.getCancellation(), plan.run);
+            final ShellCommandResult result = await(slot, spec, options.getCancellation(), plan.run, plan.listener);
             // A result means the trailer was read, and the wrapper removed its run files before printing it.
             wrapperCleanedUp = true;
             return result;
@@ -546,8 +581,8 @@ final class SandboxShell implements VirtualShell {
         }
     }
 
-    private ShellCommandResult await(ConnectedSlot slot, ExecSpec spec, ShellCancellation cancellation, Run run)
-            throws ShellExecutionException {
+    private ShellCommandResult await(ConnectedSlot slot, ExecSpec spec, ShellCancellation cancellation, Run run,
+            ShellLineListener listener) throws ShellExecutionException {
         final AtomicReference<RunningCommand> running = new AtomicReference<>();
         final AtomicBoolean lost = new AtomicBoolean();
         final AtomicBoolean cancelled = new AtomicBoolean();
@@ -567,6 +602,17 @@ final class SandboxShell implements VirtualShell {
         final TrailerWatch watch = run.mode.streams()
                 ? new TrailerWatch(run.nonce, () -> killAfterTrailer(running, awaited))
                 : null;
+        // Only a stream run streams: its stdout is the command's own, the trailer being on stderr.
+        final StdoutLines lines = listener != null ? new StdoutLines(listener, run.charset) : null;
+        final OutputSink sink = watch == null
+                ? OutputSink.DISCARD
+                : lines == null ? watch : (stream, bytes, offset, length) -> {
+                    if (stream == OutputSink.Stream.STDOUT) {
+                        lines.accept(bytes, offset, length);
+                    } else {
+                        watch.accept(stream, bytes, offset, length);
+                    }
+                };
         final ExecOutcome outcome;
         try {
             if (cancelled.get()) {
@@ -581,7 +627,7 @@ final class SandboxShell implements VirtualShell {
                         }
                     });
             try {
-                running.set(slot.connection().run(spec, watch != null ? watch : OutputSink.DISCARD));
+                running.set(slot.connection().run(spec, sink));
                 if (lost.get() || cancelled.get()) {
                     // A provider whose kill throws must not skip the await: the run files are removed only after it.
                     killQuietly(running.get());
@@ -608,6 +654,10 @@ final class SandboxShell implements VirtualShell {
             registration.remove();
         }
         final Duration duration = Duration.ofNanos(System.nanoTime() - startedNanos);
+        if (lines != null) {
+            // The exec is over: what it printed without a final newline is a line too.
+            lines.finish();
+        }
         if (cancelled.get()) {
             // Ahead of the lost and timed-out answers: a command its caller asked to stop was stopped, whatever else
             // happened in that instant. Only a trailer says otherwise — the command had already ended by itself.
@@ -990,7 +1040,7 @@ final class SandboxShell implements VirtualShell {
     public boolean supports(ShellFeature feature) {
         return feature == ShellFeature.PIPE || feature == ShellFeature.REDIRECTION
                 || feature == ShellFeature.CANCELLATION || feature == ShellFeature.ISOLATED_EXECUTION
-                || feature == ShellFeature.RUN_DIRECTORY;
+                || feature == ShellFeature.RUN_DIRECTORY || feature == ShellFeature.STREAMING;
     }
 
     /** Nothing to release: the environment is a view (§3.2). */

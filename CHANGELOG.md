@@ -12,6 +12,16 @@ incompatible with 0.3.2 — upgrade it as you would across a minor: the auto-com
 (kangwoo/aimon-core#285), and the session log is written as version 2 by default, so a mixed-version cluster must pin
 `v1` (kangwoo/aimon-core#286). See core's [0.3.3 release notes](https://github.com/kangwoo/aimon-core/releases/tag/v0.3.3).
 
+### Added: streaming shell output
+
+- **`SandboxShell` declares `ShellFeature.STREAMING`** and implements `VirtualShell#execute(ShellCommand,
+  ExecutionOptions, ShellLineListener)` (aimon-core 0.3.4): a command's stdout reaches the listener line by line as the
+  provider delivers it. A streamed command takes a hook command's stream path — no shell lock, no state save, the
+  session's cwd and exports, the watchdog for its timeout. This is what core's background `Monitor` command form needs
+  in a sandbox (`docs/design/workspace-sandbox.md` §9.x).
+- **Pinned to `aimon-core 0.3.4-SNAPSHOT`** from Central's snapshot repository until core 0.3.4 is released — a release
+  blocker by design: `scripts/release.sh` refuses while the catalog pins a SNAPSHOT.
+
 ### Added: workspace files for a file explorer
 
 - **`SandboxWorkspaceFiles`**, from `SandboxWorkspaces.files()` (use right) and `SandboxAdministration.files()` (no

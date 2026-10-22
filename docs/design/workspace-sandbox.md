@@ -1045,6 +1045,17 @@ INNER:
 
 ---
 
+### 9.x 스트리밍 (`ShellFeature.STREAMING`)
+
+core 0.3.4 의 `VirtualShell#execute(command, options, ShellLineListener)` — 백그라운드 모니터가 명령의 stdout 을
+줄마다 받는 경로 — 를 `SandboxShell` 이 구현한다. 새 래퍼는 없다: 스트리밍 명령은 플래그와 상관없이 **훅 명령의
+stream 경로**를 탄다. 잠금도 상태 저장도 없이 세션의 cwd 와 export 에서 시작하고, 워치독이 타임아웃을 지키며,
+출력은 exec 자신의 스트림으로 온다. stream 스크립트의 trailer 는 stderr 에 있으므로 stdout 은 명령의 출력 그대로이고,
+provider 가 `OutputSink` 로 넘기는 stdout 조각을 `StdoutLines` 가 줄로 나눠 listener 에 넘긴다(§6.2 의 "출력이
+도착하는 대로" 계약을 그대로 쓴다). 개행 없이 64 KiB 를 넘는 출력은 UTF-8 문자 경계에서 잘라 한 줄로 넘기고,
+exec 가 끝나면 남은 꼬리를 넘긴다. 결과의 stdout 은 다른 stream 실행과 똑같이 상한까지만 남는다. 취소는 기존 경로
+(`RunningCommand.kill()`)로 프로세스 그룹을 죽인다.
+
 ## 10. 수명 관리
 
 ### 10.1 게으른 프로비저닝

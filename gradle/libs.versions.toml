@@ -24,8 +24,12 @@
 # `SessionRecordStore#loadOwner` (kangwoo/aimon-core#262), `ExecutionOptions.isIsolated()` with
 # `ShellFeature.ISOLATED_EXECUTION` (kangwoo/aimon-core#273) and `ShellFeature.RUN_DIRECTORY` (kangwoo/aimon-core#275). Until it was released the pin was `0.3.3-SNAPSHOT`,
 # resolved from Central's snapshot repository through a filtered block in build.gradle.kts; both left together.
+#
+# 0.3.4-SNAPSHOT: `ShellFeature.STREAMING` and `VirtualShell#execute(ShellCommand, ExecutionOptions,
+# ShellLineListener)` (kangwoo/aimon-core#303), which SandboxShell implements. Resolved the same way — the pin and the
+# snapshot block in build.gradle.kts leave together when 0.3.4 is released.
 [versions]
-aimon-core = "0.3.3"
+aimon-core = "0.3.4-SNAPSHOT"
 
 lombok = "1.18.48"
 
