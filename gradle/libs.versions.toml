@@ -37,7 +37,7 @@ lombok = "1.18.48"
 # whatever the sandbox compiles against has to be declared here; matching core's versions keeps one version
 # of each on the classpath.
 slf4j = "2.0.20"
-jackson = "2.22.3"
+jackson = "2.22.4"
 
 junit = "6.1.3"
 assertj = "3.27.7"
@@ -48,7 +48,7 @@ mockito = "5.24.0"
 testcontainers = "2.0.5"
 
 checkstyle = "10.12.5"
-spotless = "8.10.3"
+spotless = "8.10.4"
 maven-publish = "0.37.0"
 
 [libraries]
