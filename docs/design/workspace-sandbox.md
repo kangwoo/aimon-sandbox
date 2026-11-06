@@ -435,7 +435,8 @@ files API 에는 uid 인자가 없으므로, 명령만 다른 uid 로 돌리면 
 다르다). 예외는 **한 줄**이다: execd 는 줄 하나를 상한 없이 모아 이벤트 하나로 보내므로, OpenSandbox 프로바이더는 SSE 이벤트
 한 줄을 물질화하기 전에 256 KiB(`SseEvents.MAX_LINE_BYTES`, 받은 JSON 바이트)로 막고, 넘으면 명령을 끝내고 두 스트림을 잘림으로
 표시한다 — 상한까지 버리며 읽는 길은 그 줄을 다 받기 전에는 메모리를 묶지 못한다([PTC 선행 작업](ptc-shell-prerequisites.md)
-S2). `ExecSpec.transientOutput()` 이 켜진 명령은 끝난 뒤(완료·실패·타임아웃·kill 모두) 프로바이더가 샌드박스 안에 남긴 출력
+S2). 그렇게 끝낸 명령의 `ExecOutcome` 은 `killCause() = LINE_LIMIT_EXCEEDED`(`ExecKillCause`)로 그 사실을 싣는다. 이미 가던
+타임아웃 · kill 이 먼저였으면 싣지 않고, 실었으면 `timedOut` 은 거짓이다 — 둘 중 먼저 명령을 끝낸 쪽 하나만 보고한다(같은 문서 S8). `ExecSpec.transientOutput()` 이 켜진 명령은 끝난 뒤(완료·실패·타임아웃·kill 모두) 프로바이더가 샌드박스 안에 남긴 출력
 사본을 지운다 — OpenSandbox 에서는 execd 의 스풀 파일이다. `SandboxShell` 은 stream 실행(훅·격리·스트리밍)에 이것을 켠다(같은 문서
 S1).
 
@@ -600,6 +601,8 @@ SDK 의 `SandboxPool`(warm pool)은 SPI 에 올리지 않는다. 풀은 `create`
 | `fileSystem()` | `SandboxFileSystem` — 프로바이더 `files()` 위의 VFS. 상대 경로는 바인딩의 `root` 기준 |
 | `shell()` | `SandboxShell` — shellKey 의 셸 상태를 이어 붙인 셸(§9) |
 | `descriptor()` | 프로파일에 **선언한** platform·OS·shellName(§13.1), `workingDirectory = root`, notes 에 "isolated sandbox" · egress 요약 · 상대 경로 기준(§11.1). `resolve()` 는 원격 자원을 만들지 않으므로 이미지에 물어볼 수 없다 — 선언값을 쓰고, 프로비저닝의 seed 단계가 실제 이미지와 대조해(platform 은 `uname -s`, osVersion 은 선언했을 때만 `uname -sr` 에 글롭으로) 다르면 슬롯을 FAILED 로 둔다. notes 에는 셸 상태가 cwd 와 export 된 변수만 잇는다는 사실(§9)도 넣는다. 선언값이라 재생성을 넘어 같은 값이고, 프롬프트 캐시가 흔들리지 않는다(코어 §10) |
+| `descriptor().isolation()` · `runtimes()` | 늘 `SANDBOXED`. 런타임은 프로파일의 `runtimes` 선언(§13.1)이고 seed 가 확인한다. `python3` 이 있으면 코어가 Python `ExecuteCode` 셸 엔진을 이 환경에 낼 수 있다([PTC 셸 엔진의 제공자 쪽 설계](ptc-shell-provider.md)). 사용 불가 환경의 서술자는 코어 것이라 isolation 이 없다 |
+| `runtimeFileSystem()` | `SandboxRuntimeFileSystem` — 코어 셸 엔진의 응답 파일을 쓰는 프레임워크 전용 파일 접근. 경로 규칙 밖이고 모델 도구에는 주지 않는다. `/workspace/**` 로 가둔다. `writeNew` 는 files API 의 `CREATE_NEW`(임시 이름 + link(2)), `read` · `delete` 는 링크를 따라가지 않는 샌드박스 안 도우미 한 번이다. 연결 실패까지 모든 실패가 `IOException` 이다. 묻는 것만으로는 프로비저닝하지 않는다 |
 | `contentSearch()` | 샌드박스 안에서 `rg --json` 한 번. 이미지 계약(§13.3)이 ripgrep 을 요구하는 이유다 |
 | `durable()` | `false` — 코어가 artifact 를 제어 저장소로 복사한다(§11.5) |
 | `stage(resource)` | `/workspace/.aimon-staged/{name}/{contentKey}/` 로 materialize. 샌드박스 안의 `.staged` 마커가 있고 **사본의 내용 해시가 `contentKey` 와 맞을 때만** 생략한다. 스테이징 영역은 **파일 도구에 읽기 전용**이다(코어 §4.4, 이 문서 §11.1) |
@@ -1365,6 +1368,7 @@ owner 그대로)하며 "/workspace 가 초기화되었다" notice 를 붙인다.
   .aimon-shell/<h(shellKey)>/          shell state, lock, owner, heartbeat (§9)
   .aimon-shell/.run.<hex>/             one hook run's private directory, removed after the run (§9)
   .aimon-ptc/<run>/                    core's PTC shell engine replies (hidden from file tools; ptc-shell-prerequisites.md S9)
+  <root>/.aimon-ptc/<run>/             where core actually puts them: under the descriptor's working directory (hidden too)
 /shared                 workspace volume, mounted per profile (sharedAccess: rw | ro | none)
   git/repo.git          bare repository used to exchange commits between slots
   context/ plans/ artifacts/ results/
@@ -1392,7 +1396,9 @@ worktree 를 만든 뒤에 환경을 돌려준다.
 을 코어의 공개 팩토리 `VirtualFileSystems.withPathRules` 로 그대로 건다. 대소문자·유니코드 별칭 처리를 이 모듈에 다시
 적지 않으려는 것이다. `/workspace/.aimon-shell/` 에도 같은 읽기 전용 규칙을 건다. `/workspace/.aimon-ptc/`(코어 PTC 셸 엔진의 응답 파일)는 파일 도구에서
 **숨긴다**(`PathRule.deny`) — 이것도 경계가 아니다: 셸은 읽고 쓰고, 응답의 무결성은 HMAC 이 지킨다([PTC 선행 작업](ptc-shell-prerequisites.md)
-S9). `Grep` 의 샌드박스 안 검색(`rg`)은 경로 규칙을 거치지 않는다(같은 문서 §10 Q4). 이름을 코어 로컬 제공자와 같은
+S9). 코어는 그 디렉터리를 서술자의 작업 디렉터리, 곧 바인딩의 `root`(기본 `/workspace/repo`) 아래에 두므로 `{root}/.aimon-ptc/`
+도 같이 숨긴다([PTC 셸 엔진의 제공자 쪽 설계](ptc-shell-provider.md) F5). 그래서 실행이 도는 동안에는 응답 파일이 모델의 작업
+트리 안에 있다 — §20. `Grep` 의 샌드박스 안 검색(`rg`)은 경로 규칙을 거치지 않는다(같은 문서 §10 Q4). 이름을 코어 로컬 제공자와 같은
 `.aimon-staged` 로 둔 것은, 코어에서 `.aimon/` 이 "제어 저장소(`DENY`)" 를 뜻하기 때문이다 — 샌드박스 안에서 같은
 이름이 스테이징 사본을 뜻하면 두 규칙이 헷갈린다.
 
@@ -1495,6 +1501,7 @@ provision(slot, gen) seed:                                   (every step idempot
   [ "$(id -u)" != 0 ] || fail "runs as root"                 (§12.1; slot -> FAILED, unless insecure-allow)
   [ ! -e /var/run/secrets/kubernetes.io/serviceaccount/token ] || fail "service account token mounted"
   no TCP connect to any controlPlaneEndpoint succeeds || fail "network-isolation"   (NETWORK_ISOLATION, not waived)
+  python3 on PATH, >= 3.8, `-I` imports the ExecuteCode runtime's stdlib || fail "runtime-python3"   (runtimes ∋ python3, §13.3)
   rm -rf /workspace/.tmp-* ; remove /shared/git/.tmp-* older than provisionTimeout   (leftovers of a crashed seed)
   mkdir -p /workspace/.aimon-staged /workspace/.aimon-shell  (read-only to file tools, §11.1)
   if sharedAccess == none:                                   (no bare repository, §6.4)
@@ -1720,6 +1727,7 @@ RUNNING CAS 순서라 두 슬롯이 동시에 resume 하면 잠깐 넘칠 수 �
 | `sharedAccess` | `none` (`rw` · `ro` · `none`, §11.3) |
 | `seed` | `git`(원격 URL · ref · 자격 증명 이름 — 런타임 자격 증명이 같은 저장소를 덮으면 생략, 아니면 읽기 전용, §12.1) 또는 없음 |
 | `insecureAllow` | `[]` — 일부러 풀 격리 capability(`HARDENED_SECURITY_CONTEXT`, `RUNTIME_CLASS`, `NETWORK_ISOLATION`). 로컬 개발 전용, 기동 시 경고(§6.4) |
+| `runtimes` | `[]` — 이미지가 갖춘 언어 런타임(지금은 `python3` 만; 다른 이름은 기동 거부). 서술자의 `runtimes()` 에 실리고 seed 가 확인한다(§13.3). 선언했을 때만 `contentHash` 에 들어간다 — 선언하지 않은 프로파일의 해시는 그대로다 |
 
 프로파일은 운영자 설정이다. 모델은 프로파일을 **고를** 수만 있고(오케스트레이터 도구의 허용 목록 안에서, 자기
 프로파일보다 넓지 않은 것만 — §8.5), 만들거나 고칠 수 없다.
@@ -1859,7 +1867,21 @@ aimon:
 `[ -x /usr/bin/base64 ]`, 그리고 빈 파일(`/dev/null`)의 manifest 를 `/usr/bin/sha256sum -c --strict -` 로 확인하는 검사로
 실패시킨다(step `image-contract`).
 실패를 늦게 발견하면 `Grep` 이 원인 모를 에러를 낸다. `/workspace` 가 없거나 쓸 수 없거나 그 안의 seed 락을 열 수 없는
-것도 같은 계약 위반이다. seed 는 락을 잡기 전에 이를 확인하고 FAILED(영구, step `workspace`)로 끝낸다 — 락 경합(일시
+것도 같은 계약 위반이다.
+
+**선택: `python3` (3.8 이상).** 프로파일이 `runtimes: [python3]` 를 선언한 경우에만 요구한다. 선언하지 않은 이미지는 지금처럼
+유효하다. 선언하면 seed 가 확인하고(step `runtime-python3`, 영구 실패) 서술자의 `runtimes()` 에 실려 코어의 셸 엔진이
+`ExecuteCode` 를 낼 수 있게 된다. 요구하는 것: `PATH` 에서 찾히는 `python3`, 버전 3.8 이상, `-I`(격리 모드)로 코어 런타임
+(`aimon_ptc.py`)이 맨 위에서 import 하는 표준 라이브러리 모듈 — `ast asyncio base64 hashlib hmac inspect json keyword os shutil
+signal stat tempfile threading time traceback`(`SandboxSeeder.PYTHON3_MODULES`, 코어를 따라 고친다) — 이 import 될 것. Debian 의
+`python3-minimal` 은 여기에 모자라다. `site-packages` 는 쓰지 않는다(`-I` 가 끈다). 런타임은 실행 디렉터리에서 돌지만 모델 코드
+출력의 캡처 파일을 `tempfile.mkdtemp()` 로 만들므로 **`TMPDIR` 또는 `/tmp` 가 샌드박스 사용자에게 쓰기 가능해야 한다**(seed 는
+이것을 확인하지 않는다 — §20). 서술자는 seed 결과가 아니라 선언에서 온다: seed 를 마친 뒤에 선언한 슬롯이나 실행 중에
+`python3` 이 지워진 이미지는 코어의 탐침(환경 객체마다 한 번)이 잡아 그 환경에서만 엔진을 뺀다. K8s 계층의 기본 이미지
+(`ghcr.io/kangwoo/aimon-sandbox-runtime:1`)와 그 프로파일은 `python3` 을 선언하지 않는다 — 셸 엔진은 docker 계층에서만
+시험한다.
+
+execd 는 `TMPDIR` 을 두지 않은 채 띄운다 — S1 의 스풀 삭제가 `/tmp` 를 가정한다([PTC 선행 작업](ptc-shell-prerequisites.md) §2.1). seed 는 락을 잡기 전에 이를 확인하고 FAILED(영구, step `workspace`)로 끝낸다 — 락 경합(일시
 장애)으로 보고해 매 호출마다 다시 시도하지 않는다.
 
 **실행 uid 는 execd 의 uid 다.** OpenSandbox 의 files API 와 명령은 execd 프로세스의 사용자로 돈다. 그래서 "uid 1000 으로
@@ -2422,6 +2444,39 @@ docker 계층, K8s 에서만 드러나는 것은 k8s 계층 — 는 [`workspace-
   ([실행 디렉터리 설계](workspace-sandbox-run-directory.md) §1)
 - **`aimon-sandbox-testkit` 의 발행** *(3·4단계 릴리스에서 닫는다)* — 계약 스위트를 이 저장소 밖의 구현도 통과해야 하므로
   발행하기로 했다(`aimon.publishable`). 첫 릴리스 전까지는 되돌릴 수 있다(단계 3 구현 설계 §10 Q5)
+- **셸 엔진의 런타임이 셸의 kill 을 벗어난다** *(코어, 셸 엔진을 운영에 켜기 전에 닫는다)* — 코어의 `aimon_ptc.py` 는 시작할 때
+  `os.setpgid(0, 0)` 으로 자기 프로세스 그룹을 만든다. 이 모듈의 kill(타임아웃 · 취소 · 줄 상한)은 exec 의 프로세스 그룹까지 닿으므로(§9)
+  런타임에 닿지 않는다. `TIMED_OUT` · `CANCELLED` 로 끝난 `ExecuteCode` 의 모델 코드는 셸 호출 뒤에도 돌고, 응답을 기다리지 않는
+  계산은 샌드박스가 없어질 때까지 끝나지 않는다(execd 의 stdout 은 스풀 파일이라 EPIPE 도 없다). testkit 계층에서 실측했다: 엔진 계약
+  스위트의 `wallClock` 이 남긴 런타임이 테스트 뒤에도 CPU 100% 로 돌았다. 고칠 곳은 코어다 — 런타임이 exec 의 그룹에 남고 자식만 따로
+  묶거나, 셸 호출이 끝났음을 스스로 알아차려야 한다([PTC 셸 엔진의 제공자 쪽 설계](ptc-shell-provider.md) §9 Q-C4)
+- **`.aimon-ptc/` 가 모델의 작업 트리 안에 있다** *(코어)* — 코어는 셸 엔진의 실행 디렉터리를 서술자의 작업 디렉터리 아래에 두고,
+  이 환경의 작업 디렉터리는 바인딩 루트(`/workspace/repo`)다. 실행 디렉터리는 실행 끝에 지워지지만, 실행 중에 모델이 돌린 `git
+  status` · `git add -A` 는 응답 파일을 본다. 서술자가 런타임 디렉터리를 따로 선언하거나 작업 디렉터리의 부모를 쓰면 풀린다. seed 의
+  `.git/info/exclude` 는 쓰지 않았다 — seed 때는 저장소가 없을 수 있고, 모델의 저장소 메타데이터를 고치는 일이다(5단계의 git seed 와
+  함께 다시 본다. [PTC 셸 엔진의 제공자 쪽 설계](ptc-shell-provider.md) §5.3, Q-C1)
+- **`RuntimeFileSystem` 계약 스위트의 자리** *(코어)* — 코어는 발행하지 않는다. 이 저장소의 testkit 에 `RuntimeFileSystemContract`
+  를 두었고, 코어 testkit 으로 옮길 수 있다([PTC 셸 엔진의 제공자 쪽 설계](ptc-shell-provider.md) Q-C2)
+- **testkit 계층의 엔진 계약 스위트와 `reply_dir`** *(코어)* — 코어 런타임은 응답 디렉터리를 실행 디렉터리 파일 안의 절대 경로로
+  읽고, testkit 의 로컬 프로바이더는 파일 바이트의 `/workspace` 를 번역하지 않는다. 그래서 testkit 계층은 그 파일 하나를 바꿔 넣는
+  시험 전용 장식자로 돈다. 런타임이 응답 디렉터리를 환경 변수로 받으면 장식자 없이 돈다([PTC 셸 엔진의 제공자 쪽 설계](ptc-shell-provider.md)
+  Q-C3 · Q7)
+- **execd 의 `TMPDIR`** — S1 의 스풀 삭제는 `TMPDIR` 을 `/tmp` 로 가정한다. 운영자가 execd 에 `TMPDIR` 을 줄 수 있다면 프로바이더
+  설정으로 받을지, 이미지 계약 문장(§13.3)으로 막을지. `release-1.1.0` 이상만 지원하면 S1 자체가 필요 없다 — docker 계층의 고정
+  버전을 올릴 때 함께 정한다([PTC 선행 작업](ptc-shell-prerequisites.md) §10 Q1)
+- **`.aimon-ptc` 의 샌드박스 쪽 스윕** — 엔진의 스윕은 환경 객체의 첫 실행에서만 돈다. 오래 쓰지 않은 워크스페이스에는 응답 파일이
+  남는다(HMAC 된 도구 결과). seed 에서 지우면 공유 볼륨에서 다른 슬롯의 살아 있는 실행을 지울 수 있다([PTC 선행 작업](ptc-shell-prerequisites.md)
+  §10 Q3, [PTC 셸 엔진의 제공자 쪽 설계](ptc-shell-provider.md) A13)
+- **`Grep` 은 경로 규칙을 거치지 않는다** — 코어의 `GrepTool` 은 환경의 `contentSearch()` 결과를 경로 규칙 없이 쓰고,
+  `SandboxContentSearch` 는 `rg --hidden --no-ignore` 를 돌린다. 그래서 `/workspace/.aimon-ptc` 와 `{root}/.aimon-ptc` 의 응답 내용이
+  `Grep` 결과에 나올 수 있다(`.aimon-staged` · `.aimon-shell` 도 같다). 코어가 `contentSearch()` 에도 규칙을 적용할지, 이 모듈이 `rg`
+  에 `--glob '!…'` 로 넘길지([PTC 선행 작업](ptc-shell-prerequisites.md) §10 Q4)
+- **훅 · 모니터가 줄 상한에 걸렸을 때의 모양** — 코어의 `killCause()` 계약은 어느 실행에든 원인을 결과로 싣는 것을 허용하지만, 이
+  모듈은 훅이 아닌 격리 실행에만 결과를 돌려주고 훅 · 모니터는 원인을 말하는 예외로 둔다. 넘친 가드 훅이 종료 코드로 돌아오면 훅
+  실행기가 그것을 결정으로 읽을 수 있어서다(§9, [PTC 셸 엔진의 제공자 쪽 설계](ptc-shell-provider.md) Q5)
+- **seed 가 `TMPDIR` 쓰기를 확인하지 않는다** — 셸 엔진의 런타임은 캡처 파일을 `tempfile.mkdtemp()` 로 만든다. 이미지 계약(§13.3)은
+  쓰기 가능을 요구하지만 seed 는 확인하지 않는다(`/tmp` 쓰기는 다른 무엇에도 확인하지 않는다). 지금은 문서로만 둔다
+  ([PTC 셸 엔진의 제공자 쪽 설계](ptc-shell-provider.md) Q6)
 
 ---
 
@@ -2501,6 +2556,8 @@ docker 계층, K8s 에서만 드러나는 것은 k8s 계층 — 는 [`workspace-
 - [`workspace-sandbox-core-033.md`](workspace-sandbox-core-033.md) — aimon-core 0.3.3 의 세 이음매(요청 속성 · 세션 소유자와 삭제 이벤트 · 실행 환경 notice)를 따라간 변경의 설계, 열린 질문(§12)과 구현이 벗어난 점(§14)
 - [`workspace-sandbox-unannounced-reset.md`](workspace-sandbox-unannounced-reset.md) — 코어가 꺼내지 않는 경로(훅 · 워크플로 단계 · 스테이징)의 초기화 notice 를 세션 옵션에 남겨 다음 턴에 알리는 변경(#28)의 설계, 열린 질문(§11)과 구현이 벗어난 점(§12)
 - [`workspace-sandbox-run-directory.md`](workspace-sandbox-run-directory.md) — 코어의 `RUN_DIRECTORY` 를 구현하고 훅 · 격리 실행의 run 파일을 에이전트의 손에서 치운 변경(#33)의 설계, 열린 질문(§11)과 구현이 벗어난 점(§12)
+- [`ptc-shell-prerequisites.md`](ptc-shell-prerequisites.md) — 코어 PTC 셸 엔진을 위한 선행 작업 S1–S9 의 기록(스풀 삭제 · SSE 줄 상한 · `python3` · 비밀 파일 · 런타임 FS · 서술자 · kill 원인 · `.aimon-ptc` 거부), 열린 질문(§10)
+- [`ptc-shell-provider.md`](ptc-shell-provider.md) — 코어 PTC 셸 엔진의 제공자 쪽 절반(S3–S6, S8)을 구현한 변경의 설계, 열린 질문(§8)과 구현이 벗어난 점(§9)
 - [`workspace-sandbox-hook-identity.md`](workspace-sandbox-hook-identity.md) — 정책 훅을 에이전트와 다른 uid 로 돌리는 일(#34, 코어 EE-113)의 기록: OpenSandbox 가 준 것, 막힌 것(execd API 의 도달성), 이미지 계약과 seed 검사 초안 — 구현 전
 - [`opensandbox-spike.md`](opensandbox-spike.md) — 2단계(OpenSandbox 스파이크)의 결과와 근거
 - [`sandbox.md` @ `704013c`](https://github.com/kangwoo/aimon-sandbox/blob/704013c02cb14f16ec37ebf8c07f90d7e107db73/docs/design/sandbox.md) — 이 설계가 대체한 identifier 기반 설계(삭제됨)

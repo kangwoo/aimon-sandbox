@@ -107,6 +107,12 @@ SessionSpec.builder().lifecycleListener(sandbox.sessionLifecycleListener());   /
   files in `/workspace/.aimon-shell/{h}/` and their exec is killed once the hook has ended, so a `cmd &` a hook leaves
   behind is killed with it. Sandbox images must provide `base64` in `/usr/bin`
   ([`docs/design/workspace-sandbox-run-directory.md`](docs/design/workspace-sandbox-run-directory.md)).
+- **Core's Python `ExecuteCode` can run in a sandbox.** A profile that declares `runtimes: [python3]` (the image must
+  provide it; the seed checks) gets a descriptor that declares the runtime and `SANDBOXED` isolation, a runtime file
+  system for the engine's reply files, and secret run files kept off every command line — what core 0.3.4's shell
+  engine needs before it offers `ExecuteCode` there. A timed-out or cancelled run's code is not yet stopped inside the
+  sandbox (a core defect, design §20)
+  ([`docs/design/ptc-shell-provider.md`](docs/design/ptc-shell-provider.md)).
 
 - **Use `shared(...)`, not `provider(Supplier)`.** The host owns the `WorkspaceSandbox` and closes it; the stack
   must not. `ExecutionEnvironmentSpec.factory` no longer exists in aimon-core 0.3.1.

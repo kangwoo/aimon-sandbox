@@ -5,6 +5,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.UncheckedIOException;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.function.Consumer;
@@ -28,8 +29,9 @@ import at.aimon.sandbox.workspace.SandboxWorkspaceManager;
  * <li>this class resolves a relative path against the binding's {@code root} and reports {@code root} as its working
  * directory — file tools resolve relative paths against {@code root}, never against the shell's cwd;</li>
  * <li>{@link VirtualFileSystems#withPathRules} anchored at {@code /} makes {@code /workspace/.aimon-staged} and
- * {@code /workspace/.aimon-shell} read-only ("Access denied") and hides {@code /workspace/.aimon-ptc} — guards against
- * mistakes, not a security boundary: the shell can still read and write there;</li>
+ * {@code /workspace/.aimon-shell} read-only ("Access denied") and hides {@code /workspace/.aimon-ptc} and
+ * {@code {root}/.aimon-ptc} — guards against mistakes, not a security boundary: the shell can still read and write
+ * there;</li>
  * <li>{@link ProviderFileSystem} over the connection's files API.</li>
  * </ol>
  *
@@ -47,10 +49,14 @@ final class SandboxFileSystem implements VirtualFileSystem {
     static final List<PathRule> RULES = List.of(PathRule.readOnly("workspace/.aimon-staged"),
             PathRule.readOnly("workspace/.aimon-shell"), PathRule.deny("workspace/.aimon-ptc"));
 
+    /** The directory core's shell engine keeps its runs in, under the descriptor's working directory. */
+    private static final String PTC_DIRECTORY = ".aimon-ptc";
+
     private final SandboxBinding binding;
     private final SandboxWorkspaceManager manager;
     private final PendingNotices pending;
     private final String root;
+    private final List<PathRule> rules;
 
     SandboxFileSystem(SandboxBinding binding, SandboxWorkspaceManager manager, PendingNotices pending) {
         this.binding = Objects.requireNonNull(binding, "binding must not be null");
@@ -59,11 +65,26 @@ final class SandboxFileSystem implements VirtualFileSystem {
         this.root = binding.root().endsWith("/") && binding.root().length() > 1
                 ? binding.root().substring(0, binding.root().length() - 1)
                 : binding.root();
+        this.rules = rules(root);
+    }
+
+    /**
+     * {@link #RULES}, and the same deny for {@code .aimon-ptc} under the root: core's shell engine places its runs
+     * under the descriptor's working directory, which is the binding's root ({@code /workspace/repo} by default), not
+     * {@code /workspace} (docs/design/ptc-shell-provider.md F5).
+     */
+    static List<PathRule> rules(String root) {
+        if (!root.startsWith("/") || "/".equals(root) || "/workspace".equals(root)) {
+            return RULES;
+        }
+        final List<PathRule> rules = new ArrayList<>(RULES);
+        rules.add(PathRule.deny(root.substring(1) + "/" + PTC_DIRECTORY));
+        return List.copyOf(rules);
     }
 
     private <T> T call(Function<VirtualFileSystem, T> operation) {
         final ConnectedSlot slot = connect();
-        return ProviderCalls.guarded(slot, () -> operation.apply(view(slot)));
+        return ProviderCalls.guarded(slot, () -> operation.apply(view(slot, rules)));
     }
 
     private ConnectedSlot connect() {
@@ -72,8 +93,8 @@ final class SandboxFileSystem implements VirtualFileSystem {
         return slot;
     }
 
-    private static VirtualFileSystem view(ConnectedSlot slot) {
-        return VirtualFileSystems.withPathRules(new ProviderFileSystem(slot.connection().files()), RULES);
+    private static VirtualFileSystem view(ConnectedSlot slot, List<PathRule> rules) {
+        return VirtualFileSystems.withPathRules(new ProviderFileSystem(slot.connection().files()), rules);
     }
 
     private void run(Consumer<VirtualFileSystem> operation) {
@@ -169,7 +190,7 @@ final class SandboxFileSystem implements VirtualFileSystem {
     @Override
     public OutputStream openOutputStream(String path) {
         final ConnectedSlot slot = connect();
-        final OutputStream out = ProviderCalls.guarded(slot, () -> view(slot).openOutputStream(resolve(path)));
+        final OutputStream out = ProviderCalls.guarded(slot, () -> view(slot, rules).openOutputStream(resolve(path)));
         return new FilterOutputStream(out) {
             @Override
             public void write(byte[] bytes, int offset, int length) throws IOException {

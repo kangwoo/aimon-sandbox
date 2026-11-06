@@ -11,6 +11,7 @@ import at.aimon.core.agent.session.SessionId;
 import at.aimon.core.environment.ContentSearch;
 import at.aimon.core.environment.EnvironmentDescriptor;
 import at.aimon.core.environment.ExecutionEnvironment;
+import at.aimon.core.environment.RuntimeFileSystem;
 import at.aimon.core.environment.StagedResource;
 import at.aimon.core.filesystem.VirtualFileSystem;
 import at.aimon.core.shell.VirtualShell;
@@ -41,6 +42,7 @@ public final class SandboxExecutionEnvironment implements ExecutionEnvironment {
     private final SandboxBinding binding;
     private final EnvironmentDescriptor descriptor;
     private final SandboxFileSystem fileSystem;
+    private final SandboxRuntimeFileSystem runtimeFileSystem;
     private final SandboxShell shell;
     private final SandboxStaging staging;
     private final SandboxContentSearch contentSearch;
@@ -75,6 +77,7 @@ public final class SandboxExecutionEnvironment implements ExecutionEnvironment {
                     }
                 });
         this.fileSystem = new SandboxFileSystem(binding, manager, pending);
+        this.runtimeFileSystem = new SandboxRuntimeFileSystem(binding, manager, pending);
         this.shell = new SandboxShell(binding, manager, connections, settings, pending, clock);
         this.staging = new SandboxStaging(binding, manager, connections, pending, fileSystem);
         this.contentSearch = new SandboxContentSearch(binding, manager, fileSystem, pending);
@@ -93,6 +96,16 @@ public final class SandboxExecutionEnvironment implements ExecutionEnvironment {
     @Override
     public VirtualShell shell() {
         return shell;
+    }
+
+    /**
+     * @return the framework's own file access — outside the file tools' path rules, never handed to a model tool, and
+     *         confined to {@code /workspace} (docs/design/ptc-shell-prerequisites.md S5); always present, and
+     *         provisions nothing until its first call
+     */
+    @Override
+    public Optional<RuntimeFileSystem> runtimeFileSystem() {
+        return Optional.of(runtimeFileSystem);
     }
 
     /** @return the profile's declared values, never read from the image (§7) */

@@ -13,7 +13,9 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.TreeMap;
+import java.util.TreeSet;
 
+import at.aimon.core.environment.EnvironmentDescriptor;
 import at.aimon.sandbox.provider.Capability;
 import at.aimon.sandbox.provider.ResourceSpec;
 
@@ -24,13 +26,21 @@ import at.aimon.sandbox.provider.ResourceSpec;
  * <p>
  * {@link #egress()} distinguishes <i>absent</i> (no egress policy requested) from <i>empty</i> (deny everything); an
  * empty list still requires {@link Capability#EGRESS_POLICY} (§6.4). {@link #insecureAllow()} waives isolation
- * capabilities for local development only, and every waiver is logged at startup.
+ * capabilities for local development only, and every waiver is logged at startup. {@link #runtimes()} declares the
+ * language runtimes the image provides beyond the image contract — only {@code python3} so far — which the seed
+ * verifies and the environment descriptor carries (docs/design/ptc-shell-prerequisites.md S3).
  */
 public final class SandboxProfile {
 
     /** The capabilities {@link #insecureAllow()} may waive (§13.1). */
     public static final Set<Capability> WAIVABLE = Collections.unmodifiableSet(
             EnumSet.of(Capability.HARDENED_SECURITY_CONTEXT, Capability.RUNTIME_CLASS, Capability.NETWORK_ISOLATION));
+
+    /**
+     * The runtimes a profile may declare: those the seed has a check for. Startup refuses any other name, since the
+     * descriptor would otherwise promise a runtime nothing verified (§13.1, §13.3).
+     */
+    public static final Set<String> SUPPORTED_RUNTIMES = Set.of(EnvironmentDescriptor.RUNTIME_PYTHON3);
 
     /** The background-command ceiling of a profile that configures none (§5.3, §13.1). */
     public static final Duration DEFAULT_BACKGROUND_COMMAND_TIMEOUT = Duration.ofHours(24);
@@ -52,6 +62,7 @@ public final class SandboxProfile {
     private final SharedAccess sharedAccess;
     private final SeedSpec seed;
     private final Set<Capability> insecureAllow;
+    private final Set<String> runtimes;
 
     private SandboxProfile(Builder builder) {
         this.name = Objects.requireNonNull(builder.name, "name must not be null");
@@ -74,6 +85,7 @@ public final class SandboxProfile {
         this.insecureAllow = builder.insecureAllow.isEmpty()
                 ? Set.of()
                 : Collections.unmodifiableSet(EnumSet.copyOf(builder.insecureAllow));
+        this.runtimes = Collections.unmodifiableSet(new TreeSet<>(builder.runtimes));
     }
 
     /** @return a new builder */
@@ -179,6 +191,17 @@ public final class SandboxProfile {
     }
 
     /**
+     * The language runtimes the image provides, as core names them ({@code python3}): checked by the seed (a permanent
+     * failure when the image lacks one) and carried by the environment descriptor, where core's shell engine of
+     * {@code ExecuteCode} looks for {@code python3} (§13.3).
+     *
+     * @return the declared runtimes, sorted; empty by default
+     */
+    public Set<String> runtimes() {
+        return runtimes;
+    }
+
+    /**
      * The capabilities a provider must advertise to run this profile (§6.4): {@code EXEC}, {@code FILES},
      * {@code EXPIRY}, {@code HARDENED_SECURITY_CONTEXT} and {@code NETWORK_ISOLATION} always, plus what the
      * configuration implies, minus {@link #insecureAllow()}.
@@ -224,7 +247,9 @@ public final class SandboxProfile {
                 "pauseAfter=" + pauseAfter, "terminateAfter=" + terminateAfter,
                 "backgroundHeartbeatLimit=" + backgroundHeartbeatLimit,
                 "backgroundCommandTimeout=" + backgroundCommandTimeout(), "sharedAccess=" + sharedAccess,
-                "seed=" + seed, "insecureAllow=" + insecureAllow);
+                "seed=" + seed, "insecureAllow=" + insecureAllow)
+                // Only when declared: every profile that declares none keeps the hash it had before runtimes existed.
+                + (runtimes.isEmpty() ? "" : "\nruntimes=" + runtimes);
         try {
             return HexFormat.of()
                     .formatHex(MessageDigest.getInstance("SHA-256").digest(canonical.getBytes(StandardCharsets.UTF_8)));
@@ -236,7 +261,7 @@ public final class SandboxProfile {
     @Override
     public String toString() {
         return "SandboxProfile{" + name + ", image=" + image + ", platform=" + platform + ", terminateAfter="
-                + terminateAfter + '}';
+                + terminateAfter + (runtimes.isEmpty() ? "" : ", runtimes=" + runtimes) + '}';
     }
 
     /** Builder for {@link SandboxProfile}. */
@@ -258,6 +283,7 @@ public final class SandboxProfile {
         private SharedAccess sharedAccess = SharedAccess.NONE;
         private SeedSpec seed;
         private Set<Capability> insecureAllow = Set.of();
+        private Set<String> runtimes = Set.of();
 
         private Builder() {
         }
@@ -345,6 +371,12 @@ public final class SandboxProfile {
 
         public Builder insecureAllow(Set<Capability> insecureAllow) {
             this.insecureAllow = Objects.requireNonNull(insecureAllow, "insecureAllow must not be null");
+            return this;
+        }
+
+        /** {@code null} is none; startup refuses a name outside {@link SandboxProfile#SUPPORTED_RUNTIMES}. */
+        public Builder runtimes(Set<String> runtimes) {
+            this.runtimes = runtimes == null ? Set.of() : Set.copyOf(runtimes);
             return this;
         }
 

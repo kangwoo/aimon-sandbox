@@ -42,6 +42,7 @@ import at.aimon.sandbox.opensandbox.OpenSandboxProviderConfig.EgressEnforcement;
 import at.aimon.sandbox.provider.Capability;
 import at.aimon.sandbox.provider.CreateSpec;
 import at.aimon.sandbox.provider.CredentialScope;
+import at.aimon.sandbox.provider.ExecKillCause;
 import at.aimon.sandbox.provider.ExecOutcome;
 import at.aimon.sandbox.provider.ExecSpec;
 import at.aimon.sandbox.provider.FileStat;
@@ -916,6 +917,68 @@ class OpenSandboxProviderTest {
             assertThat(outcome.stdoutTruncated()).isTrue();
             assertThat(outcome.stderrTruncated()).isTrue();
             assertThat(sunk).containsExactly("before\n");
+            assertThat(outcome.killCause()).as("S8").contains(ExecKillCause.LINE_LIMIT_EXCEEDED);
+            assertThat(outcome.timedOut()).isFalse();
+        }
+
+        @Test
+        @DisplayName("S8: a command that ends by itself carries no kill cause")
+        void aNormalCommandHasNoKillCause() throws Exception {
+            final ExecOutcome outcome = connection
+                    .run(ExecSpec.builder().command("x").timeout(Duration.ofSeconds(10)).build(), OutputSink.DISCARD)
+                    .await(Duration.ofSeconds(10));
+
+            assertThat(outcome.killCause()).isEmpty();
+        }
+
+        @Test
+        @DisplayName("S8: a line kill whose exit lands past the spec's timeout is the line kill, not a timeout")
+        void aLineKillPastTheTimeoutIsNotATimeout() throws Exception {
+            final CountDownLatch hold = new CountDownLatch(1);
+            server.holds.put("c7", hold);
+            server.commands = body -> Reply.events(List.of(init("c7"), out("x".repeat(SseEvents.MAX_LINE_BYTES))),
+                    hold);
+            server.commandStatus = FakeOpenSandboxServer.JSON.createObjectNode().put("running", false).put("exit_code",
+                    -1);
+
+            final ExecOutcome outcome = connection
+                    .run(ExecSpec.builder().command("x").timeout(Duration.ofMillis(1)).build(), OutputSink.DISCARD)
+                    .await(Duration.ofSeconds(10));
+
+            assertThat(outcome.exitCode()).isEqualTo(137);
+            assertThat(outcome.killCause()).contains(ExecKillCause.LINE_LIMIT_EXCEEDED);
+            assertThat(outcome.timedOut()).isFalse();
+        }
+
+        @Test
+        @DisplayName("S8: a long line after a timeout's kill was already requested leaves the timeout reported")
+        void aLongLineAfterTheTimeoutKillIsTheTimeout() throws Exception {
+            final CountDownLatch gate = new CountDownLatch(1);
+            final CountDownLatch hold = new CountDownLatch(1);
+            server.holds.put("c6", hold);
+            server.commands = body -> Reply.gated(gate, List.of(init("c6"), out("x".repeat(SseEvents.MAX_LINE_BYTES))),
+                    hold);
+            server.commandStatus = FakeOpenSandboxServer.JSON.createObjectNode().put("running", false).put("exit_code",
+                    -1);
+            final RunningCommand command = connection.run(
+                    ExecSpec.builder().command("sleep 60").timeout(Duration.ofSeconds(60)).build(), OutputSink.DISCARD);
+            // The stream starts only after await ran out and latched its kill.
+            final Thread release = new Thread(() -> {
+                try {
+                    Thread.sleep(500);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                gate.countDown();
+            });
+            release.start();
+
+            final ExecOutcome outcome = command.await(Duration.ofMillis(100));
+            release.join();
+
+            assertThat(outcome.timedOut()).isTrue();
+            assertThat(outcome.killCause()).isEmpty();
+            assertThat(server.interrupted).containsExactly("c6");
         }
 
         @Test

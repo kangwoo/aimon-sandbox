@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.regex.Pattern;
 
+import at.aimon.core.environment.EnvironmentDescriptor;
 import at.aimon.sandbox.profile.SandboxProfile;
 import at.aimon.sandbox.provider.Capability;
 import at.aimon.sandbox.provider.ExecOutcome;
@@ -31,6 +32,9 @@ import at.aimon.sandbox.provider.SandboxProviderException;
  * <li>not root and no service-account token — skipped when {@code HARDENED_SECURITY_CONTEXT} is waived;</li>
  * <li>no TCP connection to any of the provider's control-plane endpoints succeeds — when {@code NETWORK_ISOLATION} is
  * required (not waived). Refused, timed out (3 s) or unresolvable all pass; only an established connection fails;</li>
+ * <li>when the profile declares the {@code python3} runtime: {@code python3} on {@code PATH}, version 3.8 or later, and
+ * {@code python3 -I} importing every standard-library module core's {@code ExecuteCode} runtime imports — step
+ * {@code runtime-python3} (§13.3, docs/design/ptc-shell-prerequisites.md S3);</li>
  * <li>{@code rm -rf /workspace/.tmp-*}, then {@code mkdir -p} the staging and shell areas and the root.</li>
  * </ul>
  * Everything after the contract check runs under {@code flock} on {@code /workspace/.aimon-seed.lock}, held on an fd
@@ -47,6 +51,13 @@ final class SandboxSeeder {
     private static final Pattern VERSION_X = Pattern.compile("(?<=\\.)x(?=$|\\.)");
     /** How long the network probe waits for one connect; {@code /dev/tcp} alone can hang for over a minute. */
     static final int PROBE_TIMEOUT_SECONDS = 3;
+    /**
+     * The standard-library modules core's {@code ExecuteCode} runtime ({@code aimon_ptc.py} in aimon-core) imports at
+     * top level, as of aimon-core 0.3.4. It must follow core: a module core adds and an image lacks passes the seed and
+     * then fails every run. {@code sys} is imported by the check itself; {@code ctypes} is imported under a guard.
+     */
+    static final List<String> PYTHON3_MODULES = List.of("ast", "asyncio", "base64", "hashlib", "hmac", "inspect",
+            "json", "keyword", "os", "shutil", "signal", "stat", "tempfile", "threading", "time", "traceback");
 
     private final Duration provisionTimeout;
     private final List<HostPort> controlPlane;
@@ -164,10 +175,28 @@ final class SandboxSeeder {
         if (profile.requiredCapabilities().contains(Capability.NETWORK_ISOLATION) && !controlPlane.isEmpty()) {
             appendNetworkProbe(s);
         }
+        s.append(runtimeChecks(profile));
         s.append("rm -rf /workspace/.tmp-*\n");
         s.append("mkdir -p /workspace/.aimon-staged /workspace/.aimon-shell ").append(quote(root))
                 .append(" || fail root-directory 'cannot create the working root'\n");
         return s.toString();
+    }
+
+    /**
+     * The checks of the profile's declared runtimes (§13.3): empty when it declares none. Uses the script's
+     * {@code fail}; reads nothing in {@code /workspace}. The version is checked before the imports, so an old
+     * {@code python3} is reported as old rather than as missing a module.
+     */
+    static String runtimeChecks(SandboxProfile profile) {
+        if (!profile.runtimes().contains(EnvironmentDescriptor.RUNTIME_PYTHON3)) {
+            return "";
+        }
+        return "command -v python3 >/dev/null 2>&1 || fail runtime-python3 'the profile declares python3 but the image "
+                + "lacks it'\n" + "python3 -I -c 'import sys\nif sys.version_info < (3, 8): sys.exit(3)\nimport "
+                + String.join(", ", PYTHON3_MODULES) + "' >/dev/null 2>&1; r=$?\n"
+                + "[ \"$r\" = 3 ] && fail runtime-python3 \"python3 is older than 3.8 ($(python3 -I -V 2>&1))\"\n"
+                + "[ \"$r\" = 0 ] || fail runtime-python3 'python3 -I cannot import the standard library modules the "
+                + "ExecuteCode runtime needs'\n";
     }
 
     /**

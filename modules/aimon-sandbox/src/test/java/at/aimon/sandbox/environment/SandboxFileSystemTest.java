@@ -196,4 +196,29 @@ class SandboxFileSystemTest {
         assertThatThrownBy(out::close).isInstanceOf(at.aimon.sandbox.workspace.SandboxUnavailableException.class)
                 .hasMessageContaining("cannot be reached");
     }
+
+    @Test
+    @DisplayName("S9: .aimon-ptc under the binding root, where core's shell engine puts it, is hidden too")
+    void theProgrammaticToolCallingAreaUnderTheRootIsHidden() throws Exception {
+        assertThat(bash(env,
+                "mkdir -p /workspace/repo/.aimon-ptc/run/r && echo reply > "
+                        + "/workspace/repo/.aimon-ptc/run/r/1 && cat .aimon-ptc/run/r/1")
+                .stdout()).isEqualTo("reply\n");
+
+        assertThatThrownBy(() -> fs.read(".aimon-ptc/run/r/1")).isInstanceOf(VirtualFileSystemException.class);
+        assertThatThrownBy(() -> fs.read("/workspace/repo/.aimon-ptc/run/r/1"))
+                .isInstanceOf(VirtualFileSystemException.class);
+        assertThatThrownBy(() -> fs.write(".aimon-ptc/run/r/2", "forged"))
+                .isInstanceOf(FileAccessDeniedException.class);
+        assertThat(fs.exists(".aimon-ptc/run/r/1")).isFalse();
+        assertThat(fs.list("")).doesNotContain(".aimon-ptc");
+        assertThat(harness.hostFile(session, "/workspace/repo/.aimon-ptc/run/r/1")).isEqualTo("reply\n");
+    }
+
+    @Test
+    void theRulesAddTheRootsPtcDirectoryOnlyBelowWorkspace() {
+        assertThat(SandboxFileSystem.rules("/workspace")).isEqualTo(SandboxFileSystem.RULES);
+        assertThat(SandboxFileSystem.rules("/workspace/repo")).hasSize(SandboxFileSystem.RULES.size() + 1)
+                .containsAll(SandboxFileSystem.RULES);
+    }
 }

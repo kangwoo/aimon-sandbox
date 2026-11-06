@@ -257,4 +257,11 @@ class SandboxStartupValidatorTest {
                 .anyMatch(v -> v.contains("terminate-after PT1M must be at least 3 × activity-write-interval"));
         assertThat(violations(enough, LOCAL, false, false)).isEmpty();
     }
+
+    @Test
+    void runtimesMayNameOnlyWhatTheSeedChecks() {
+        assertThat(violations(local().runtimes(Set.of("python3")).build())).isEmpty();
+        assertThat(violations(local().runtimes(Set.of("python3", "node")).build()))
+                .anyMatch(v -> v.contains("runtimes may only name [python3], not [node]"));
+    }
 }
