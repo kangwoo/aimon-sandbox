@@ -93,6 +93,10 @@ public final class SandboxExecutionEnvironment implements ExecutionEnvironment {
         return fileSystem;
     }
 
+    /**
+     * @return the sandbox shell, built with this environment: returning it provisions nothing, as core's javadoc asks
+     *         (an offer asks for it on every iteration) — the sandbox is connected on its first command
+     */
     @Override
     public VirtualShell shell() {
         return shell;

@@ -411,9 +411,8 @@ final class OpenSandboxRunningCommand implements RunningCommand {
 
     /**
      * {@link #await} ran out: the command is killed and given the kill grace ({@link #KILL_GRACE}) to end. Whatever
-     * ends it inside the
-     * grace — the kill, or itself just after the timeout — it is reported with its exit code and as timed out: the
-     * caller's wait did run out before it ended.
+     * ends it inside the grace — the kill, or itself just after the timeout — it is reported with its exit code and as
+     * timed out: the caller's wait did run out before it ended.
      */
     private ExecOutcome killed() throws InterruptedException {
         kill();

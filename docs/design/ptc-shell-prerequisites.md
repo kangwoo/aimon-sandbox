@@ -293,7 +293,7 @@ import 될 것, `TMPDIR`(없으면 `/tmp`)이 쓰기 가능할 것. 초안이 �
 
 Q1 · Q3 · Q4 와 [`ptc-shell-provider.md`](ptc-shell-provider.md) §8 의 Q5 · Q6 · Q-C1–Q-C3 은 이 변경 밖에도 영향이 있어
 아키텍처 문서 [`workspace-sandbox.md`](workspace-sandbox.md) §20 에 올렸다. 구현 중에 드러난 코어 쪽 결함(Q-C4, 런타임이
-셸의 kill 을 벗어난다)도 그곳에 있다.
+셸의 kill 을 벗어난다)도 그곳에 올렸고, 코어 aimon-core#336 으로 닫았다.
 
 ## 11. S8 — 제공자가 끝낸 명령의 원인 (구현, 제공자 쪽)
 
@@ -333,5 +333,6 @@ Q1 · Q3 · Q4 와 [`ptc-shell-provider.md`](ptc-shell-provider.md) §8 의 Q5 �
   살아남지만 — 클래스가 함께 쓰는 샌드박스가 없어질 때까지 — 컨테이너 안에 갇혀 있고, `ShellEngineContractIT` 는 정지된
   실행에 엔진이 쓰는 응답을 버려서 `bridgeLimitStopsAtOnce` 가 kill 이 얼마나 빨리 돌아오는지에 달리지 않게 한다(응답이
   없으면 런타임은 기다리다 자기 기한에 끝난다). 코어 쪽 결함이다(아키텍처 문서 §20,
-  [`ptc-shell-provider.md`](ptc-shell-provider.md) §9 Q-C4).
+  [`ptc-shell-provider.md`](ptc-shell-provider.md) §9 Q-C4). 코어 aimon-core#336 이 고친 뒤 두 시험을 다시 켜고 응답을
+  버리는 장식자를 없앴다 — 지금은 두 계층 모두 스위트를 빠짐없이 돌린다.
 

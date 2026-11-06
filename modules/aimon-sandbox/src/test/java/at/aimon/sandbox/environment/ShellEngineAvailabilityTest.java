@@ -82,6 +82,25 @@ class ShellEngineAvailabilityTest {
     }
 
     @Test
+    @DisplayName("1/2: shell(), its supports(...) and its working directory make no provider call at all")
+    void askingTheShellProvisionsNothing() {
+        final ExecutionEnvironment main = harness.mainTurn(SessionId.generate(), ALICE);
+        final ExecutionEnvironment fork = harness.fork(main, ALICE);
+        harness.faults.resetCounts();
+
+        for (ExecutionEnvironment environment : new ExecutionEnvironment[]{main, fork}) {
+            for (ShellFeature feature : ShellFeature.values()) {
+                environment.shell().supports(feature);
+            }
+            assertThat(environment.shell().getWorkingDirectory()).isNotBlank();
+        }
+
+        for (Operation operation : Operation.values()) {
+            assertThat(harness.faults.calls(operation)).as("%s calls", operation).isZero();
+        }
+    }
+
+    @Test
     @DisplayName("3: the probe passes through the runtime file system and the isolated shell, and leaves no probe file")
     void theProbePasses() throws Exception {
         final ExecutionEnvironment environment = harness.mainTurn(SessionId.generate(), ALICE);
