@@ -96,4 +96,29 @@ class SandboxProfileTest {
         assertThat(SeedSpec.git("https://x/r.git", "main", "ro-cred").toString())
                 .isEqualTo("git https://x/r.git@main as ro-cred");
     }
+
+    @Test
+    void runtimesAreEmptyByDefaultAndSorted() {
+        assertThat(base().build().runtimes()).isEmpty();
+        assertThat(base().runtimes(null).build().runtimes()).isEmpty();
+        assertThat(base().runtimes(Set.of("python3", "a-later-one")).build().runtimes()).containsExactly("a-later-one",
+                "python3");
+        assertThatThrownBy(() -> base().build().runtimes().add("x")).isInstanceOf(UnsupportedOperationException.class);
+    }
+
+    @Test
+    void declaringNoRuntimeKeepsTheHashAProfileHadBeforeRuntimesExisted() {
+        // The SHA-256 of the canonical string as it was before runtimes existed: a profile without runtimes must not
+        // re-try its FAILED slots.
+        assertThat(base().build().contentHash())
+                .isEqualTo("f3294a36453bb9a29a245acbb7a4fdfd244fd451340177a19edbdbcb4c73cc54");
+        assertThat(base().runtimes(Set.of()).build().contentHash()).isEqualTo(base().build().contentHash());
+        assertThat(base().runtimes(Set.of("python3")).build().contentHash()).isNotEqualTo(base().build().contentHash());
+    }
+
+    @Test
+    void toStringNamesRuntimesOnlyWhenDeclared() {
+        assertThat(base().build().toString()).doesNotContain("runtimes");
+        assertThat(base().runtimes(Set.of("python3")).build().toString()).contains("runtimes=[python3]");
+    }
 }

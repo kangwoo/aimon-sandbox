@@ -8,6 +8,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
@@ -19,6 +20,7 @@ import at.aimon.core.agent.ExecutionId;
 import at.aimon.core.agent.session.SessionId;
 import at.aimon.core.base.Principal;
 import at.aimon.core.environment.EnvironmentDescriptor;
+import at.aimon.core.environment.EnvironmentIsolation;
 import at.aimon.core.environment.EnvironmentRequest;
 import at.aimon.core.environment.ExecutionEnvironment;
 import at.aimon.core.environment.ForkDefinition;
@@ -489,5 +491,30 @@ class SandboxEnvironmentProviderTest {
                 .contains("re-created since this execution last used it (generation 2)");
         parent.fileSystem().exists("/workspace/repo");
         assertThat(parent.drainNotices()).as("once").isEmpty();
+    }
+
+    @Test
+    @DisplayName("S6: the descriptor declares SANDBOXED and the profile's runtimes, for a fork too; unavailable none")
+    void theDescriptorDeclaresIsolationAndRuntimes() {
+        try (SandboxHarness python = SandboxHarness.builder()
+                .profile(SandboxTestProfiles.local("py").runtimes(Set.of("python3")).build()).build()) {
+            final ExecutionEnvironment main = python.mainTurn(SessionId.generate(), ALICE);
+            final ExecutionEnvironment fork = python.fork(main, ALICE);
+
+            for (ExecutionEnvironment env : List.of(main, fork)) {
+                assertThat(env.descriptor().isolation()).contains(EnvironmentIsolation.SANDBOXED);
+                assertThat(env.descriptor().runtimes()).containsExactly("python3");
+                assertThat(env.runtimeFileSystem()).isPresent();
+            }
+            assertThat(python.faults.calls(Operation.CREATE)).isZero();
+        }
+        final ExecutionEnvironment plain = harness.mainTurn(SessionId.generate(), ALICE);
+        assertThat(plain.descriptor().isolation()).contains(EnvironmentIsolation.SANDBOXED);
+        assertThat(plain.descriptor().runtimes()).isEmpty();
+
+        final ExecutionEnvironment unavailable = harness.fork(UnavailableExecutionEnvironment.of("gone"), ALICE);
+        assertThat(cause(unavailable)).contains("gone");
+        assertThat(unavailable.descriptor().isolation()).isEmpty();
+        assertThat(unavailable.runtimeFileSystem()).isEmpty();
     }
 }

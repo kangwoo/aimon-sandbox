@@ -4,9 +4,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.nio.charset.StandardCharsets;
+import java.security.SecureRandom;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Base64;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
@@ -30,6 +33,7 @@ import at.aimon.core.shell.RunDirectory;
 import at.aimon.core.shell.ShellCancellationSource;
 import at.aimon.core.shell.ShellCommandResult;
 import at.aimon.core.shell.ShellFeature;
+import at.aimon.core.shell.ShellKillCause;
 import at.aimon.core.shell.exception.RunDirectoryIntegrityException;
 import at.aimon.core.shell.exception.ShellCancelledException;
 import at.aimon.core.shell.exception.ShellExecutionException;
@@ -371,7 +375,82 @@ class OpenSandboxWorkspaceIT {
         final long started = System.nanoTime();
         assertThatThrownBy(() -> env.shell().execute(() -> "head -c 300000 /dev/zero | tr '\\0' x; echo; sleep 30",
                 ExecutionOptions.builder().timeout(Duration.ofSeconds(60)).hook(true).isolated(true).build()))
-                .isInstanceOf(ShellExecutionException.class).isNotInstanceOf(ShellTimeoutException.class);
+                .isInstanceOf(ShellExecutionException.class).isNotInstanceOf(ShellTimeoutException.class)
+                .hasMessageContaining("line limit");
         assertThat(Duration.ofNanos(System.nanoTime() - started)).isLessThan(Duration.ofSeconds(20));
+
+        // S8: the same line from an isolated run that is not a hook's — the shell engine's call shape — is a result
+        // that says the provider ended it, which core's engine reads as a protocol violation.
+        final long isolatedStarted = System.nanoTime();
+        final ShellCommandResult ended = env.shell().execute(
+                () -> "head -c 300000 /dev/zero | tr '\\0' x; echo; sleep 30",
+                ExecutionOptions.builder().timeout(Duration.ofSeconds(60)).isolated(true).build(), line -> {
+                });
+        assertThat(ended.killCause()).contains(ShellKillCause.LINE_LIMIT_EXCEEDED);
+        assertThat(ended.outputTruncated()).isTrue();
+        assertThat(Duration.ofNanos(System.nanoTime() - isolatedStarted)).isLessThan(Duration.ofSeconds(20));
+    }
+
+    @Test
+    @DisplayName("S4: a secret run file is on no process's command line while its run is going; a plain one is")
+    void aSecretRunFileIsOnNoCommandLine() throws Exception {
+        final WorkspaceSandbox assembly = assembly(profile().build(), new InMemorySandboxWorkspaceStore());
+        final ExecutionEnvironment env = mainTurn(assembly, SessionId.generate());
+        bash(env, "true");
+        final SecureRandom random = new SecureRandom();
+        final byte[] key = new byte[32];
+        random.nextBytes(key);
+        final byte[] plain = new byte[32];
+        random.nextBytes(plain);
+
+        // The secret's base64 and hex, and in a second run a plain file's base64.
+        assertThat(cmdlineHits(env, RunDirectory.builder().variable("AIMON_RUN_DIR").secretFile("key", key).build(),
+                List.of(Base64.getEncoder().encodeToString(key), HexFormat.of().formatHex(key))))
+                .as("hits of the secret").isZero();
+        // Control, a run of its own: under S4 a plain file next to the key would be uploaded with it.
+        assertThat(cmdlineHits(env, RunDirectory.builder().variable("AIMON_RUN_DIR").file("plain", plain).build(),
+                List.of(Base64.getEncoder().encodeToString(plain)))).as("hits of the inlined control").isPositive();
+    }
+
+    /**
+     * Runs an isolated streamed command with {@code run} — the shell engine's call shape — that waits for a release
+     * file, and while it waits counts the command lines in the sandbox that hold any of {@code patterns}. The patterns
+     * reach the counting {@code grep} in a file, never on its own command line.
+     */
+    private static long cmdlineHits(ExecutionEnvironment env, RunDirectory run, List<String> patterns)
+            throws Exception {
+        final String id = UUID.randomUUID().toString().replace("-", "");
+        final String started = "/workspace/started-" + id;
+        final String release = "/workspace/release-" + id;
+        final String patternFile = "/workspace/patterns-" + id;
+        env.fileSystem().write(patternFile, String.join("\n", patterns) + "\n");
+        final CompletableFuture<ShellCommandResult> running = CompletableFuture.supplyAsync(() -> {
+            try {
+                return env.shell().execute(
+                        () -> "touch " + started + "; while [ ! -e " + release + " ]; do sleep 0.1; done",
+                        ExecutionOptions.builder().timeout(Duration.ofSeconds(60)).isolated(true).runDirectory(run)
+                                .build(),
+                        line -> {
+                        });
+            } catch (ShellExecutionException e) {
+                throw new IllegalStateException(e);
+            }
+        });
+        try {
+            final long deadline = System.nanoTime() + Duration.ofSeconds(30).toNanos();
+            while (!env.fileSystem().exists(started) && System.nanoTime() < deadline) {
+                Thread.sleep(100);
+            }
+            assertThat(env.fileSystem().exists(started)).as("the run started").isTrue();
+            return Long
+                    .parseLong(
+                            bash(env,
+                                    "for f in /proc/[0-9]*/cmdline; do tr '\\0' '\\n' < \"$f\"; done"
+                                            + " 2>/dev/null | grep -cF -f " + patternFile + " || true")
+                                    .stdout().strip());
+        } finally {
+            env.fileSystem().write(release, "");
+            assertThat(running.get(30, TimeUnit.SECONDS).exitCode()).isZero();
+        }
     }
 }

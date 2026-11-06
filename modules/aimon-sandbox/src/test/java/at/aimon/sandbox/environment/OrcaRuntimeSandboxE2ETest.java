@@ -30,6 +30,7 @@ import at.aimon.core.agent.session.store.InMemorySessionRecordStore;
 import at.aimon.core.agent.session.transcript.DefaultTranscriptManager;
 import at.aimon.core.agent.tool.DefaultToolExecutionManager;
 import at.aimon.core.agent.tool.DefaultToolRegistry;
+import at.aimon.core.agent.tool.ToolCallOrigin;
 import at.aimon.core.command.DefaultCommandExecutionManager;
 import at.aimon.core.command.DefaultCommandRegistry;
 import at.aimon.core.environment.ExecutionEnvironment;
@@ -386,7 +387,8 @@ class OrcaRuntimeSandboxE2ETest {
                         Duration.ofSeconds(10)),
                 PreToolContext.builder().executorType(InvokerType.MAIN_AGENT).invokerName("agent")
                         .hookRegistry(new DefaultHookRegistry()).executionEnvironment(environment)
-                        .toolUse(ToolUse.of("call-1", "Bash", Map.of())).iterationCount(1).build(),
+                        .toolUse(ToolUse.of("call-1", "Bash", Map.of())).origin(ToolCallOrigin.direct())
+                        .iterationCount(1).build(),
                 Map.of(), null, Optional.of(skill));
 
         assertThat(outcome.getStdout()).startsWith("/workspace/.aimon-shell/.run.").endsWith("/d\nskill-script\n");

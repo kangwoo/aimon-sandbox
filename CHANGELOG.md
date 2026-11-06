@@ -5,12 +5,49 @@ All notable aimon-sandbox changes are recorded here. The format is loosely based
 
 ## [Unreleased]
 
-Requires aimon-core **0.3.3**
-([`docs/design/workspace-sandbox-core-033.md`](docs/design/workspace-sandbox-core-033.md)). `aimon-sandbox` exposes core
+Requires aimon-core **0.3.4** (pinned to `0.3.4-SNAPSHOT` until core releases it; see below) — 0.3.3 for the seams of
+[`docs/design/workspace-sandbox-core-033.md`](docs/design/workspace-sandbox-core-033.md), 0.3.4 for streaming and the
+sandbox SPI of core's Python `ExecuteCode` shell engine. `aimon-sandbox` exposes core
 as an `api` dependency, so upgrading from 0.1.0 also raises core from 0.3.1 to 0.3.3, which core itself declares
 incompatible with 0.3.2 — upgrade it as you would across a minor: the auto-compact buffer and ratio members are gone
 (kangwoo/aimon-core#285), and the session log is written as version 2 by default, so a mixed-version cluster must pin
 `v1` (kangwoo/aimon-core#286). See core's [0.3.3 release notes](https://github.com/kangwoo/aimon-core/releases/tag/v0.3.3).
+
+### Added: the sandbox half of core's Python `ExecuteCode` shell engine (D2)
+
+Core 0.3.4's shell engine runs model-written Python inside the sandbox. A workspace sandbox now offers what it needs, so
+core can offer `ExecuteCode` there when the app enables programmatic tools and the profile declares `python3`. Design
+and departures: [`docs/design/ptc-shell-provider.md`](docs/design/ptc-shell-provider.md); summary in
+[`docs/design/ptc-shell-prerequisites.md`](docs/design/ptc-shell-prerequisites.md) §6–§12.
+
+- **`SandboxProfile.runtimes(Set<String>)` (S3)**, empty by default; only `python3` is accepted, and startup refuses any
+  other name. A declared `python3` is checked by the seed (new permanent step `runtime-python3`: on `PATH`, 3.8 or later,
+  `python3 -I` imports the standard-library modules core's runtime imports) and carried by the descriptor. A profile
+  that declares none keeps its `contentHash`. The image contract gains the optional `python3` item
+  (`docs/design/workspace-sandbox.md` §13.3); the docker tier's image installs `python3`.
+- **Secret run files are never inlined (S4).** A `RunDirectory` with any file marked secret is uploaded whole — the
+  manifest and the blob, two uploads — however small, so the secret is on no process's command line. **Behaviour
+  change:** every `ExecuteCode` run (core marks its key secret) takes the upload path, and a small secret set can now fail
+  with "could not pass … into the sandbox" where it used to be inlined.
+- **`SandboxExecutionEnvironment.runtimeFileSystem()` (S5)** is present: core's framework-only file access, confined to
+  `/workspace/**`, outside the file tools' path rules. `writeNew` is the files API's create-new (atomic, refuses anything
+  existing, a dangling link included), `read` and `delete` never follow a link at the path (one in-sandbox helper exec
+  each), every failure — connecting included — is an `IOException`. Asking for it provisions nothing.
+- **The descriptor declares `isolation() = SANDBOXED` and the profile's `runtimes()` (S6)**, for forks too.
+- **The provider says why it ended a command (S8).** New provider SPI `ExecKillCause` and `ExecOutcome.killCause()`
+  (never together with `timedOut()`); the OpenSandbox provider sets `LINE_LIMIT_EXCEEDED` when it ends a command for an
+  event line over 256 KiB, unless a timeout's or caller's kill was already on its way. **Behaviour change:** an isolated
+  command that is not a hook's and is ended that way now returns a result — exit 137, truncated,
+  `killCause() = LINE_LIMIT_EXCEEDED`, which core's engine reports as a protocol violation — instead of throwing. Hook and
+  monitor runs still throw; the message now names the cause.
+- **`{root}/.aimon-ptc/` is hidden from the file tools too (S9 follow-up)**: core places the engine's directory under
+  the descriptor's working directory, which is the binding root (`/workspace/repo` by default), not `/workspace`.
+- **`RuntimeFileSystemContract`** in `aimon-sandbox-testkit`: the runtime file system's contract suite, which core does
+  not publish. The local provider and the docker tier run it, and core's engine contract suite
+  (`aimon-code-engine-testkit`, test-only) runs on both tiers.
+- **Known core defect, not fixed here:** core's runtime moves into a process group of its own, so the sandbox's
+  timeout/cancel kill does not reach it — a timed-out or cancelled `ExecuteCode` run's code keeps running in the sandbox
+  (`docs/design/workspace-sandbox.md` §20).
 
 ### Added: groundwork for core's programmatic tool calling (shell engine)
 
@@ -48,7 +85,9 @@ See [`docs/design/ptc-shell-prerequisites.md`](docs/design/ptc-shell-prerequisit
   session's cwd and exports, the watchdog for its timeout. This is what core's background `Monitor` command form needs
   in a sandbox (`docs/design/workspace-sandbox.md` §9.x).
 - **Pinned to `aimon-core 0.3.4-SNAPSHOT`** from Central's snapshot repository until core 0.3.4 is released — a release
-  blocker by design: `scripts/release.sh` refuses while the catalog pins a SNAPSHOT.
+  blocker by design: `scripts/release.sh` refuses while the catalog pins a SNAPSHOT. The snapshot of 2026-11-06 (core
+  PTC pieces A–D1) made the hook-context builders require `origin(...)`; the one test that built one without it is
+  fixed.
 
 ### Added: workspace files for a file explorer
 

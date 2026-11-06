@@ -18,6 +18,9 @@ dependencies {
     // The contract suites and the local provider live in the testkit, which depends on this module's main
     // source set; this edge is test-only, so there is no cycle in the task graph.
     testImplementation(project(":aimon-sandbox-testkit"))
+    // Core's engine contract suite for ExecuteCode: its shell engine runs on this module's environment
+    // (docs/design/ptc-shell-provider.md §5.7).
+    testImplementation(libs.aimon.code.engine.testkit)
 }
 
 // `ReleaseGateMatchesCiGateTest` reads these two files, which are not on any classpath. Declared so that editing

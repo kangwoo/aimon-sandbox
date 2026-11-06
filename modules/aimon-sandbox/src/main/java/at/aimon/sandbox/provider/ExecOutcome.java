@@ -1,6 +1,7 @@
 package at.aimon.sandbox.provider;
 
 import java.util.Objects;
+import java.util.Optional;
 
 /**
  * How one {@link SandboxConnection#run} ended. The byte arrays hold at most {@link ExecSpec#maxCaptureBytes()} each;
@@ -12,6 +13,11 @@ import java.util.Objects;
  * {@code \r} is dropped or becomes a line break, and invalid UTF-8 is replaced by U+FFFD, so a stream can grow up to
  * three times its raw size. Byte counts are then counted after normalization. A consumer that needs exact byte counts
  * carries them in-band, as the §9 wrapper's trailer does.
+ *
+ * <p>
+ * A provider that ended the command itself says why in {@link #killCause()}, and then also reports both streams
+ * truncated. {@link #timedOut()} and {@link #killCause()} are never both set: whichever ended the command first is
+ * reported.
  */
 public final class ExecOutcome {
 
@@ -23,6 +29,7 @@ public final class ExecOutcome {
     private final boolean stdoutTruncated;
     private final boolean stderrTruncated;
     private final boolean timedOut;
+    private final ExecKillCause killCause;
 
     private ExecOutcome(Builder builder) {
         this.exitCode = builder.exitCode;
@@ -31,6 +38,10 @@ public final class ExecOutcome {
         this.stdoutTruncated = builder.stdoutTruncated;
         this.stderrTruncated = builder.stderrTruncated;
         this.timedOut = builder.timedOut;
+        this.killCause = builder.killCause;
+        if (timedOut && killCause != null) {
+            throw new IllegalArgumentException("an outcome is timed out or has a kill cause, not both");
+        }
     }
 
     /** @return a new builder */
@@ -68,10 +79,16 @@ public final class ExecOutcome {
         return timedOut;
     }
 
+    /** @return why the provider ended the command itself, or empty when it did not */
+    public Optional<ExecKillCause> killCause() {
+        return Optional.ofNullable(killCause);
+    }
+
     @Override
     public String toString() {
         return "ExecOutcome{exitCode=" + exitCode + ", stdout=" + stdout.length + "B, stderr=" + stderr.length
-                + "B, truncated=" + stdoutTruncated + "/" + stderrTruncated + ", timedOut=" + timedOut + '}';
+                + "B, truncated=" + stdoutTruncated + "/" + stderrTruncated + ", timedOut=" + timedOut
+                + (killCause != null ? ", killCause=" + killCause : "") + '}';
     }
 
     /** Builder for {@link ExecOutcome}. */
@@ -82,6 +99,7 @@ public final class ExecOutcome {
         private boolean stdoutTruncated;
         private boolean stderrTruncated;
         private boolean timedOut;
+        private ExecKillCause killCause;
 
         private Builder() {
         }
@@ -113,6 +131,12 @@ public final class ExecOutcome {
 
         public Builder timedOut(boolean timedOut) {
             this.timedOut = timedOut;
+            return this;
+        }
+
+        /** @see ExecOutcome#killCause() */
+        public Builder killCause(ExecKillCause killCause) {
+            this.killCause = killCause;
             return this;
         }
 

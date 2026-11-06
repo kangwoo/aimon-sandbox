@@ -2,6 +2,7 @@ package at.aimon.sandbox.workspace;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.net.InetAddress;
 import java.net.ServerSocket;
@@ -261,5 +262,89 @@ class SandboxSeederTest {
         }
         assertThat(seedIsolated(HostPort.of("127.0.0.1", closedPort))).isEmpty();
         assertThat(seedIsolated(HostPort.of("no-such-host.invalid", 80))).isEmpty();
+    }
+
+    @Test
+    @DisplayName("S3: the python3 check is in the script exactly when the profile declares python3")
+    void thePython3CheckIsThereOnlyWhenDeclared() {
+        final SandboxProfile declaring = SandboxTestProfiles.local("py").runtimes(Set.of("python3")).build();
+
+        assertThat(seeder.script(profile, "/workspace/repo")).doesNotContain("runtime-python3");
+        assertThat(SandboxSeeder.runtimeChecks(profile)).isEmpty();
+        final String script = seeder.script(declaring, "/workspace/repo");
+        assertThat(script).contains("runtime-python3").contains(SandboxSeeder.runtimeChecks(declaring));
+        assertThat(script.indexOf("runtime-python3")).isLessThan(script.indexOf("rm -rf /workspace/.tmp-*"));
+        assertThat(SandboxSeeder.runtimeChecks(declaring))
+                .contains("import " + String.join(", ", SandboxSeeder.PYTHON3_MODULES));
+    }
+
+    /** Runs the python3 check alone on the host, with {@code PATH} holding only {@code bin}. */
+    private static ExecOutcome runRuntimeCheck(Path bin) throws Exception {
+        final SandboxProfile declaring = SandboxTestProfiles.local("py").runtimes(Set.of("python3")).build();
+        final String script = "fail() { printf 'AIMON_SEED_FAIL %s %s\\n' \"$1\" \"$2\"; exit 65; }\n"
+                + SandboxSeeder.runtimeChecks(declaring) + "echo passed\n";
+        final ProcessBuilder builder = new ProcessBuilder("/bin/bash", "-c", script).redirectErrorStream(false);
+        builder.environment().clear();
+        builder.environment().put("PATH", bin.toString());
+        final Process process = builder.start();
+        final byte[] stdout = process.getInputStream().readAllBytes();
+        return ExecOutcome.builder().exitCode(process.waitFor()).stdout(stdout).build();
+    }
+
+    private static void fakePython(Path bin, String body) throws Exception {
+        final Path python = bin.resolve("python3");
+        Files.writeString(python, "#!/bin/sh\n" + body + "\n");
+        Files.setPosixFilePermissions(python, PosixFilePermissions.fromString("rwxr-xr-x"));
+    }
+
+    @Test
+    @DisplayName("S3: the python3 check fails permanently for a missing, old or stripped python3 and passes otherwise")
+    void thePython3CheckOnTheHost(@TempDir Path bin) throws Exception {
+        ExecOutcome outcome = runRuntimeCheck(bin);
+        assertThat(outcome.exitCode()).isEqualTo(SandboxSeeder.FAIL_EXIT);
+        assertThat(new String(outcome.stdout(), StandardCharsets.UTF_8))
+                .contains("AIMON_SEED_FAIL runtime-python3 the profile declares python3 but the image lacks it");
+
+        fakePython(bin, "case \"$2\" in -V) echo 'Python 3.6.9';; *) exit 3;; esac");
+        outcome = runRuntimeCheck(bin);
+        assertThat(outcome.exitCode()).isEqualTo(SandboxSeeder.FAIL_EXIT);
+        assertThat(new String(outcome.stdout(), StandardCharsets.UTF_8))
+                .contains("runtime-python3 python3 is older than 3.8 (Python 3.6.9)");
+
+        fakePython(bin, "exit 1");
+        outcome = runRuntimeCheck(bin);
+        assertThat(outcome.exitCode()).isEqualTo(SandboxSeeder.FAIL_EXIT);
+        assertThat(new String(outcome.stdout(), StandardCharsets.UTF_8)).contains(
+                "runtime-python3 python3 -I cannot import the standard library modules the ExecuteCode runtime needs");
+
+        fakePython(bin, "exit 0");
+        outcome = runRuntimeCheck(bin);
+        assertThat(outcome.exitCode()).isZero();
+        assertThat(new String(outcome.stdout(), StandardCharsets.UTF_8)).isEqualTo("passed\n");
+    }
+
+    @Test
+    @DisplayName("S3: a real python3 of 3.8 or later passes the check: every listed module imports")
+    void aRealPython3PassesTheCheck(@TempDir Path bin) throws Exception {
+        final Optional<Path> python = Stream
+                .of("/usr/local/bin/python3", "/opt/homebrew/bin/python3", "/usr/bin/python3", "/bin/python3")
+                .map(Path::of).filter(Files::isExecutable).filter(SandboxSeederTest::atLeast38).findFirst();
+        assumeTrue(python.isPresent(), "no python3 3.8+ on this host");
+        Files.createSymbolicLink(bin.resolve("python3"), python.get());
+
+        final ExecOutcome outcome = runRuntimeCheck(bin);
+
+        assertThat(new String(outcome.stdout(), StandardCharsets.UTF_8)).isEqualTo("passed\n");
+    }
+
+    private static boolean atLeast38(Path python) {
+        try {
+            final Process process = new ProcessBuilder(python.toString(), "-I", "-c",
+                    "import sys; sys.exit(0 if sys.version_info >= (3, 8) else 1)").redirectErrorStream(true).start();
+            process.getInputStream().readAllBytes();
+            return process.waitFor() == 0;
+        } catch (Exception e) {
+            return false;
+        }
     }
 }

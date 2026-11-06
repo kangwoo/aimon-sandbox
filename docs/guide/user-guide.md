@@ -258,6 +258,7 @@ sandbox.janitor().start();
 | `backgroundHeartbeatLimit` | `1h` | 백그라운드 명령이 샌드박스를 깨워 둘 수 있는 상한 |
 | `backgroundCommandTimeout` | `24h` | 백그라운드 명령이 돌 수 있는 상한. 넘으면 셸이 멈춘다 |
 | `insecureAllow` | `[]` | 일부러 포기하는 격리 capability. `HARDENED_SECURITY_CONTEXT` · `RUNTIME_CLASS` · `NETWORK_ISOLATION` 만 가능. 로컬 개발 전용, 기동 시 경고 |
+| `runtimes` | `[]` | 이미지가 갖춘 언어 런타임. 지금은 `python3` 만 쓸 수 있고, 다른 이름은 기동이 거부된다. 선언하면 seed 가 확인하고(`runtime-python3`, 없거나 3.8 미만이거나 표준 라이브러리가 빠졌으면 영구 실패) 서술자에 실린다 — 앱이 프로그래밍 도구 호출을 켰다면 코어의 Python `ExecuteCode` 가 이 샌드박스에서 돈다([§7](#7-샌드박스-이미지-계약)) |
 | `pauseAfter` · `sharedAccess` · `seed` | — | **아직 구현되지 않았다.** 쓰면 기동이 거부된다 |
 
 프로파일은 다음 capability 를 요구하고, 프로바이더가 광고하지 않으면 기동이 실패한다.
@@ -428,6 +429,8 @@ files.delete(ws.id(), "repo/tmp", true, alice);
   .aimon-staged/<name>/<contentKey>/  스킬 파일의 사본(필요할 때만). 파일 도구에는 읽기 전용
   .aimon-shell/<h(shellKey)>/         셸 상태 · 락 · heartbeat. 파일 도구에는 읽기 전용
   .aimon-shell/.run.<hex>/            훅 실행 하나의 비공개 디렉터리. 실행이 끝나면 지운다
+  repo/.aimon-ptc/<run>/              Python `ExecuteCode` 한 번의 실행 디렉터리(코어가 작업 디렉터리 아래에 둔다). 파일
+                                      도구에는 보이지 않고, 실행이 끝나면 지운다
 ```
 
 에이전트의 VFS(스킬 · 메모리 파일)는 샌드박스의 파일 도구에 보이지 않는다. 스킬이 스크립트를 돌려야 하면 그
@@ -453,6 +456,10 @@ files.delete(ws.id(), "repo/tmp", true, alice);
 - util-linux `flock`, `git`, `rg`(ripgrep)
 - uid 1000 사용자 `sandbox` 와 그 사용자가 쓸 수 있는 `/workspace`
 - 권장: `ca-certificates`(자격 증명 주입), `procps`
+- 선택: `python3` 3.8 이상 — 프로파일이 `runtimes: [python3]` 를 선언할 때만 요구한다. `PATH` 에서 찾혀야 하고, `-I`(격리
+  모드)로 코어 런타임이 쓰는 표준 라이브러리를 import 할 수 있어야 한다. Debian 의 `python3-minimal` 은 모자라므로
+  `python3` 패키지를 넣는다. 모델 코드 출력의 캡처 파일 때문에 `TMPDIR`(없으면 `/tmp`)이 샌드박스 사용자에게 쓰기
+  가능해야 한다
 
 execd 는 OpenSandbox 가 주입하므로 이미지에 넣지 않는다. 운영용 Dockerfile 예:
 
@@ -468,6 +475,14 @@ USER 1000
 WORKDIR /workspace
 CMD ["tail", "-f", "/dev/null"]
 ```
+
+**Python `ExecuteCode`.** `runtimes: [python3]` 를 선언한 샌드박스에서는, 앱이 프로그래밍 도구 호출을 켜고 에이전트가
+`Bash` 를 제약 없이 쓸 수 있을 때(허용 목록에 인자 패턴 없이, 이 도구에 걸린 훅 없이) 코어가 `ExecuteCode` 를 Python 셸
+엔진으로 낸다. 모델의 코드는 샌드박스 안에서 같은 uid 로 돌고, 도구 호출의 응답은 HMAC 으로 지켜질 뿐 같은 uid 의
+프로세스에게 비밀이 아니다 — 한계는 코어의
+[셸 엔진 설계 §12](https://github.com/kangwoo/aimon-core/blob/main/docs/design/tool/programmatic-tool-calling-shell.md) 에
+있다. 엔진은 환경 객체마다 처음 한 번 `python3` 와 파일 가시성을 탐침하므로, `runtimes` 를 나중에 선언했는데 이미
+만들어진 샌드박스의 이미지에 `python3` 이 없으면 그 환경에서만 `ExecuteCode` 가 빠진다.
 
 **실행 uid 는 execd 의 uid 다.** "uid 1000 으로 돈다"는 이미지만으로는 지켜지지 않고, 서버의 샌드박스 템플릿이
 `runAsUser: 1000` 을 걸어야 한다([K8s 설치 가이드 §5](opensandbox-kubernetes.md#5-샌드박스-템플릿-강화)). root 로

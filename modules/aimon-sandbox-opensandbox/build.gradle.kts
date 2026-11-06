@@ -13,6 +13,8 @@ dependencies {
     implementation(libs.slf4j.api)
 
     testImplementation(project(":aimon-sandbox-testkit"))
+    // Core's engine contract suite for ExecuteCode, run on the docker tier (docs/design/ptc-shell-provider.md §5.7).
+    testImplementation(libs.aimon.code.engine.testkit)
     // Only the @Tag("docker") tier uses it: the default tier runs against a fake server on the JDK's HttpServer.
     testImplementation(libs.testcontainers)
     testRuntimeOnly(libs.slf4j.simple)

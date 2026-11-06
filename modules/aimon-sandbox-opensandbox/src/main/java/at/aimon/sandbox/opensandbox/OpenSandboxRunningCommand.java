@@ -27,6 +27,7 @@ import org.slf4j.LoggerFactory;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
+import at.aimon.sandbox.provider.ExecKillCause;
 import at.aimon.sandbox.provider.ExecOutcome;
 import at.aimon.sandbox.provider.ExecSpec;
 import at.aimon.sandbox.provider.OutputSink;
@@ -49,7 +50,8 @@ import at.aimon.sandbox.provider.SandboxProviderException;
  * signal name.</li>
  * <li>An event line over {@link SseEvents#MAX_LINE_BYTES} stops the reading: the command is killed, both streams are
  * marked truncated, and the exit code is read from the command's status (docs/design/ptc-shell-prerequisites.md
- * S2).</li>
+ * S2). The outcome says so in {@link ExecOutcome#killCause()} (S8), unless a timeout or a caller's kill was already on
+ * its way.</li>
  * <li>For a {@link ExecSpec#transientOutput() transient} command, execd's spool files of its output are removed once
  * it has ended, before {@link #await} reports it (S1). execd {@code release-1.1.0} and later remove them on their own
  * from {@code $TMPDIR/opensandbox-execd/}; older execd ({@code docker/execd/v1.1.0}) leaves them in {@code $TMPDIR}
@@ -93,6 +95,8 @@ final class OpenSandboxRunningCommand implements RunningCommand {
     private volatile String commandId;
     private volatile InputStream stream;
     private volatile boolean signalled;
+    /** Set when this provider ended the command itself (S8); then the outcome is never also timed out. */
+    private volatile ExecKillCause killCause;
     private final AtomicBoolean spoolRemoved = new AtomicBoolean();
     private boolean killRequested;
     private boolean killSent;
@@ -153,6 +157,13 @@ final class OpenSandboxRunningCommand implements RunningCommand {
                 log.warn("Killing a command in {}: {}", execd.ref(), e.getMessage());
                 stdout.truncate();
                 stderr.truncate();
+                synchronized (killLock) {
+                    // The provider ends the command, and says why (S8) — unless a timeout or a caller's kill was
+                    // already on its way: whichever ended the command first is the one reported.
+                    if (!killRequested && !endedExit.isDone()) {
+                        killCause = ExecKillCause.LINE_LIMIT_EXCEEDED;
+                    }
+                }
                 kill();
             } catch (IOException | RuntimeException e) {
                 log.debug("The command stream of {} broke: {}", execd.ref(), e.toString());
@@ -421,9 +432,16 @@ final class OpenSandboxRunningCommand implements RunningCommand {
         return outcome(code, signalled && pastSpecTimeout);
     }
 
+    /**
+     * The outcome. A command this provider ended for a long line reports that cause and is not timed out, even when
+     * its exit — the line kill's — landed past the spec's timeout or after {@link #await} ran out: the line kill was
+     * sent first ({@link ExecOutcome}).
+     */
     private ExecOutcome outcome(int code, boolean timedOut) {
+        final ExecKillCause cause = killCause;
         return ExecOutcome.builder().exitCode(code).stdout(stdout.bytes()).stderr(stderr.bytes())
-                .stdoutTruncated(stdout.truncated()).stderrTruncated(stderr.truncated()).timedOut(timedOut).build();
+                .stdoutTruncated(stdout.truncated()).stderrTruncated(stderr.truncated())
+                .timedOut(timedOut && cause == null).killCause(cause).build();
     }
 
     /** Whether the command's exit is known, though its spool may still be being removed (for tests). */

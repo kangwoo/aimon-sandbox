@@ -32,6 +32,7 @@ import at.aimon.core.shell.ShellCancellation;
 import at.aimon.core.shell.ShellCommand;
 import at.aimon.core.shell.ShellCommandResult;
 import at.aimon.core.shell.ShellFeature;
+import at.aimon.core.shell.ShellKillCause;
 import at.aimon.core.shell.ShellLineListener;
 import at.aimon.core.shell.VirtualShell;
 import at.aimon.core.shell.exception.RunDirectoryIntegrityException;
@@ -40,6 +41,7 @@ import at.aimon.core.shell.exception.ShellExecutionException;
 import at.aimon.core.shell.exception.ShellTimeoutException;
 import at.aimon.sandbox.SandboxSettings;
 import at.aimon.sandbox.binding.SandboxBinding;
+import at.aimon.sandbox.provider.ExecKillCause;
 import at.aimon.sandbox.provider.ExecOutcome;
 import at.aimon.sandbox.provider.ExecSpec;
 import at.aimon.sandbox.provider.OutputSink;
@@ -88,8 +90,11 @@ import at.aimon.sandbox.workspace.SandboxWorkspaceManager;
  * <b>Run directories</b> ({@link ShellFeature#RUN_DIRECTORY}). The files of
  * {@link ExecutionOptions#getRunDirectory()} are placed for the one run in a fresh private directory,
  * {@code /workspace/.aimon-shell/.run.{hex}/d}, exported in the run directory's variable after every other variable:
- * inline in the script when they fit, otherwise uploaded through the files API, which the agent can write, as two
- * files whatever their number — their manifest and one blob of their base64 — and copied in. Either way the script
+ * inline in the script when they fit and none is {@link RunDirectory#isSecret(String) secret}, otherwise uploaded
+ * through the files API, which the agent can write, as two files whatever their number — their manifest and one blob
+ * of their base64 — and copied in. A secret file (the key of core's {@code ExecuteCode} shell engine) is never inlined,
+ * however small: the script is the exec's argument, which other processes of the sandbox can read in
+ * {@code /proc/<pid>/cmdline}; the uploaded path keeps every byte out of any process argument. Either way the script
  * checks them against SHA-256 digests computed here and carried only in the script; a
  * mismatch throws {@link RunDirectoryIntegrityException} and the command does not run. Any other failure to place them
  * is a plain {@link ShellExecutionException}. The wrapper removes the directory, and so does {@code cleanUp} when the
@@ -120,6 +125,14 @@ import at.aimon.sandbox.workspace.SandboxWorkspaceManager;
  * no lock, no state save, the watchdog — and its stdout reaches the listener line by line as the provider delivers it.
  * This is what a background monitor runs on; it relies on the provider calling its {@link OutputSink} as output
  * arrives, which the SPI already asks of it (§6.2).
+ *
+ * <p>
+ * <b>A command the provider ended itself</b> ({@link ExecOutcome#killCause()}: a line over its limit) is reported on
+ * the result's {@link ShellCommandResult#killCause()} for an isolated command that is not a hook's — the call shape of
+ * core's {@code ExecuteCode} shell engine, which reads a result with {@link ShellKillCause#LINE_LIMIT_EXCEEDED} as a
+ * protocol violation (docs/design/ptc-shell-prerequisites.md S8). Every other run keeps failing with an exception
+ * whose message names the cause: a hook that floods a line must not come back as a plain exit code its runner might
+ * treat as a decision.
  *
  * <p>
  * <b>Notices.</b> A result or exception carries only what is true of its own command: {@link #KILLED_NOTICE} and a
@@ -321,8 +334,8 @@ final class SandboxShell implements VirtualShell {
      * Everything about a run that does not need the sandbox: its names, the script and what to upload before it.
      * Run files and a hook's stdin go into the script when it stays within {@link ShellWrapper#ARGUMENT_BUDGET} —
      * stdin first, then the run files past {@link ShellWrapper#INLINE_RUN_FILES_LIMIT} — and are uploaded otherwise;
-     * a script still over the budget is refused. The digests are computed here, from the bytes core handed over, and
-     * travel only in the script.
+     * a script still over the budget is refused. Run files of which any is secret are always uploaded. The digests are
+     * computed here, from the bytes core handed over, and travel only in the script.
      */
     private Plan plan(String text, ExecutionOptions options, boolean foreground, ShellLineListener listener)
             throws ShellExecutionException {
@@ -376,7 +389,11 @@ final class SandboxShell implements VirtualShell {
                     "the hook files' manifest"));
             fileUploads.add(new Upload(runPrefix + ".blob", ShellWrapper.blob(runFiles), "the hook files"));
             inlineBytes += ShellWrapper.scriptBytes(ShellWrapper.quote(manifest));
-            filesUploaded = inlineBytes > ShellWrapper.INLINE_RUN_FILES_LIMIT;
+            // A secret file never goes into the script, which is the exec's argument and so readable in
+            // /proc/<pid>/cmdline: all of them are uploaded, still two files (docs/design/ptc-shell-prerequisites.md
+            // S4).
+            final boolean secret = !runDirectory.get().getSecretPaths().isEmpty();
+            filesUploaded = secret || inlineBytes > ShellWrapper.INLINE_RUN_FILES_LIMIT;
             invocation.runDirectory(runDirectory.get().getVariable(), runFiles, filesUploaded);
         }
         final byte[] stdin = mode.streams() && options.getStdin() != null
@@ -561,6 +578,8 @@ final class SandboxShell implements VirtualShell {
         private final String privateDirectory;
         private final boolean uploadedRunFiles;
         private final boolean uploadedStdin;
+        /** An isolated command that is not a hook's: a kill cause is its result's, not an exception's (S8). */
+        private final boolean reportsKillCause;
 
         private Run(String prefix, String nonce, Duration timeout, long max, Mode mode, ExecutionOptions options,
                 Placement placement) {
@@ -577,6 +596,7 @@ final class SandboxShell implements VirtualShell {
             this.privateDirectory = placement.privateDirectory;
             this.uploadedRunFiles = placement.uploadedRunFiles;
             this.uploadedStdin = placement.uploadedStdin;
+            this.reportsKillCause = mode == Mode.ISOLATED && !options.isHook();
         }
     }
 
@@ -752,9 +772,12 @@ final class SandboxShell implements VirtualShell {
     }
 
     /**
-     * A stream run: its trailer decides, then an integrity failure of the private directory's files, then a timeout
-     * by the clock — the watchdog killed the group ({@code 137}) once the timeout had passed, which the exec's own
-     * duration, measured from before the exec started, always exceeds — and otherwise the wrapper failed.
+     * A stream run: its trailer decides, then an integrity failure of the private directory's files, then the
+     * provider's own kill ({@link ExecOutcome#killCause()}: a result for an isolated non-hook run, an exception naming
+     * the cause otherwise), then a timeout by the clock — the watchdog killed the group ({@code 137}) once the timeout
+     * had passed, which the exec's own duration, measured from before the exec started, always exceeds — and otherwise
+     * the wrapper failed. The provider's kill goes before the clock: a line kill whose exit lands after the deadline
+     * was still the provider's.
      */
     private ShellCommandResult classifyStream(ExecOutcome outcome, Run run, Duration duration, TrailerWatch watch)
             throws ShellExecutionException {
@@ -764,6 +787,15 @@ final class SandboxShell implements VirtualShell {
         }
         if (outcome.exitCode() == ShellWrapper.RUN_FILES_TAMPERED_EXIT) {
             throw tampered();
+        }
+        if (outcome.killCause().isPresent() && run.reportsKillCause) {
+            final Capture out = capped(outcome.stdout(), outcome.stdout().length, outcome.stdoutTruncated(), run);
+            final Capture err = capped(outcome.stderr(), outcome.stderr().length, outcome.stderrTruncated(), run);
+            return new ShellCommandResult(outcome.exitCode(), out.content, err.content, duration, true)
+                    .withKillCause(shellKillCause(outcome.killCause().get()));
+        }
+        if (outcome.killCause().isPresent()) {
+            throw wrapperFailed(outcome, run);
         }
         if (outcome.timedOut()
                 || run.commandTimeout && outcome.exitCode() == KILLED_EXIT && duration.compareTo(run.timeout) >= 0) {
@@ -800,13 +832,29 @@ final class SandboxShell implements VirtualShell {
         throw wrapperFailed(outcome, run);
     }
 
+    /** The wrapper ended without its trailer; a cause the provider gave for ending it leads the message. */
     private static ShellExecutionException wrapperFailed(ExecOutcome outcome, Run run) {
         final byte[] stderr = outcome.stderr();
+        final String reason = outcome.killCause()
+                .map(cause -> "the provider ended the command: " + describe(cause) + "; ").orElse("");
         return new ShellExecutionException(
-                "the sandbox shell wrapper failed (exit " + outcome.exitCode() + "): "
+                "the sandbox shell wrapper failed (exit " + outcome.exitCode() + "): " + reason
                         + new String(stderr, run.charset).strip(),
                 null, new String(outcome.stdout(), run.charset), new String(stderr, run.charset),
                 outcome.stdoutTruncated() || outcome.stderrTruncated(), List.of());
+    }
+
+    /** The provider's kill cause in core's terms; exhaustive, so a new provider cause cannot go unmapped. */
+    static ShellKillCause shellKillCause(ExecKillCause cause) {
+        return switch (cause) {
+            case LINE_LIMIT_EXCEEDED -> ShellKillCause.LINE_LIMIT_EXCEEDED;
+        };
+    }
+
+    private static String describe(ExecKillCause cause) {
+        return switch (cause) {
+            case LINE_LIMIT_EXCEEDED -> "an output line exceeded the provider's line limit";
+        };
     }
 
     /**
@@ -841,6 +889,13 @@ final class SandboxShell implements VirtualShell {
      * descendant may write after it before the kill lands, and that is dropped — or, when the provider's capture cap
      * cut it off, the one {@link TrailerWatch} parsed from the stream. The cap is applied here, on the bytes received
      * (after any line normalization, §6.1): stdout and the stderr before the trailer, each cut to {@code max}.
+     *
+     * <p>
+     * An isolated non-hook run that the provider ended for a long line keeps that cause even when the trailer arrived
+     * (S8). Deliberate, not an oversight: output after the cut was lost although the wrapper finished, so the caller
+     * must not read the stream as complete — and core's shell engine then reports a protocol violation for a run
+     * whose wrapper ended normally. On OpenSandbox this only happens when something floods after the trailer, since
+     * its reader stops at the long line.
      */
     private Optional<ShellCommandResult> completedStream(ExecOutcome outcome, Run run, Duration duration,
             TrailerWatch watch) {
@@ -875,8 +930,11 @@ final class SandboxShell implements VirtualShell {
         cwdNotice(cwd, run).ifPresent(extra::add);
         final Capture out = capped(outcome.stdout(), outcome.stdout().length, outcome.stdoutTruncated(), run);
         final Capture err = capped(stderr, stderrEnd, outcome.stderrTruncated(), run);
-        return Optional.of(new ShellCommandResult(exitCode, out.content, err.content, duration,
-                out.truncated || err.truncated, extra));
+        final ShellCommandResult result = new ShellCommandResult(exitCode, out.content, err.content, duration,
+                out.truncated || err.truncated, extra);
+        return Optional.of(outcome.killCause().isPresent() && run.reportsKillCause
+                ? result.withKillCause(shellKillCause(outcome.killCause().get()))
+                : result);
     }
 
     /** The first {@code length} bytes of a stream, cut to the run's cap. */

@@ -9,6 +9,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.TreeSet;
 import java.util.regex.Pattern;
 
 import org.slf4j.Logger;
@@ -184,6 +185,12 @@ final class SandboxStartupValidator {
         notWaivable.removeAll(SandboxProfile.WAIVABLE);
         if (!notWaivable.isEmpty()) {
             violations.add(p + "insecure-allow may only waive " + SandboxProfile.WAIVABLE + ", not " + notWaivable);
+        }
+        final Set<String> unknownRuntimes = new TreeSet<>(profile.runtimes());
+        unknownRuntimes.removeAll(SandboxProfile.SUPPORTED_RUNTIMES);
+        if (!unknownRuntimes.isEmpty()) {
+            violations.add(p + "runtimes may only name " + new TreeSet<>(SandboxProfile.SUPPORTED_RUNTIMES) + ", not "
+                    + unknownRuntimes + " (the seed has no check for them)");
         }
         if (profile.backgroundHeartbeatLimit().isNegative() || profile.backgroundHeartbeatLimit().isZero()) {
             violations.add(p + "background-heartbeat-limit must be positive");

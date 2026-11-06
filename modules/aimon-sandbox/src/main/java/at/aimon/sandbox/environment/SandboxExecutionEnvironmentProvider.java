@@ -7,6 +7,7 @@ import java.util.Optional;
 
 import at.aimon.core.agent.ExecutionId;
 import at.aimon.core.environment.EnvironmentDescriptor;
+import at.aimon.core.environment.EnvironmentIsolation;
 import at.aimon.core.environment.EnvironmentRequest;
 import at.aimon.core.environment.ExecutionEnvironment;
 import at.aimon.core.environment.ExecutionEnvironmentProvider;
@@ -34,10 +35,11 @@ import at.aimon.sandbox.workspace.WorkspaceOwner;
  * <p>
  * {@link #resolve} makes no provider call and at most one workspace-store read and, for a session, one options-store
  * read (docs/design/workspace-sandbox-management.md §6.3): it binds the request (§8) and returns a
- * {@link SandboxExecutionEnvironment} whose descriptor carries the profile's <i>declared</i> platform, OS and shell,
- * so a turn that runs no command provisions nothing and the prompt does not change between generations. A binding that
- * cannot be made is thrown as core's {@code ExecutionEnvironmentUnavailableException}; core then installs an
- * unavailable environment, and the tools fail with the reason — never on the host (§12.1).
+ * {@link SandboxExecutionEnvironment} whose descriptor carries the profile's <i>declared</i> platform, OS, shell and
+ * runtimes, and {@code SANDBOXED} isolation, so a turn that runs no command provisions nothing and the prompt does not
+ * change between generations. A binding that cannot be made is thrown as core's
+ * {@code ExecutionEnvironmentUnavailableException}; core then installs an unavailable environment, and the tools fail
+ * with the reason — never on the host (§12.1).
  *
  * <p>
  * A fork — {@code request.fork().isPresent()}, never judged by {@code parent} (§8.1) — inherits its parent's
@@ -183,7 +185,10 @@ public final class SandboxExecutionEnvironmentProvider implements ExecutionEnvir
 
     /**
      * The descriptor of §7: declared platform, OS and shell, {@code workingDirectory = root}, and notes that tell the
-     * model it is isolated, what egress it has, how relative paths resolve and what shell state persists.
+     * model it is isolated, what egress it has, how relative paths resolve and what shell state persists. Isolation is
+     * always {@code SANDBOXED} — this environment's shell and files are always inside a sandbox — and the runtimes are
+     * the profile's declaration, which the seed verifies (docs/design/ptc-shell-prerequisites.md S6): with
+     * {@code python3} among them, core may offer its Python {@code ExecuteCode} shell engine here.
      */
     static EnvironmentDescriptor descriptor(SandboxBinding binding, SandboxProfile profile) {
         final String egress = profile.egress()
@@ -196,7 +201,8 @@ public final class SandboxExecutionEnvironmentProvider implements ExecutionEnvir
                         "file tools resolve relative paths against " + binding.root() + "; prefer absolute paths",
                         "shell state persists cwd and exported variables only"));
         return EnvironmentDescriptor.builder().workingDirectory(binding.root()).platform(profile.platform())
-                .osVersion(profile.osVersion().orElse(null)).shellName(profile.shellName()).notes(notes).build();
+                .osVersion(profile.osVersion().orElse(null)).shellName(profile.shellName()).notes(notes)
+                .isolation(EnvironmentIsolation.SANDBOXED).runtimes(profile.runtimes()).build();
     }
 
     /**

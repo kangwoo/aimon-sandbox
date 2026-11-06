@@ -1,7 +1,8 @@
 # PTC 셸 엔진의 선행 작업 (S1–S9)
 
-> **Status**: S1 · S2 · S7 · S9 구현. S3 은 문서 초안. S4 · S5 · S6 · S8 은 코어 SPI(조각 D1)가 배포된 뒤의 구현 방향
-> 메모 — 지금은 코드를 바꾸지 않는다.
+> **Status**: S1–S9 구현(S8 은 제공자 쪽). S1 · S2 · S7 · S9 는 코어 SPI 없이 먼저, S3 · S4 · S5 · S6 · S8 은 코어 0.3.4 의
+> 조각 D1 위에서 구현했다 — 그 변경의 승인된 설계와 구현이 벗어난 점은 [`ptc-shell-provider.md`](ptc-shell-provider.md) 다.
+> 이 문서의 §6–§9 · §11 · §12 는 그 결과를 이 저장소의 말로 적는다. 열린 질문은 §10 과 아키텍처 문서 §20 에 있다.
 >
 > 근거 설계: `aimon-core` 의 `docs/design/tool/programmatic-tool-calling-shell.md`(이하 **셸 엔진 설계**, 작성 시점에 커밋되지
 > 않음) §7, §12, §13, §15. 관련: [`workspace-sandbox-hook-identity.md`](workspace-sandbox-hook-identity.md)(EE-113, 같은
@@ -14,12 +15,12 @@
 |---|---|---|---|
 | S1 | isolated·hook·스트리밍 실행 뒤 execd 스풀 삭제 | 아니다 | **구현** (§3) |
 | S2 | SSE 리더가 줄을 물질화하기 전 상한, 넘으면 명령 종료 | 아니다 | **구현** (§4) |
-| S3 | 이미지 계약에 `python3` 선택 항목, 프로필 선언, seed 확인 | 서술자 부분은 기댄다 | 초안 (§6) |
-| S4 | `RunDirectory` 비밀 파일 표지 | 기댄다 | 방향 (§7) |
-| S5 | `RuntimeFileSystem` 구현 | 기댄다 | 방향 (§8) |
-| S6 | 서술자 `isolation()` · 런타임 능력 | 기댄다 | 방향 (§9) |
+| S3 | 이미지 계약에 `python3` 선택 항목, 프로필 선언, seed 확인 | 서술자 부분은 기댄다 | **구현** (§6) |
+| S4 | `RunDirectory` 비밀 파일 표지 | 기댄다 | **구현** (§7) |
+| S5 | `RuntimeFileSystem` 구현 | 기댄다 | **구현** (§8) |
+| S6 | 서술자 `isolation()` · 런타임 능력 | 기댄다 | **구현** (§9) |
 | S7 | isolated 스트리밍이 포그라운드가 아님을 계약 테스트로 | 아니다 | **구현** (§5) |
-| S8 | 제공자가 명령을 끝낸 원인을 결과에 싣기 | 기댄다 (`ShellCommandResult`) | 질문 (§10 Q2) |
+| S8 | 제공자가 명령을 끝낸 원인을 결과에 싣기 | 기댄다 (`ShellKillCause`) | **구현**, 제공자 쪽 (§11) |
 | S9 | `.aimon-ptc/` 를 모델의 파일 도구에게 `DENY` | 아니다 | **구현** (§8 경로 규칙) |
 
 ## 2. 셸 엔진 설계와 실제 코드·업스트림이 어긋나는 점
@@ -153,8 +154,8 @@
   줄이었는지는 읽지 않은 부분에 있다), `kill()` 로 `DELETE /command?id=` 를 보낸 뒤, 종료 코드를 `/command/status/{id}` 에서
   읽는다. kill 은 SIGTERM 뒤 3초에 SIGKILL 이므로 보통 137 이 된다. S1 의 삭제도 그 뒤에 돈다.
 - `SandboxShell` 쪽에서는 트레일러가 오지 않은 stream 실행이므로 `ShellExecutionException("the sandbox shell wrapper failed (exit
-  137)…")` 이 된다. **원인(줄 상한)이 메시지에 실리지 않는다** — `ExecOutcome` 에 그런 필드가 없다. PTC 엔진이 이 경우를
-  `PROTOCOL_VIOLATION` 으로 따로 다루려면 SPI 에 "제공자가 끊었다" 표지가 필요하다(§10 Q2).
+  137)…")` 이 되었다. 그때는 원인(줄 상한)이 메시지에 실리지 않았다. 지금은 `ExecOutcome.killCause()` 가 원인을 싣고, 훅이 아닌
+  격리 실행은 예외 대신 원인이 붙은 결과를 받는다(§11).
 - **출력을 숨기는 데 쓸 수 없다.** 명령이 일부러 긴 줄을 내면 그 뒤의 출력을 잃지만, 결과는 조용한 성공이 아니라 잘림 표시와
   137 이다. 같은 uid 의 공존 프로세스가 스풀에 긴 줄을 덧붙여 실행을 끝내게 하는 것은 셸 엔진 설계 §12.1 의 R7(실행 방해, DoS)과
   같은 무게이고, 그 프로세스는 어차피 명령을 kill 할 수 있다.
@@ -183,111 +184,146 @@
 
 반대쪽(`background·hook·isolated` 가 모두 거짓인 스트리밍은 거절)은 기존 `foregroundStreamingIsRefused` 가 지킨다.
 
-## 6. S3 — `python3` 선택 항목 (문서 초안)
+## 6. S3 — `python3` 선택 항목 (구현)
 
-### 6.1 이미지 계약에 넣을 문장 (초안 — `workspace-sandbox.md` §13.3 에 들어갈 것)
+### 6.1 이미지 계약
 
-> **선택: `python3` (3.8 이상).** 프로필이 `python3` 런타임을 선언한 경우에만 요구한다. 선언하지 않은 이미지는 지금처럼 유효하다.
-> 선언하면 seed 가 확인하고(step `runtime-python3`), 서술자의 런타임 능력에 실려 코어의 셸 엔진이 `ExecuteCode` 를 낼 수 있게
-> 된다. 요구하는 것: `PATH` 에서 찾히는 `python3`, 버전 3.8 이상, `-I`(격리 모드)로 표준 라이브러리가 import 될 것 — 셸 엔진
-> 설계 §6 의 런타임은 표준 라이브러리(`asyncio`, `hmac`, `hashlib`, `json`, `base64`, `tempfile`, `os`, 그리고 Linux 에서
-> `prctl` 을 부를 수단)만 쓴다는 전제다. 런타임이 코어에서 확정되면 이 목록을 그쪽에 맞춘다. `site-packages` 는 쓰지 않는다(`-I` 가 끈다). 런타임은 실행 디렉터리(`/workspace/.aimon-shell/.run.*`)에서 돌므로
-> `/tmp` 가 쓰기 가능할 필요는 없지만, 모델 코드 출력의 캡처 파일을 `tempfile.mkdtemp()` 로 만들므로 **`TMPDIR` 또는 `/tmp` 가
-> 샌드박스 사용자에게 쓰기 가능해야 한다.**
->
-> execd 는 `TMPDIR` 을 두지 않은 채 띄운다(§6.1 의 스풀 삭제가 `/tmp` 를 가정한다 — [PTC 선행 작업](ptc-shell-prerequisites.md) §2.1).
+[`workspace-sandbox.md`](workspace-sandbox.md) §13.3 의 "선택: `python3` (3.8 이상)" 문단이 정본이다. 요점: 프로필이 선언할
+때만 요구하고, `PATH` 의 `python3`, 3.8 이상, `-I` 로 코어 런타임(`aimon_ptc.py`)이 맨 위에서 import 하는 표준 라이브러리 모듈이
+import 될 것, `TMPDIR`(없으면 `/tmp`)이 쓰기 가능할 것. 초안이 적은 모듈 목록(`asyncio, hmac, …`)은 코어의 실제 목록
+(`SandboxSeeder.PYTHON3_MODULES`)으로 바꿨다. Debian 의 `python3-minimal` 은 모자라므로 docker 계층의 이미지는 `python3` 를
+넣는다. execd 는 `TMPDIR` 을 두지 않은 채 띄운다는 문장(§2.1)도 같은 자리에 있다.
 
-마지막 문장은 python 과 무관하지만 S1 이 기대는 가정이라 같은 자리에 둔다.
+### 6.2 프로필 선언
 
-### 6.2 프로필 선언 (형태는 코어 SPI 확정 뒤)
+`SandboxProfile.runtimes(Set<String>)`, 기본은 빈 집합. 값은 코어의 이름(`EnvironmentDescriptor.RUNTIME_PYTHON3` =
+`python3`)이고, seed 가 확인할 수 있는 것만 받는다 — 다른 이름은 기동 검사(`SandboxStartupValidator`, `insecureAllow` 의
+거절과 같은 자리)가 거부한다. 선언했을 때만 `contentHash` 에 들어간다: 선언하지 않은 프로필의 해시는 바뀌지 않고, 선언이
+바뀌면 FAILED 슬롯이 다시 시도된다. 이 저장소에는 속성 바인딩이 없으므로(빌더뿐) 초안의 속성 키는 두지 않았다. 서술자에는
+선언값만 싣는다 — 서술자는 제안 시점에 프로비저닝 없이 정해져야 한다(셸 엔진 설계 §4).
 
-- 후보: `SandboxProfile.runtimes(Set<String>)` 또는 `runtimeCapabilities`, 값은 코어가 정할 능력 이름(`python3`). 속성 키
-  `aimon.sandbox.profiles[n].runtimes: [python3]`. `contentHash` 에 들어간다(선언이 바뀌면 다시 seed 한다).
-- 코어 서술자의 런타임 능력 타입(문자열 집합인지, 버전을 실은 값인지)이 정해지면 그 모양을 따른다. 버전까지 실린다면 seed 가
-  읽은 실제 버전(`3.11.4`)을 서술자에 싣는 것도 가능하지만, 셸 엔진 설계는 서술자를 "프로필에서 정해지는 정적 값" 으로 두므로
-  선언값(`python3`)만 싣는다.
+### 6.3 seed 확인
 
-### 6.3 seed 확인 방식 (제안)
+선언된 경우에만 seed 스크립트가 플랫폼 · uid · 네트워크 검사 뒤, `rm -rf /workspace/.tmp-*` 앞에서 확인한다(step
+`runtime-python3`, 영구 실패). 버전을 먼저, import 를 나중에 본다. `SandboxSeeder.runtimeChecks(profile)` 이 그 조각이다.
 
-선언된 경우에만 seed 스크립트에 다음을 붙인다. 다른 검사처럼 영구 실패(FAILED, step `runtime-python3`)다 — 이미지가 계약을
-어긴 것이므로 다시 시도해도 같다.
+- seed 는 프로비저닝 때 한 번, 코어의 탐침은 환경 객체마다 한 번이다. 탐침은 seed 가 잡지 못하는 것 — 선언하기 **전에**
+  seed 를 마친 슬롯, 실행 중에 지워진 `python3` — 을 잡고, 그 환경 객체에서만 엔진을 뺀다.
+- 선언하지 않은 프로필에서는 아무것도 확인하지 않는다 — 이미지에 python 이 있어도 서술자에 싣지 않는다.
+- K8s 계층의 기본 이미지(`ghcr.io/kangwoo/aimon-sandbox-runtime:1`)와 그 프로필은 `python3` 을 선언하지 않는다. 셸 엔진은
+  docker 계층에서만 시험한다.
 
-```sh
-command -v python3 >/dev/null 2>&1 || fail runtime-python3 'the profile declares python3 but the image lacks it'
-python3 -I -c 'import sys, asyncio, hmac, hashlib, json, base64, tempfile; sys.exit(0 if sys.version_info >= (3, 8) else 3)' \
-  >/dev/null 2>&1; r=$?
-[ "$r" = 3 ] && fail runtime-python3 "python3 is older than 3.8 ($(python3 -I -c 'import platform; print(platform.python_version())' 2>&1))"
-[ "$r" = 0 ] || fail runtime-python3 'python3 -I cannot import its standard library'
-```
+## 7. S4 — 비밀 파일 표지 (구현)
 
-- 셸 엔진 설계 §4 의 "탐침"(환경 객체당 첫 `ExecuteCode` 에서 `python3` 3.8+ 확인)은 그대로 둔다. seed 확인은 프로비저닝 때 한 번,
-  탐침은 환경 객체마다 한 번이다. seed 를 통과한 이미지에서 탐침이 실패하는 경우는 샌드박스 안에서 누가 `python3` 을 지웠을
-  때뿐이다.
-- 선언하지 않은 프로필에서는 아무것도 확인하지 않는다 — 이미지에 python 이 있어도 서술자에 싣지 않는다. 셸 엔진 설계 §10 의
-  "선언하지 않은 샌드박스에서 `auto` 는 `ExecuteCode` 를 내지 않고 그 이유를 운영자에게 알린다" 는 코어의 일이다.
+`SandboxShell.plan` 은 `RunDirectory.getSecretPaths()` 가 비어 있지 않으면 실행 파일 **전부를** 업로드로 보낸다
+(`filesUploaded = true`). 업로드는 파일 수와 상관없이 manifest 와 blob 두 개이므로 분리하지 않았다.
 
-## 7. S4 — 비밀 파일 표지 (방향, 코어 배포 뒤)
+- 스크립트(= execd 의 `bash -c` 인자 = `/proc/<pid>/cmdline`)에는 비밀의 base64 대신 manifest 와 blob 의 SHA-256 만 남는다.
+  래퍼는 blob 의 각 줄을 `IFS= read -r` 와 `printf`(내장 명령)로 `/usr/bin/base64 -d` 에 넘기므로 바이트가 어떤 프로세스 인자에도
+  오르지 않는다.
+- 업로드 원본 삭제는 이미 된다(§2.4). 비밀이 업로드되어 래퍼가 `cat` 하고 `rm` 하기까지의 창은 남는다(셸 엔진 설계 §15 Q2).
+- 코어는 `ExecuteCode` 의 실행마다 `key` 를 비밀로 표지하므로, **그 실행은 모두** 업로드 경로를 탄다 — exec 앞에 HTTP 업로드
+  둘이 셸 엔진 설계 §9 의 실행당 비용에 더해진다(도구 호출당이 아니다).
+- 작은 실행 파일도 업로드되므로 "업로드 실패 → `ShellExecutionException`" 경로가 새로 열린다. 엔진에서는 `SCRIPT_ERROR` 다.
+- 시험: `SandboxShellSecretRunFileIT`(32바이트 비밀 + 작은 파일 → 업로드 둘, 어떤 스크립트에도 base64 · hex 가 없음; 표지 없는
+  대조군은 인라인; 업로드 실패), docker 계층 `OpenSandboxWorkspaceIT.aSecretRunFileIsOnNoCommandLine`(실행 중 어떤
+  `/proc/*/cmdline` 에도 키가 없고, 따로 돌린 대조군의 인라인 파일은 잡힌다).
 
-코어가 `RunDirectory` 에 파일 단위 `secret` 표지를 더하면:
+## 8. S5 — `RuntimeFileSystem` (구현)
 
-- `SandboxShell.plan` 에서 표지된 파일이 하나라도 있으면 실행 파일 **전부를** 업로드로 보낸다(`filesUploaded = true`). 지금도
-  업로드는 파일 수와 상관없이 manifest 와 blob 두 개이므로 분리할 이유가 없다. 표지된 파일만 따로 올리는 길은 업로드가 셋이 되고
-  래퍼의 단계가 늘어난다.
-- 그러면 스크립트(= execd 의 `bash -c` 인자 = `/proc/<pid>/cmdline`)에는 비밀의 base64 대신 manifest 와 blob 의 SHA-256 만
-  남는다. 32바이트 무작위 키의 SHA-256 은 키를 드러내지 않는다.
-- 업로드 원본 삭제는 이미 된다(§2.4). 비밀이 업로드되어 래퍼가 `cat` 하고 `rm` 하기까지의 창은 남는다(셸 엔진 설계 §16 Q2).
-  업로드 경로(`/workspace/.aimon-shell/<shell>/run-<hex>.blob`)는 예측하기 어렵지 않으므로 이름을 숨기는 것은 방어가 아니다.
-- 실행 파일 합계가 `ARGUMENT_BUDGET` 이하라는 이유로 인라인하던 경우의 "업로드 실패 → `ShellExecutionException`" 경로가 비밀 파일
-  때문에 새로 열린다. 테스트: 작은 비밀 파일이 인라인되지 않음(`RecordingProvider` 로 `ExecSpec.command()` 에 base64 가 없음),
-  docker 계층에서 실행 중 어떤 `/proc/*/cmdline` 에도 키가 없음(셸 엔진 설계 §14).
-
-## 8. S5 — `RuntimeFileSystem` (방향, 코어 배포 뒤)
-
-`SandboxExecutionEnvironment.runtimeFileSystem()` 이 `Optional.of(new SandboxRuntimeFileSystem(...))` 를 돌려준다. 연결은
-`SandboxFileSystem` 처럼 첫 호출에서 한다(제안 시점에 프로비저닝하지 않는다 — 셸 엔진 설계 §4).
+`SandboxExecutionEnvironment.runtimeFileSystem()` 이 늘 `SandboxRuntimeFileSystem` 을 돌려준다. 묻는 것만으로는 프로비저닝하지
+않는다(셸 엔진 설계 §4) — 호출마다 `SandboxFileSystem` 처럼 연결한다. 연결 실패(잃은 샌드박스, FAILED 슬롯)까지 모든 실패가
+`IOException` 이다: 코어 엔진은 실행 끝의 정리에서 `IOException` 만 잡는다.
 
 | 연산 | 구현 | 주의 |
 |---|---|---|
-| `writeNew(path, bytes)` | `SandboxFiles.write(abs, …, CREATE_NEW)` — 임시 이름 업로드 + `ln`. `FileAlreadyExistsException` 을 코어의 "이미 있음" 으로 옮긴다 | `ln` 은 `/command` 도우미다. 그 도우미의 스풀은 출력이 없으므로 `transientOutput` 은 필요 없다. 임시 파일(`.<name>.aimon-tmp-<uuid>`)은 대상 옆에 있어 같은 uid 가 `ln` 전까지 읽을 수 있다(R2 와 같은 무게). 부모 경로 성분의 심볼릭 링크는 따라간다 — 응답 디렉터리를 같은 uid 가 링크로 바꿔치면 다른 곳에 쓴다. HMAC 이 무결성을 지키므로 기밀성(R2)만의 문제다 |
-| `read(path, maxBytes)` | 도우미 한 번: `[ -L "$1" ] && exit 40; [ -f "$1" ] || exit 41; head -c "$2" -- "$1"` 처럼 링크와 비정규 파일을 거절하고 상한까지 읽는다 | execd 의 `/files/download` 는 `os.Open` 으로 링크를 따라가고 `/files/info` 도 lstat 인지 확인되지 않았다. 도우미 안의 검사도 TOCTOU 다 — "링크를 따라가지 않음" 을 엄밀히 하려면 `python3`/`dd` 의 `O_NOFOLLOW` 가 필요하다. 출력이 stdout 으로 가므로 이 도우미는 `transientOutput(true)` 여야 한다 |
-| `delete(path)` | `SandboxFiles.delete(abs, recursive)` (`/files` 또는 `/directories` 의 DELETE) | `/directories` 는 Go `os.RemoveAll` — 링크를 따라 들어가지 않는다 |
-| `createDirectories(path)` | `SandboxFiles.createDirectories` | |
+| `writeNew(path, bytes)` | `SandboxFiles.write(…, CREATE_NEW)` — 임시 이름 업로드 + `ln`(로컬은 link(2)). 이미 있으면 `java.nio.file.FileAlreadyExistsException`. 프로바이더가 다른 이유로 거절하면(디렉터리가 있으면 "Is a directory", testkit 은 끊긴 링크를 link(2) 전에 거절한다) 샌드박스 안 `[ -e ] \|\| [ -L ]` 로 "무언가 있다" 를 가려 같은 예외로 | `ln` 은 `/command` 도우미다. 출력이 없으므로 `transientOutput` 은 필요 없지만, execd `v1.1.0` 에서는 응답마다 빈 스풀 한 쌍이 `/tmp` 에 남는다 — 모델의 `Write` 와 같은 비용으로 받아들였다. 임시 파일(`.<name>.aimon-tmp-<uuid>`)은 대상 옆에 있어 같은 uid 가 `ln` 전까지 읽을 수 있다(R2). 부모 경로 성분의 심볼릭 링크는 따라간다 — 무결성은 HMAC 이, 기밀성은 같은 uid 앞에서 지켜지지 않는다 |
+| `read(path, maxBytes)` | 도우미 한 번: `[ -L ]` → 거절, `[ -e ]` 없음 → `NoSuchFileException`, `[ -f ]` 아님 → 거절, `head -c` 를 `/usr/bin/base64` 로(`pipefail` — 읽을 수 없는 파일은 빈 결과가 아니라 실패). `maxBytes` 는 16 MiB 까지, 넘으면 거절(자르지 않는다). `transientOutput(true)` | 링크 검사와 읽기 사이는 TOCTOU 다 — 도우미는 샌드박스 사용자로 도므로 남는 것은 샌드박스 안의 기밀성이다. 코어는 지금 `read` 를 부르지 않는다 |
+| `delete(path)` | 도우미 한 번: `rm -rf --` 뒤 `[ -e ] \|\| [ -L ]` 이면 실패 | `rm -rf` 는 마지막 성분의 링크를 따라가지 않는다(링크를 지운다, 끊긴 링크도). files API 의 stat 이 링크를 따라가는지 확인되지 않아 그 길을 쓰지 않았다 |
+| `createDirectories(path)` | `SandboxFiles.createDirectories` — 디렉터리가 아닌 것이 있으면 (nio 하위 타입이 아닌) `IOException` | |
 
-- **루트**: `/workspace` 로 둔다. `.aimon-ptc/<128비트>/` 는 `/workspace/.aimon-ptc/...` 가 된다. `/tmp` 는 이미지 계약 밖이고,
-  testkit 의 files API 가 `/workspace` 만 번역한다([실행 디렉터리 설계](workspace-sandbox-run-directory.md) 의 `PRIVATE_BASE`
-  기각 이유와 같다). 런타임 FS 의 상대 경로가 루트를 벗어나면(`..`, 절대 경로, NUL) 거절한다.
-- **경로 규칙 (S9, 구현)**: 셸 엔진 설계 §5 는 `.aimon-ptc/` 를 모델 파일 도구에게 `DENY` 로 둔다.
-  `SandboxFileSystem.RULES` 에 `PathRule.deny("workspace/.aimon-ptc")` 를 더했다(코어 0.3.4 의 `PathRule.deny`). 읽기·쓰기·목록에서
-  보이지 않고, 셸은 그대로 읽고 쓴다(`SandboxFileSystemTest`). 운영자용 `SandboxWorkspaceFiles` 는 최상위 `.aimon-*` 를 이미 읽기
-  전용으로 둔다. **`Grep` 은 막지 않는다**: 코어의 `GrepTool` 은 환경의 `contentSearch()` 가 있으면 경로 규칙을 거치지 않고 그
-  결과를 쓰고, `SandboxContentSearch` 는 샌드박스 안에서 `rg --hidden --no-ignore` 를 돌린다. `.aimon-staged`·`.aimon-shell` 도
-  지금 같은 처지다. 무결성은 HMAC 에 기대므로(셸 엔진 설계 §5) 막을 일은 아니지만, 응답 내용(R2)이 `Grep` 결과에 나올 수 있다 —
-  §10 Q4.
-- **탐침**(셸 엔진 설계 §4): 런타임 FS 로 쓴 프로브 파일을 셸의 `test -f` 로 본다 — 같은 `/workspace` 를 보므로 성립한다.
-  testkit 에서도 성립한다(`LocalConnection` 이 `/workspace` 를 번역한다).
+- **가둠**: `/workspace/**` 만 받는다. 상대 경로, NUL, 빈 · `.` · `..` 성분, 끝의 `/` 는 프로바이더를 부르기 전에 거절한다 —
+  고쳐 읽지 않는다. `/workspace` 자체는 읽기 · 만들기만 된다. testkit 의 files API 가 `/workspace` 만 번역하는 것도 이유다
+  ([실행 디렉터리 설계](workspace-sandbox-run-directory.md) 의 `PRIVATE_BASE` 기각 이유와 같다). 바인딩 루트가 `/workspace`
+  밖이면 엔진의 탐침이 실패해 그 환경에서 엔진이 빠진다 — 이미지 계약 밖의 배치다.
+- **어디에 놓이나**: 코어는 `.aimon-ptc/` 를 서술자의 **작업 디렉터리** 아래에 둔다(`ShellCodeExecutionEngine.ptcRoot`). 이
+  환경의 작업 디렉터리는 바인딩 루트(기본 `/workspace/repo`)이므로 실제 위치는 `/workspace/repo/.aimon-ptc/<run>/` 이다 — 이 메모가
+  처음 가정한 `/workspace/.aimon-ptc/` 가 아니다. 그래서 실행이 도는 동안 응답 파일이 모델의 작업 트리 안에 있다(아키텍처 문서
+  §20, [`ptc-shell-provider.md`](ptc-shell-provider.md) Q-C1).
+- **경로 규칙 (S9)**: `SandboxFileSystem` 은 `PathRule.deny("workspace/.aimon-ptc")` 에 더해, 루트가 `/workspace` 가 아니면
+  `{root}/.aimon-ptc` 도 거부한다. 읽기 · 쓰기 · 목록에서 보이지 않고, 셸은 그대로 읽고 쓴다(`SandboxFileSystemTest`). **`Grep` 은
+  막지 않는다** — §10 Q4.
+- **탐침**(셸 엔진 설계 §4): 런타임 FS 로 쓴 프로브 파일을 셸의 `test -f` 로 본다. testkit 에서도 성립한다(`LocalConnection` 이
+  `/workspace` 를 번역한다). `ShellEngineAvailabilityTest` 와 docker 계층의 `ShellEngineAvailabilityIT` 가 실제 탐침을 돌린다.
 - **정리**: 엔진이 환경 객체당 첫 실행에서 `.aimon-ptc/` 아래 오래된 항목을 지운다(셸 엔진 설계 §8). 샌드박스 쪽 스윕은 더하지
-  않는다 — seed 의 `rm -rf /workspace/.tmp-*` 와 같은 것을 `.aimon-ptc` 에 둘지는 §10 Q3.
-- 계약 스위트: 코어의 `RuntimeFileSystem` 계약 스위트(로컬 구현용)를 testkit 프로바이더와 docker 계층에서 돌린다.
+  않았다 — §10 Q3.
+- **계약 스위트**: 코어는 `RuntimeFileSystem` 계약 스위트를 발행하지 않는다(`LocalRuntimeFileSystemTest` 는 코어의 단위
+  테스트다). 그래서 이 저장소의 testkit 에 `RuntimeFileSystemContract` 를 두고 testkit 계층(`SandboxRuntimeFileSystemContractTest`)과
+  docker 계층(`OpenSandboxRuntimeFileSystemIT`)에서 돌린다 — 이미 있는 것 · 끊긴 링크 · 동시 `writeNew` · 바이트 왕복 · 상한 ·
+  링크를 따라가지 않는 `read` · `delete` · 거절 경로 · 셸 가시성. 코어 testkit 으로 옮길지는 §10 Q-C2.
 
-## 9. S6 — 서술자 (방향, 코어 배포 뒤)
+## 9. S6 — 서술자 (구현)
 
-- `SandboxExecutionEnvironmentProvider` 가 서술자를 만들 때 `isolation(SANDBOXED)` 를 늘 싣는다. 조건이 없는 상수다 — 이 환경의
-  셸·파일은 언제나 샌드박스 안이다.
-- 런타임 능력은 프로필의 선언(§6.2)에서 온다. seed 결과에서 오지 않는다 — 서술자는 제안 시점에 프로비저닝 없이 정해져야
-  한다(셸 엔진 설계 §4). seed 가 선언을 확인하므로, 선언했는데 이미지에 없는 경우는 첫 셸·파일 호출에서 FAILED 로 드러난다.
-- `ShellFeature` 선언(`STREAMING`·`RUN_DIRECTORY`·`ISOLATED_EXECUTION`)은 이미 있다.
-- `EnvironmentDescriptor.unavailable(...)` 경로(샌드박스를 줄 수 없는 경우)에는 `SANDBOXED` 를 싣지 않는다 — 코어가 그 환경에
-  셸 엔진을 제안하지 않게.
+- `SandboxExecutionEnvironmentProvider.descriptor` 가 `isolation(SANDBOXED)` 를 늘 싣는다. 조건이 없는 상수다 — 이 환경의
+  셸 · 파일은 언제나 샌드박스 안이다. 포크의 서술자도 같은 길로 만든다.
+- 런타임은 프로필의 선언(§6.2)에서 온다. seed 결과에서 오지 않는다.
+- `ShellFeature` 선언(`STREAMING` · `RUN_DIRECTORY` · `ISOLATED_EXECUTION`)은 이미 있다.
+- `EnvironmentDescriptor.unavailable(...)` 경로(샌드박스를 줄 수 없는 경우)는 코어 것이고 isolation 을 싣지 않는다 — 코어가 그
+  환경에 셸 엔진을 내지 않는다(이유 "not sandboxed").
+- 시험: `SandboxEnvironmentProviderTest`(루트 · 포크 · 사용 불가), `ShellEngineAvailabilityTest` — 코어 자신의
+  `CodeOfferKeys.putEnvironmentFacts` · `factsOf` 로 뽑은 사실(그리고 에이전트 쪽 사실인 `bashUnconstrained`)로 엔진의 정적
+  가용성이 참이고, 포크도 같으며, 선언 없는 프로필은 "does not declare the python3 runtime", 사용 불가 환경은 "not sandboxed".
 
 ## 10. 열린 질문
 
 - **Q1 — execd 의 `TMPDIR`.** 프로바이더가 `/tmp` 를 가정한다(§2.1). 운영자가 execd 에 `TMPDIR` 을 줄 수 있다면 프로바이더 설정
   (`execd-temp-directory`)으로 받을지, 이미지 계약 문장(§6.1)으로 막을지. `release-1.1.0` 이상만 지원하게 되면 S1 의 삭제 자체가
   필요 없어진다(execd 가 지운다) — docker 계층의 고정 버전을 올리는 일과 함께 정한다.
-- **Q2 — 제공자가 끊은 실행의 표지.** S2 로 끝난 실행은 셸에서 "래퍼 실패(exit 137)" 로 보인다. PTC 엔진이 이것을 위반으로 다루려면
-  `ExecOutcome` 에 사유(`aborted: LINE_TOO_LONG`)를 싣고 코어 셸 계약에 그 결과의 모양을 정해야 한다. 셸 엔진 설계 §3 의 "스트리밍
-  제공자는 줄을 물질화하기 전에 상한을 건다" 를 코어 셸 계약에 올릴 때 함께 정할 것.
+- ~~**Q2 — 제공자가 끊은 실행의 표지.**~~ *(닫았다)* — 코어 0.3.4 가 `ShellCommandResult.killCause()`(`ShellKillCause`)를 두었고,
+  이 저장소는 `ExecOutcome.killCause()`(`ExecKillCause`)로 그 사실을 제공자에서 결과까지 나른다(§11).
 - **Q3 — `.aimon-ptc` 의 샌드박스 쪽 스윕.** 엔진의 스윕은 환경 객체의 첫 실행에서만 돈다. 오래 쓰지 않은 워크스페이스에는 응답
   파일이 남는다(HMAC 된 도구 결과 — R2 의 잔여물). seed 에서 지울지.
 - **Q4 — `Grep` 과 경로 규칙.** 코어가 `contentSearch()` 결과에도 경로 규칙을 적용할지(코어 쪽 한 곳), 이 저장소가 `rg` 에
   `DENY` 접두어를 `--glob '!…'` 로 넘길지(사용자 glob 과의 순서를 정해야 한다). 셸 엔진이 들어오기 전에 정한다(§8).
+
+Q1 · Q3 · Q4 와 [`ptc-shell-provider.md`](ptc-shell-provider.md) §8 의 Q5 · Q6 · Q-C1–Q-C3 은 이 변경 밖에도 영향이 있어
+아키텍처 문서 [`workspace-sandbox.md`](workspace-sandbox.md) §20 에 올렸다. 구현 중에 드러난 코어 쪽 결함(Q-C4, 런타임이
+셸의 kill 을 벗어난다)도 그곳에 있다.
+
+## 11. S8 — 제공자가 끝낸 명령의 원인 (구현, 제공자 쪽)
+
+- **SPI**: `ExecKillCause { LINE_LIMIT_EXCEEDED }` 와 `ExecOutcome.killCause()`. 제공자 SPI 는 코어 타입을 가져오지 않으므로 코어의
+  `ShellKillCause` 를 쓰지 않고 자기 열거형을 둔다(`SandboxShell` 이 하나의 빠짐없는 `switch` 로 옮긴다). 그 원인을 실은 제공자는
+  두 스트림을 잘림으로 표시하고, `timedOut` 과 `killCause` 는 함께 서지 않는다 — 빌더가 둘 다 받으면 거절한다.
+- **OpenSandbox**: `LineTooLongException`(§4) 에서 `killCause = LINE_LIMIT_EXCEEDED` 를 기록한다 — 이미 타임아웃이나 호출자의
+  kill 이 가는 중이면 기록하지 않는다(먼저 끝낸 쪽 하나만). 기록했으면 kill 의 종료가 spec 의 타임아웃을 지나 오거나 `await` 가
+  시간을 다 써도 `timedOut` 은 거짓이다.
+- **`SandboxShell`**: 훅이 아닌 격리 실행(코어 셸 엔진의 호출 모양 — 리스너가 있든 없든)은 그 원인을 결과로 돌려준다:
+  트레일러가 없으면 `ShellCommandResult(exit 137, 잘림).withKillCause(LINE_LIMIT_EXCEEDED)`, 트레일러가 있으면 그 결과에
+  `withKillCause`. 엔진은 그것을 `PROTOCOL_VIOLATION` 으로 읽는다. 원인은 시계 기반 타임아웃 판정보다 먼저 본다. 훅 · 모니터는
+  여전히 예외지만 메시지가 원인을 말한다("the provider ended the command: an output line exceeded the provider's line limit") —
+  넘친 훅이 결정처럼 읽히는 종료 코드로 돌아오지 않게(§10 의 Q5 는 아키텍처 문서 §20).
+- 시험: `OpenSandboxProviderTest`(원인 기록, 보통 명령은 없음, 타임아웃을 지난 줄 kill 은 타임아웃이 아님, 타임아웃 kill 뒤의
+  긴 줄은 원인 없음), `SandboxShellKillCauseTest`(§5.4 의 표), docker 계층 `OpenSandboxWorkspaceIT`(실제 execd 에서 격리 비훅 실행이
+  결과와 원인을 20초 안에 돌려줌, 훅은 원인을 말하는 예외).
+
+## 12. 셸 엔진 설계 §14 — 엔진 계약 스위트와 cmdline 검사
+
+- **docker 계층**: `ShellEngineContractIT` 가 코어의 `AbstractCodeExecutionEngineContractTest` 를 그대로 돈다 — 실제 execd,
+  실제 `/workspace`, `python3` 이 든 이미지. seed 의 `runtime-python3`, 비밀 파일이 든 격리 스트리밍(S4 업로드), execd 위의 런타임
+  FS, S1 스풀 삭제, 실행 디렉터리 삭제를 실제로 지난다.
+- **testkit 계층**: `ShellEngineContractTest`. 로컬 프로바이더는 명령 글자 · 환경 값 · 출력 · files API 경로의 `/workspace` 를
+  번역하지만 실행 디렉터리 파일의 **바이트**는 번역하지 않는다. 코어 런타임은 응답 디렉터리를 그런 파일(`reply_dir`, 절대
+  `/workspace` 경로) 에서 읽으므로, 시험 전용 환경 장식자가 그 파일 하나를 호스트 경로로 바꿔 넣는다(다른 파일 · 비밀 표지는
+  그대로, 다이제스트는 `SandboxShell` 이 받은 바이트로 계산한다). 코어 변경 없이 스위트를 **수정 없이** 돌리려면 런타임이 응답
+  디렉터리를 환경 변수나 명령으로 받아야 한다 — §10 Q-C3. 호스트에 `python3` 3.8 이상이 없으면 건너뛴다.
+- **cmdline 규칙**: §7 의 docker 계층 시험.
+- **드러난 것**: 코어 런타임은 시작할 때 `os.setpgid(0, 0)` 으로 자기 프로세스 그룹을 만든다(셸 엔진 설계 §6). 그래서 이
+  저장소의 kill — 타임아웃 · 취소 · 줄 상한, 모두 exec 의 프로세스 그룹까지 닿는다(아키텍처 문서 §9) — 이 런타임에 닿지 않는다.
+  타임아웃 · 취소로 끝난 `ExecuteCode` 의 런타임은 셸 호출이 끝난 뒤에도 돌고, 응답을 기다리던 것은 자기 벽시계에서, 응답을
+  기다리지 않는 계산(`while True`)은 샌드박스가 없어질 때까지 끝나지 않는다. testkit 계층에서는 그 프로세스가 호스트에 남았다
+  (`wallClock` 시험마다 하나, CPU 100%). 스위트의 `bridgeLimitStopsAtOnce` 는 같은 이유로 가끔 실패했다 — 정지 뒤에도 런타임이
+  호출을 보내고 엔진은 셸 호출이 돌아올 때까지 그것을 브리지에 넘긴다. 그래서 이 두 시험은 testkit 계층에서 끄고(이유를 적은
+  `ExecutionCondition`) docker 계층에서만 돈다 — 그곳의 런타임은 샌드박스와 함께 죽는다. 코어 쪽 결함이다(아키텍처 문서 §20,
+  [`ptc-shell-provider.md`](ptc-shell-provider.md) §9 Q-C4).
+
