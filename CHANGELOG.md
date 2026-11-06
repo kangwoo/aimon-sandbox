@@ -20,12 +20,16 @@ See [`docs/design/ptc-shell-prerequisites.md`](docs/design/ptc-shell-prerequisit
   copy of a command's output once the command has ended, however it ended. `SandboxShell` sets it for hook, isolated
   and streamed execs. The OpenSandbox provider then removes execd's spool files of the command, in both execd layouts,
   before `await` reports it — one call, then one per file if execd refuses a path, so one bad path does not keep the
-  others; a command that ended in time is not reported as timed out while the removal finishes. execd `release-1.1.0`
-  and later already remove their own; `docker/execd/v1.1.0` keeps them in `/tmp`.
+  others (not when execd does not answer: a timeout or a gateway's 502/503/504 is not retried). A command that ended in
+  time is never reported as timed out because of the removal: `await` waits one request timeout for it, then reports
+  the command's real exit while the removal goes on. execd `release-1.1.0` and later already remove their own;
+  `docker/execd/v1.1.0` keeps them in `/tmp`.
 - **One output line is bounded (S2).** The OpenSandbox provider stops reading a `/command` stream at an event line over
   256 KiB, kills the command and marks both streams truncated, instead of holding the whole line in memory. A hook,
   isolated or streamed command printing such a line now fails (the wrapper's exit 137). The model's own commands are not
-  affected: their output goes through the wrapper's files.
+  affected: their output goes through the wrapper's files. `Grep` is: a match on such a line (a minified bundle, a
+  one-line JSON file) now fails the in-sandbox `rg` search, and core's `GrepTool` falls back to its slower filesystem
+  walk, which still finds it.
 - **`/workspace/.aimon-ptc/` is hidden from the file tools (S9)**, where core's shell engine will put its tool replies
   (`PathRule.deny`). The shell still reads and writes it, and `Grep`'s in-sandbox search does not go through path rules.
 - **Contract tests (S7)** pin that `isolated(true)` streaming is not foreground: it streams, takes no shell lock, and

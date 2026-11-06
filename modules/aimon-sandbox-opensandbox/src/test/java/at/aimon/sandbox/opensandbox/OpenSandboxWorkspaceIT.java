@@ -330,7 +330,8 @@ class OpenSandboxWorkspaceIT {
     @DisplayName("S1/S2: stream runs leave no execd spool behind; an output line over the SSE limit kills the run")
     void streamRunsLeaveNoSpoolAndAHugeLineIsRefused() throws Exception {
         final WorkspaceSandbox assembly = assembly(profile().build(), new InMemorySandboxWorkspaceStore());
-        final ExecutionEnvironment env = mainTurn(assembly, SessionId.generate());
+        final SessionId session = SessionId.generate();
+        final ExecutionEnvironment env = mainTurn(assembly, session);
         final String id = UUID.randomUUID().toString().replace("-", "");
         final ExecutionOptions.Builder isolated = ExecutionOptions.builder().timeout(Duration.ofSeconds(60))
                 .isolated(true);
@@ -345,10 +346,24 @@ class OpenSandboxWorkspaceIT {
                 () -> env.shell().execute(() -> print + "; sleep 30", isolated.timeout(Duration.ofSeconds(1)).build()))
                 .isInstanceOf(ShellTimeoutException.class);
 
+        // Negative control: the same output from a run that is not transient does stay in a spool file this check
+        // finds — so finding none above means the provider removed them, not that execd spooled elsewhere. This holds
+        // for docker/execd/v1.1.0, which this tier pins; release-1.1.0+ removes every spool itself.
+        final ProviderSandboxRef ref = assembly.store().find(SandboxWorkspaceId.of("ws:" + session.value()))
+                .orElseThrow().slot("primary").orElseThrow().providerRef().orElseThrow();
+        try (SandboxConnection connection = provider.connect(ref)) {
+            assertThat(connection
+                    .run(ExecSpec.builder().command("echo KEPTMARK" + id + "; echo KEPTMARK" + id + " >&2")
+                            .timeout(Duration.ofSeconds(60)).build(), OutputSink.DISCARD)
+                    .await(Duration.ofSeconds(60)).exitCode()).isZero();
+        }
+
         // execd release-1.1.0+ spools to $TMPDIR/opensandbox-execd and removes it itself; docker/execd/v1.1.0 spools
         // to $TMPDIR and keeps it — what the provider removes.
         assertThat(bash(env, "m=SPOOLMARK; grep -rlF -- \"$m" + id + "\" \"${TMPDIR:-/tmp}\" 2>/dev/null | wc -l")
                 .stdout().strip()).as("spool files holding the runs' output").isEqualTo("0");
+        assertThat(bash(env, "m=KEPTMARK; grep -rlF -- \"$m" + id + "\" \"${TMPDIR:-/tmp}\" 2>/dev/null | wc -l")
+                .stdout().strip()).as("spool files holding a non-transient run's output").isNotEqualTo("0");
 
         // One output line of ~300 KiB arrives as one SSE event line: the reader stops before holding it and kills.
         final long started = System.nanoTime();

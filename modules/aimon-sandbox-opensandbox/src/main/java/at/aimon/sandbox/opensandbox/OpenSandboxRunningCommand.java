@@ -83,13 +83,16 @@ final class OpenSandboxRunningCommand implements RunningCommand {
     private final Capture stdout;
     private final Capture stderr;
     private final CompletableFuture<Integer> exit = new CompletableFuture<>();
+    /**
+     * The command's exit as soon as it is known — before its spool is removed, after which {@link #exit} completes
+     * with the same value: {@link #await} reports it when the removal outlasts the bounded wait for it.
+     */
+    private final CompletableFuture<Integer> endedExit = new CompletableFuture<>();
     private final long startedNanos = System.nanoTime();
     private final Object killLock = new Object();
     private volatile String commandId;
     private volatile InputStream stream;
     private volatile boolean signalled;
-    /** The command has ended (its exit is known), though {@link #exit} may not be completed yet. */
-    private volatile boolean ended;
     private final AtomicBoolean spoolRemoved = new AtomicBoolean();
     private boolean killRequested;
     private boolean killSent;
@@ -144,6 +147,8 @@ final class OpenSandboxRunningCommand implements RunningCommand {
             try (in) {
                 SseEvents.read(in, execd.transport().json, this::handle);
             } catch (SseEvents.LineTooLongException e) {
+                // Before init there is no id to kill: the kill is latched and the command runs to its own timeout.
+                // execd sends init before any output, so in practice the id is always known here.
                 // Which stream the line belonged to is in the part not read: both are reported as cut.
                 log.warn("Killing a command in {}: {}", execd.ref(), e.getMessage());
                 stdout.truncate();
@@ -163,13 +168,13 @@ final class OpenSandboxRunningCommand implements RunningCommand {
 
     /** The command has ended with {@code code}: what it spooled goes first, then {@link #await} returns. */
     private void finish(int code) {
-        ended = true;
+        endedExit.complete(code);
         removeSpool();
         exit.complete(code);
     }
 
     private void fail(RuntimeException failure) {
-        ended = true;
+        endedExit.completeExceptionally(failure);
         removeSpool();
         exit.completeExceptionally(failure);
     }
@@ -177,8 +182,10 @@ final class OpenSandboxRunningCommand implements RunningCommand {
     /**
      * Removes execd's spool files of a transient command, once, through the files API (which reports a missing file
      * as success). All paths go in one call; execd stops at the first path it cannot remove (a directory, or a path
-     * through a file — {@code /tmp/opensandbox-execd} made a plain file by the command), so a failed call is followed
-     * by one call per path, and one bad path does not spare the others. Never throws: a failure is logged.
+     * through a file — {@code /tmp/opensandbox-execd} made a plain file by the command) and answers 500, so a refused
+     * call is followed by one call per path, and one bad path does not spare the others. A call that got no answer
+     * from execd (a transport failure or timeout, or a gateway's 502/503/504) is not: four more calls would only wait
+     * on it again. Never throws: a failure is logged.
      */
     private void removeSpool() {
         if (!spec.transientOutput() || !spoolRemoved.compareAndSet(false, true)) {
@@ -193,7 +200,7 @@ final class OpenSandboxRunningCommand implements RunningCommand {
             paths.add(directory + "/" + id + ".stdout");
             paths.add(directory + "/" + id + ".stderr");
         }
-        if (removeFiles(paths, false)) {
+        if (removeFiles(paths, false) != Removal.REFUSED) {
             return;
         }
         for (String path : paths) {
@@ -201,29 +208,42 @@ final class OpenSandboxRunningCommand implements RunningCommand {
         }
     }
 
-    /** @return whether execd removed (or did not find) every path */
-    private boolean removeFiles(List<String> paths, boolean warn) {
+    /** How one {@code DELETE /files} went. */
+    private enum Removal {
+        /** execd removed (or did not find) every path. */
+        REMOVED,
+        /** execd answered with an error: it stopped at a path it could not remove. */
+        REFUSED,
+        /** No answer from execd itself. */
+        UNANSWERED
+    }
+
+    private Removal removeFiles(List<String> paths, boolean warn) {
         final StringBuilder query = new StringBuilder();
         for (String path : paths) {
             query.append(query.length() == 0 ? "?" : "&").append("path=").append(encode(path));
         }
         String failure;
+        Removal removal;
         try {
             final HttpResponse<byte[]> response = execd.send(ep -> ep.request("/files" + query).DELETE(),
                     "remove command output");
-            if (response.statusCode() < 300) {
-                return true;
+            final int status = response.statusCode();
+            if (status < 300) {
+                return Removal.REMOVED;
             }
-            failure = "HTTP " + response.statusCode();
+            failure = "HTTP " + status;
+            removal = status == 502 || status == 503 || status == 504 ? Removal.UNANSWERED : Removal.REFUSED;
         } catch (RuntimeException e) {
             failure = e.getMessage();
+            removal = Removal.UNANSWERED;
         }
-        if (warn) {
+        if (warn || removal == Removal.UNANSWERED) {
             log.warn("Removing the output of a command in {} ({}) failed: {}", execd.ref(), paths, failure);
         } else {
             log.debug("Removing the output of a command in {} failed: {}; trying each file", execd.ref(), failure);
         }
-        return false;
+        return removal;
     }
 
     /** @return false on a terminal event */
@@ -313,7 +333,7 @@ final class OpenSandboxRunningCommand implements RunningCommand {
                 }
             } catch (SandboxNotFoundException e) {
                 // Nothing is left to remove from a sandbox that is gone.
-                ended = true;
+                endedExit.completeExceptionally(e);
                 spoolRemoved.set(true);
                 exit.completeExceptionally(e);
                 return;
@@ -347,16 +367,19 @@ final class OpenSandboxRunningCommand implements RunningCommand {
             try {
                 return ended(exit.get(Math.max(0, timeout.toNanos()), TimeUnit.NANOSECONDS));
             } catch (TimeoutException e) {
-                if (!ended) {
+                if (!endedExit.isDone()) {
                     return killed();
                 }
                 // The command ended in time and only the removal of its spool holds the exit back: it is neither
-                // killed nor reported as timed out. The removal is bounded by the request timeout.
-                return ended(exit.get(execd.transport().requestTimeout().plus(KILL_GRACE).toMillis(),
-                        TimeUnit.MILLISECONDS));
+                // killed nor reported as timed out. The removal gets one request timeout more; past that, the exit
+                // is reported while the removal goes on (several calls, or calls queued behind others, take longer).
+                try {
+                    return ended(exit.get(execd.transport().requestTimeout().toMillis(), TimeUnit.MILLISECONDS));
+                } catch (TimeoutException stillRemoving) {
+                    log.debug("Reporting a command in {} before its spool is removed", execd.ref());
+                    return ended(endedExit.get());
+                }
             }
-        } catch (TimeoutException stillRemoving) {
-            return outcome(SIGKILL_EXIT, true);
         } catch (ExecutionException e) {
             if (e.getCause() instanceof RuntimeException runtime) {
                 throw runtime;
@@ -395,7 +418,7 @@ final class OpenSandboxRunningCommand implements RunningCommand {
     public void kill() {
         synchronized (killLock) {
             killRequested = true;
-            if (commandId != null && !ended && !exit.isDone()) {
+            if (commandId != null && !endedExit.isDone() && !exit.isDone()) {
                 sendKill();
             }
         }

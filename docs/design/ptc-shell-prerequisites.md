@@ -12,7 +12,7 @@
 
 | # | 셸 엔진 설계 §13 | 코어 SPI 에 기대는가 | 이 문서 |
 |---|---|---|---|
-| S1 | isolated·hook 실행 뒤 execd 스풀 삭제 | 아니다 | **구현** (§3) |
+| S1 | isolated·hook·스트리밍 실행 뒤 execd 스풀 삭제 | 아니다 | **구현** (§3) |
 | S2 | SSE 리더가 줄을 물질화하기 전 상한, 넘으면 명령 종료 | 아니다 | **구현** (§4) |
 | S3 | 이미지 계약에 `python3` 선택 항목, 프로필 선언, seed 확인 | 서술자 부분은 기댄다 | 초안 (§6) |
 | S4 | `RunDirectory` 비밀 파일 표지 | 기댄다 | 방향 (§7) |
@@ -87,13 +87,16 @@
 - **`SandboxShell`**: stream 실행 — 훅(`isHook`), 격리(`isIsolated`), 스트리밍(`ShellLineListener` 로 부른 것, 백그라운드
   모니터 포함) — 에 켠다. 이들의 출력은 exec 자신의 스트림이라, execd 스풀이 샌드박스 안에 남는 유일한 사본이다. 모델의
   포그라운드·백그라운드 명령은 끄고 둔다: 출력은 래퍼의 `run.out` 으로 가고 그 파일은 래퍼가 지우며, 스풀에는 트레일러 정도만
-  남는다. 셸 엔진 설계는 "isolated·hook" 만 말했다. 스트리밍 모니터까지 넓힌 것은 같은 경로이기 때문이다.
+  남는다. 셸 엔진 설계 §13 S1 이 꼽는 범위(isolated·hook·스트리밍 실행) 그대로다.
 - **OpenSandbox 프로바이더**(`OpenSandboxRunningCommand`): `init` 이벤트의 command id 로, 명령의 끝이 정해진 뒤
   `DELETE /files?path=…` **한 번**에 네 경로를 지운다 — `/tmp/opensandbox-execd/<id>.{stdout,stderr}` 와
   `/tmp/<id>.{stdout,stderr}`. execd 의 `RemoveFiles` 는 `path` 를 여럿 받고, 없는 파일은 성공으로 친다
   (`DeleteFile` 의 `os.Stat` 이 `ErrNotExist` 면 `nil`). 다만 **처음 실패한 경로에서 멈추고** 나머지는 손대지 않는다 — 경로가
   디렉터리이거나, 같은 uid 의 명령이 `/tmp/opensandbox-execd` 를 보통 파일로 만들어 두면(`ENOTDIR`) 그 뒤의 `v1.1.0` 경로가
-  남는다. 그래서 한 번의 호출이 실패하면 경로마다 한 번씩 다시 부른다(실패할 때만 HTTP 네 번이 더 든다).
+  남는다. 이때 execd 는 500 `RUNTIME_ERROR` 로 답한다(`controller/filesystem.go` 의 `RemoveFiles`). 그래서 한 번의 호출을
+  execd 가 **오류 응답으로 거절하면** 경로마다 한 번씩 다시 부른다(그때만 HTTP 네 번이 더 든다). execd 의 답이 없는 경우 —
+  전송 실패·요청 타임아웃, 또는 서버 프록시의 502·503·504(뒤의 execd 가 답하지 않았다는 뜻) — 에는 다시 부르지 않는다: 답하지
+  않는 execd 에 네 번을 더 기다릴 뿐이다. 그 밖의 오류 응답(500 을 포함한 4xx·5xx)은 execd 가 경로를 거절한 것으로 친다.
   - **언제**: 종료 이벤트(`execution_complete`·`error`)를 받았거나 스트림이 끊긴 뒤 status 로 종료 코드를 읽었을 때, `await` 가
     결과를 돌려주기 **전에** 지운다. 그래서 `await` 가 끝나면 스풀도 없다(호출 하나에 HTTP 한 번이 더 든다). `await` 가 kill 에도
     답이 없는 명령을 포기한 경우에는 결과가 먼저 나가고, 리더 스레드가 스트림을 닫은 뒤 지운다.
@@ -102,13 +105,26 @@
     (execd 의 id 는 32자리 hex). `init` 전에 끝난 명령은 지울 것이 없다. 샌드박스가 사라진 경우(`SandboxNotFoundException`)에는
     시도하지 않는다.
   - 삭제는 `await` 의 시간 안에 든다. 명령이 시간 안에 끝났는데 삭제 때문에 결과가 늦으면, `await` 는 kill 하지 않고 타임아웃으로
-    보고하지도 않으며 삭제를 기다린다(요청 타임아웃 + `KILL_GRACE` 까지).
+    보고하지도 않으며 삭제를 요청 타임아웃만큼 더 기다린다. 그래도 끝나지 않으면 — 경로별 호출 넷이 각각 느리거나, 동시 호출
+    상한(`max-concurrent-calls`)에 막혀 줄을 서는 경우 — 삭제 전에 기록해 둔 **명령의 실제 결과**(종료 코드, `timedOut=false`,
+    캡처한 출력)를 보고하고, 삭제는 제공자 스레드에서 마저 돈다. 이 경우에만 `await` 가 돌아온 뒤에도 스풀이 잠깐 남는다.
+    (끝나기 전의 status 읽기 실패처럼 명령이 실패로 정해졌다면 그 실패를 던진다.)
   - 삭제가 도는 동안 들어온 `kill()` 은 보내지 않는다(이미 끝난 명령에 대한 `DELETE /command` 는 500).
 - **시험**: `OpenSandboxProviderTest` — 두 위치 모두 `await` 반환 시점에 없음, 비-transient 는 건드리지 않음, 타임아웃 kill ·
   끊긴 스트림 · 포기한 명령에서도 지움, 삭제 실패가 명령의 실패가 되지 않음, 지울 수 없는 경로 하나가 나머지를 남기지 않음,
-  느린 삭제가 시간 안에 끝난 명령을 타임아웃으로 만들지 않음. `SandboxShellIT` — 어느 실행이 transient 인가.
-  docker 계층(`OpenSandboxWorkspaceIT`, 실제 `execd:v1.1.0`) — 훅·격리·스트리밍·타임아웃 실행 뒤 `$TMPDIR` 아래 어느 파일에도
-  출력 표지가 없음.
+  느린 삭제가 시간 안에 끝난 명령을 타임아웃으로 만들지 않음, 기다림보다 오래 걸리는 삭제(배치는 500, 경로별 호출은 요청
+  타임아웃을 넘겨 멈춤)에서도 실제 종료 코드·`timedOut=false` 를 요청 타임아웃 하나 안에 보고함, 답이 없는 삭제(요청 타임아웃,
+  503)는 경로별로 다시 부르지 않음, 두 번째 `init` 이 스풀 경로를 바꾸지 않음, `SPOOL_ID` 에 맞지 않는 id 로는 아무 경로도
+  지우지 않음. `SandboxShellIT` — 어느 실행이 transient 인가.
+  docker 계층(`OpenSandboxWorkspaceIT.streamRunsLeaveNoSpoolAndAHugeLineIsRefused`, 실제 `execd:v1.1.0`) — 훅·격리·스트리밍·
+  타임아웃 실행 뒤 `$TMPDIR` 아래 어느 파일에도 출력 표지가 없음. 대조군으로, 같은 샌드박스에서 transient 가 아닌 날 실행
+  (`connection.run`)의 표지는 같은 검사에 **잡힌다** — 그래서 "없음" 이 execd 가 다른 곳에 스풀했기 때문이 아님을 보인다
+  (`v1.1.0` 에서만 성립한다. `release-1.1.0` 이상은 스스로 지우므로 고정 버전을 올리면 대조군을 고친다).
+  - **실행 기록**: docker 계층은 CI(`.github/workflows/build.yml` 의 `integration` 작업, `./gradlew --no-daemon
+    integrationTest`, 태그 `docker`)에서 돈다. PR #45 의 head `2d67bd30` 에서 run 42147893077 이 42개 통과·1개 건너뜀
+    (`OpenSandboxProviderContractTest.sharedVolumeDeletionIsIdempotentAndRefusedWhileMounted`, 의도된 건너뜀)으로 끝났고,
+    이 IT 도 통과했다(대조군을 더하기 전). 경로별 재시도와 execd 가 처음 실패한 경로에서 멈추는 동작, `release-1.1.0` 이상의
+    배치는 실제 execd 로 시험하지 않았다(IT 가 경로를 지울 수 없게 만들지 않고, docker 계층은 `v1.1.0` 고정).
 
 ## 4. S2 — SSE 이벤트 줄의 상한 (구현)
 
@@ -127,6 +143,11 @@
 - **동작 변화**: 줄 하나가 256 KiB(JSON 바이트)를 넘는 출력을 내는 훅·격리·스트리밍 명령은 이제 끝까지 돌지 못하고 실패한다.
   예전에는 JVM 이 그 줄 전체를 메모리에 올린 뒤 캡처 상한에서 잘랐다. 모델의 포그라운드·백그라운드 명령은 출력이 `run.out` 으로
   가므로 영향이 없다.
+- **`Grep` 도 영향을 받는다.** `SandboxContentSearch` 는 `rg --json` 을 보통 `ExecSpec` 으로 돌리고 그 출력을 exec 스트림으로
+  받는다. 그래서 일치한 줄이 256 KiB(JSON 바이트 — Go 의 `encoding/json` 은 `<`·`>`·`&` 를 6바이트 `\u00XX` 로 적으므로 HTML
+  같은 내용은 훨씬 짧은 원문에서 닿는다) 이상이면 — 압축된 번들, 한 줄짜리 JSON, `-a` 로 훑는 바이너리 — `rg` 가 kill 되고
+  두 스트림이 잘림으로 표시되어 `search` 가 실패한다. 코어의 `GrepTool` 은 그때 파일 시스템 순회로 물러서므로 결과는 맞고
+  느려질 뿐이다. 예전에는 그 줄이 결과로 왔다. (`rg --max-columns` 로 줄을 줄이는 길도 있으나 지금은 바꾸지 않았다.)
 - **시험**: `SseEventsTest`(줄 구분, 상한 경계, 끝없는 줄이 `상한 + 청크` 이상 읽히지 않음, 읽기 경계가 줄·`\r\n`·멀티바이트
   문자 가운데에 떨어져도 같은 결과, 여러 번의 읽기에 걸친 줄의 상한을 바이트로 셈), `OpenSandboxProviderTest`(kill,
   잘림 표시, 그 줄이 sink 에 가지 않음), docker 계층(약 300 KiB 한 줄 → 타임아웃이 아닌 실패, 20초 안에).
