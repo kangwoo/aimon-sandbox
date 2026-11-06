@@ -15,4 +15,5 @@ dependencies {
     testImplementation(project(":aimon-sandbox-testkit"))
     // Only the @Tag("docker") tier uses it: the default tier runs against a fake server on the JDK's HttpServer.
     testImplementation(libs.testcontainers)
+    testRuntimeOnly(libs.slf4j.simple)
 }

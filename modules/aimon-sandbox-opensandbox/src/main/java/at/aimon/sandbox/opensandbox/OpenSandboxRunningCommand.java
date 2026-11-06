@@ -191,6 +191,8 @@ final class OpenSandboxRunningCommand implements RunningCommand {
      * throws: a failure is logged.
      */
     private void removeSpool() {
+        log.debug("DIAG removeSpool transient={} alreadyRemoved={} id={}", spec.transientOutput(), spoolRemoved.get(),
+                commandId);
         if (!spec.transientOutput() || !spoolRemoved.compareAndSet(false, true)) {
             return;
         }
@@ -204,8 +206,10 @@ final class OpenSandboxRunningCommand implements RunningCommand {
             paths.add(directory + "/" + id + ".stderr");
         }
         Removal removal = removeFiles(paths, false);
+        log.debug("DIAG removeSpool {} first call: {}", id, removal);
         if (removal == Removal.BROKEN) {
             removal = removeFiles(paths, true);
+            log.debug("DIAG removeSpool {} second call: {}", id, removal);
         }
         if (removal != Removal.REFUSED) {
             return;

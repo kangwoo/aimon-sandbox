@@ -55,6 +55,7 @@ maven-publish = "0.37.0"
 aimon-core = { module = "at.aimon.core:aimon-core", version.ref = "aimon-core" }
 
 slf4j-api = { module = "org.slf4j:slf4j-api", version.ref = "slf4j" }
+slf4j-simple = { module = "org.slf4j:slf4j-simple", version.ref = "slf4j" }
 jackson-databind = { module = "com.fasterxml.jackson.core:jackson-databind", version.ref = "jackson" }
 
 jetbrains-annotations = { module = "org.jetbrains:annotations", version = "26.1.0" }

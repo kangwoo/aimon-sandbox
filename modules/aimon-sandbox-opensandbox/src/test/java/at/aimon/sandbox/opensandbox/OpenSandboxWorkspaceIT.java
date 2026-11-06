@@ -360,8 +360,13 @@ class OpenSandboxWorkspaceIT {
 
         // execd release-1.1.0+ spools to $TMPDIR/opensandbox-execd and removes it itself; docker/execd/v1.1.0 spools
         // to $TMPDIR and keeps it — what the provider removes.
+        final String diag = bash(env, "{ m=SPOOLMARK; for f in $(grep -rlF -- \"$m" + id + "\" \"${TMPDIR:-/tmp}\""
+                + " 2>/dev/null); do ls -l --full-time \"$f\"; head -c 400 \"$f\"; echo; done;"
+                + " echo ALL; ls -l --full-time \"${TMPDIR:-/tmp}\" \"${TMPDIR:-/tmp}\"/opensandbox-execd 2>&1 | tail -40; } | sed s/SPOOLMARK/S_POOLMARK/g")
+                .stdout();
+        System.out.println("DIAG spool files:\n" + diag);
         assertThat(bash(env, "m=SPOOLMARK; grep -rlF -- \"$m" + id + "\" \"${TMPDIR:-/tmp}\" 2>/dev/null | wc -l")
-                .stdout().strip()).as("spool files holding the runs' output").isEqualTo("0");
+                .stdout().strip()).as("spool files holding the runs' output; DIAG:%n%s", diag).isEqualTo("0");
         assertThat(bash(env, "m=KEPTMARK; grep -rlF -- \"$m" + id + "\" \"${TMPDIR:-/tmp}\" 2>/dev/null | wc -l")
                 .stdout().strip()).as("spool files holding a non-transient run's output").isNotEqualTo("0");
 
