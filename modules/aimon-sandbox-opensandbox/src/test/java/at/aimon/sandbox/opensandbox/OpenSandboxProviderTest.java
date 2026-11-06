@@ -704,6 +704,108 @@ class OpenSandboxProviderTest {
             assertThat(server.interrupted).isEmpty();
         }
 
+        @Test
+        @DisplayName("S1: a spool removal that outlasts await's wait for it still reports the real exit, not a timeout")
+        void aSpoolRemovalThatOutlastsItsWaitReportsTheRealExit() throws Exception {
+            final Duration requestTimeout = Duration.ofMillis(300);
+            final CountDownLatch perPath = new CountDownLatch(1);
+            // The batch is refused at once; each of the four per-path calls then hangs past the request timeout.
+            server.overrides.put("DELETE /v1/sandboxes/", request -> {
+                if (!request.path.endsWith("/files")) {
+                    return null;
+                }
+                if (request.params("path").size() > 1) {
+                    return Reply.error(500, "RUNTIME_ERROR", "not a directory");
+                }
+                perPath.countDown();
+                sleep(Duration.ofSeconds(1));
+                return null;
+            });
+            server.commands = body -> Reply.events(List.of(init("c1"), out("ok"), exit("3", "exit status 3")), null);
+            try (OpenSandboxProvider impatient = new OpenSandboxProvider(
+                    server.config().requestTimeout(requestTimeout).build())) {
+                final RunningCommand command = impatient.connect(impatient.create(spec("ws:a", 1).build()))
+                        .run(transientSpec(Duration.ofSeconds(10)), OutputSink.DISCARD);
+                assertThat(perPath.await(5, TimeUnit.SECONDS)).isTrue();
+
+                final long started = System.nanoTime();
+                final ExecOutcome outcome = command.await(Duration.ofMillis(50));
+
+                assertThat(outcome.exitCode()).isEqualTo(3);
+                assertThat(outcome.timedOut()).isFalse();
+                assertThat(text(outcome.stdout())).isEqualTo("ok\n");
+                // Reported after one request timeout more, not after the four calls (4 x 300 ms) the removal takes.
+                assertThat(Duration.ofNanos(System.nanoTime() - started)).isLessThan(Duration.ofMillis(1000));
+                assertThat(server.interrupted).isEmpty();
+            }
+        }
+
+        @Test
+        @DisplayName("S1: a removal execd did not answer (timeout, or a gateway's 503) is not retried path by path")
+        void anUnansweredSpoolRemovalIsNotRetriedPerPath() throws Exception {
+            server.commands = body -> Reply.events(List.of(init("c1"), complete()), null);
+            try (OpenSandboxProvider impatient = new OpenSandboxProvider(
+                    server.config().requestTimeout(Duration.ofMillis(300)).build())) {
+                final SandboxConnection impatientConnection = impatient
+                        .connect(impatient.create(spec("ws:a", 1).build()));
+                server.overrides.put("DELETE /v1/sandboxes/", request -> {
+                    if (request.path.endsWith("/files")) {
+                        sleep(Duration.ofSeconds(1));
+                    }
+                    return null;
+                });
+
+                assertThat(impatientConnection.run(transientSpec(Duration.ofSeconds(10)), OutputSink.DISCARD)
+                        .await(Duration.ofSeconds(10)).exitCode()).isZero();
+                assertThat(spoolDeletes()).as("after a transport timeout").hasSize(1);
+
+                server.requests.clear();
+                server.overrides.put("DELETE /v1/sandboxes/",
+                        request -> request.path.endsWith("/files")
+                                ? Reply.error(503, "UNAVAILABLE", "upstream down")
+                                : null);
+
+                assertThat(impatientConnection.run(transientSpec(Duration.ofSeconds(10)), OutputSink.DISCARD)
+                        .await(Duration.ofSeconds(10)).exitCode()).isZero();
+                assertThat(spoolDeletes()).as("after a 503").hasSize(1);
+            }
+        }
+
+        @Test
+        @DisplayName("S1: only the first init names the command — a second one does not move the spool paths")
+        void aSecondInitIsIgnored() throws Exception {
+            final List<String> paths = spool("c1");
+            final List<String> other = spool("c2");
+            server.commands = body -> Reply.events(List.of(init("c1"), init("c2"), out("ok"), complete()), null);
+
+            assertThat(connection.run(transientSpec(Duration.ofSeconds(10)), OutputSink.DISCARD)
+                    .await(Duration.ofSeconds(10)).exitCode()).isZero();
+
+            assertThat(server.files.keySet()).doesNotContainAnyElementsOf(paths).containsAll(other);
+            assertThat(spoolDeletes()).singleElement()
+                    .satisfies(r -> assertThat(r.params("path")).containsExactlyInAnyOrderElementsOf(paths));
+        }
+
+        @Test
+        @DisplayName("S1: a command id unfit to name a file builds no spool path")
+        void anIdUnfitForAPathRemovesNothing() throws Exception {
+            server.commands = body -> Reply.events(List.of(init("../etc/passwd"), out("ok"), complete()), null);
+
+            final ExecOutcome outcome = connection.run(transientSpec(Duration.ofSeconds(10)), OutputSink.DISCARD)
+                    .await(Duration.ofSeconds(10));
+
+            assertThat(outcome.exitCode()).isZero();
+            assertThat(spoolDeletes()).isEmpty();
+        }
+
+        private static void sleep(Duration duration) {
+            try {
+                Thread.sleep(duration.toMillis());
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }
+
         private void awaitGone(List<String> paths) throws InterruptedException {
             final long deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
             while (paths.stream().anyMatch(server.files::containsKey) && System.nanoTime() < deadline) {
