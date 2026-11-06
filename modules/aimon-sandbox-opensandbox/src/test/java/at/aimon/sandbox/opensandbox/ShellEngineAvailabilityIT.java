@@ -100,7 +100,7 @@ class ShellEngineAvailabilityIT {
             assertThat(engine.staticAvailability(offerFacts(broken.environment)).isAvailable()).isTrue();
             final EngineAvailability probed = engine.probe(broken.environment);
             assertThat(probed.isAvailable()).isFalse();
-            assertThat(probed.getReason()).isPresent();
+            assertThat(probed.getReason()).hasValueSatisfying(reason -> assertThat(reason).contains("python3"));
         }
     }
 }

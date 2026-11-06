@@ -1,35 +1,30 @@
 package at.aimon.sandbox.opensandbox;
 
-import java.io.IOException;
+import static org.assertj.core.api.Assertions.assertThat;
+
 import java.time.Duration;
 import java.util.List;
-import java.util.Optional;
+import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 
 import at.aimon.core.agent.tool.ToolContext;
-import at.aimon.core.environment.ContentSearch;
-import at.aimon.core.environment.EnvironmentDescriptor;
-import at.aimon.core.environment.ExecutionEnvironment;
-import at.aimon.core.environment.RuntimeFileSystem;
-import at.aimon.core.environment.StagedResource;
-import at.aimon.core.filesystem.VirtualFileSystem;
 import at.aimon.core.programmatic.CodeExecutionEngine;
-import at.aimon.core.shell.ExecutionOptions;
-import at.aimon.core.shell.ShellCancellation;
-import at.aimon.core.shell.ShellCommand;
+import at.aimon.core.programmatic.CodeExecutionLimits;
+import at.aimon.core.programmatic.CodeExecutionOutcome;
+import at.aimon.core.programmatic.CodeExecutionStatus;
 import at.aimon.core.shell.ShellCommandResult;
-import at.aimon.core.shell.ShellFeature;
-import at.aimon.core.shell.ShellLineListener;
-import at.aimon.core.shell.VirtualShell;
-import at.aimon.core.shell.exception.ShellExecutionException;
 import at.aimon.core.tools.ToolContextKeys;
 import at.aimon.core.tools.code.shell.ShellCodeExecutionEngine;
 import at.aimon.programmatic.testkit.AbstractCodeExecutionEngineContractTest;
 import at.aimon.programmatic.testkit.EnginePrograms;
 import at.aimon.programmatic.testkit.PythonPrograms;
+import at.aimon.programmatic.testkit.ScriptedToolCallBridge;
 
 /**
  * Core's engine contract suite with core's Python shell engine on a real OpenSandbox sandbox (shell doc §14;
@@ -40,23 +35,22 @@ import at.aimon.programmatic.testkit.PythonPrograms;
  * {@code execute} directly — {@link ShellEngineAvailabilityIT} covers those.
  *
  * <p>
- * One change to what the engine sees ({@link StoppedRunsGetNoReply}): once a run has been stopped, its replies are
- * dropped instead of written. Core's runtime leaves the exec's process group, so the shell's kill does not reach it
- * (docs/design/workspace-sandbox.md §20), and the engine keeps answering until the shell call returns; every reply
- * written in that window lets the runtime make another call, which made {@code bridgeLimitStopsAtOnce} (at most 5
- * calls) depend on how fast the kill returned. Without the reply the runtime waits, and gives up at its own deadline.
- * Every other inherited test is unaffected: none of them looks at a reply after its run was stopped.
+ * The engine sees the sandbox's environment unchanged. Core's runtime ends with the shell's process-group kill (its
+ * anchor stays in the exec's group; a watchdog kills the runtime's own group when the anchor dies — aimon-core#336),
+ * which is all this module's kill reaches (docs/design/workspace-sandbox.md §9). One test of this class's own checks
+ * what that leaves in the sandbox: nothing.
  */
 @Tag("docker")
 class ShellEngineContractIT extends AbstractCodeExecutionEngineContractTest {
 
+    /** The argument of the {@code sleep} the program below starts: a child of the program to look for afterwards. */
+    private static final String CHILD_MARK = "6123";
+
     private static SharedSandbox sandbox;
-    private static ExecutionEnvironment environment;
 
     @BeforeAll
     static void start() throws Exception {
         sandbox = SharedSandbox.started();
-        environment = new StoppedRunsGetNoReply(sandbox.environment);
     }
 
     @AfterAll
@@ -78,140 +72,49 @@ class ShellEngineContractIT extends AbstractCodeExecutionEngineContractTest {
 
     @Override
     protected ToolContext toolContext() {
-        return ToolContext.builder().put(ToolContextKeys.EXECUTION_ENVIRONMENT, environment).build();
+        return ToolContext.builder().put(ToolContextKeys.EXECUTION_ENVIRONMENT, sandbox.environment).build();
     }
 
     /**
-     * An environment that delegates everything, but whose runtime file system drops a write made while the shell
-     * command in flight has been cancelled — the engine's reply to a run it already stopped (class doc). Writes outside
-     * a shell command (the engine's probe) and before the stop pass through.
+     * The runtime's watchdog is double-forked, so it is reparented to the sandbox's PID 1 and becomes that process's
+     * zombie once it has killed its group; on OpenSandbox PID 1 is {@code bootstrap.sh}'s {@code sh}, which reaps any
+     * child while it waits for the entrypoint (docs/design/ptc-shell-provider.md §9). A process left over from an
+     * earlier test of this class counts too: none should be.
      */
-    static final class StoppedRunsGetNoReply implements ExecutionEnvironment {
-        private final ExecutionEnvironment delegate;
-        private final VirtualShell shell;
-        private final RuntimeFileSystem files;
-        /** The cancellation of the shell command in flight; {@link ShellCancellation#none()} between commands. */
-        private volatile ShellCancellation running = ShellCancellation.none();
-
-        StoppedRunsGetNoReply(ExecutionEnvironment delegate) {
-            this.delegate = delegate;
-            this.shell = new TrackingShell(delegate.shell());
-            final RuntimeFileSystem real = delegate.runtimeFileSystem().orElseThrow();
-            this.files = new RuntimeFileSystem() {
-                @Override
-                public void writeNew(String path, byte[] bytes) throws IOException {
-                    if (!running.isCancelled()) {
-                        real.writeNew(path, bytes);
-                    }
-                }
-
-                @Override
-                public byte[] read(String path, int maxBytes) throws IOException {
-                    return real.read(path, maxBytes);
-                }
-
-                @Override
-                public void delete(String path) throws IOException {
-                    real.delete(path);
-                }
-
-                @Override
-                public void createDirectories(String path) throws IOException {
-                    real.createDirectories(path);
-                }
-            };
+    @Test
+    @Timeout(value = 60, unit = TimeUnit.SECONDS)
+    @DisplayName("a timed-out run leaves no aimon_ptc process, no child of the program and no zombie in the sandbox")
+    void aTimedOutRunLeavesNothingInTheSandbox() throws Exception {
+        final CodeExecutionOutcome outcome;
+        try (ScriptedToolCallBridge bridge = ScriptedToolCallBridge.succeedingWith("unused")) {
+            outcome = run(
+                    "import subprocess\nsubprocess.Popen(['sleep', '" + CHILD_MARK + "'])\n" + programs().spinForever(),
+                    bridge, CodeExecutionLimits.builder().maxStatements(Long.MAX_VALUE).build(), Duration.ofSeconds(2));
         }
+        assertThat(outcome.getStatus()).isEqualTo(CodeExecutionStatus.TIMED_OUT);
 
-        @Override
-        public VirtualFileSystem fileSystem() {
-            return delegate.fileSystem();
+        // The watchdog's kill and PID 1's reaping are asynchronous to the shell call's return: poll for a while.
+        List<String> left = leftOver();
+        for (int attempt = 0; attempt < 50 && !left.isEmpty(); attempt++) {
+            Thread.sleep(200);
+            left = leftOver();
         }
+        assertThat(left).as("processes left in the sandbox (pid ppid stat args)").isEmpty();
+    }
 
-        @Override
-        public VirtualShell shell() {
-            return shell;
-        }
-
-        @Override
-        public EnvironmentDescriptor descriptor() {
-            return delegate.descriptor();
-        }
-
-        @Override
-        public boolean durable() {
-            return delegate.durable();
-        }
-
-        @Override
-        public String stage(StagedResource resource) {
-            return delegate.stage(resource);
-        }
-
-        @Override
-        public Optional<RuntimeFileSystem> runtimeFileSystem() {
-            return Optional.of(files);
-        }
-
-        @Override
-        public Optional<ContentSearch> contentSearch() {
-            return delegate.contentSearch();
-        }
-
-        @Override
-        public Optional<Duration> backgroundCommandTimeout() {
-            return delegate.backgroundCommandTimeout();
-        }
-
-        @Override
-        public List<String> drainNotices() {
-            return delegate.drainNotices();
-        }
-
-        /** Records the cancellation of the streamed command in flight — the engine's run. */
-        private final class TrackingShell implements VirtualShell {
-            private final VirtualShell delegate;
-
-            TrackingShell(VirtualShell delegate) {
-                this.delegate = delegate;
-            }
-
-            @Override
-            public ShellCommandResult execute(ShellCommand command) throws ShellExecutionException {
-                return delegate.execute(command);
-            }
-
-            @Override
-            public ShellCommandResult execute(ShellCommand command, ExecutionOptions options)
-                    throws ShellExecutionException {
-                return delegate.execute(command, options);
-            }
-
-            @Override
-            public ShellCommandResult execute(ShellCommand command, ExecutionOptions options,
-                    ShellLineListener listener) throws ShellExecutionException {
-                running = options.getCancellation();
-                try {
-                    return delegate.execute(command, options, listener);
-                } finally {
-                    // Past this point no line reaches the listener, so no reply can turn into a recorded call.
-                    running = ShellCancellation.none();
-                }
-            }
-
-            @Override
-            public String getWorkingDirectory() {
-                return delegate.getWorkingDirectory();
-            }
-
-            @Override
-            public boolean supports(ShellFeature feature) {
-                return delegate.supports(feature);
-            }
-
-            @Override
-            public void close() {
-                delegate.close();
-            }
-        }
+    /**
+     * @return every process of the sandbox that is a zombie, a runtime or the program's child, as {@code ps} prints it
+     *         — filtered here, so the command's own text cannot match. A {@code ps} that fails or lists nothing fails
+     *         the test instead of passing it.
+     */
+    private static List<String> leftOver() throws Exception {
+        final ShellCommandResult ps = sandbox.bash("ps -eo pid=,ppid=,stat=,args=");
+        assertThat(ps.exitCode()).as("ps in the sandbox: %s", ps.stderr()).isZero();
+        assertThat(ps.stdout()).as("ps lists the sandbox's PID 1").containsPattern("(?m)^\\s*1\\s");
+        return ps.stdout().lines().map(String::strip).filter(line -> {
+            final String[] fields = line.split("\\s+", 4);
+            return fields.length == 4 && (fields[2].startsWith("Z") || fields[3].contains("aimon_ptc")
+                    || fields[3].equals("sleep " + CHILD_MARK));
+        }).toList();
     }
 }

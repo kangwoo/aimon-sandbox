@@ -671,7 +671,7 @@ it with non-blocking items); this section says where the code differs and why. T
 [`ptc-shell-prerequisites.md`](ptc-shell-prerequisites.md) now records S3–S6 and S8 as implemented (§6–§9, §11, §12),
 and the architecture document [`workspace-sandbox.md`](workspace-sandbox.md) has absorbed the change (§6.1, §7, §11.1,
 §11.3, §13.1, §13.3). Its §20 carries the open questions of §8 that outlive this change — Q1, Q3, Q4, Q5, Q6, Q-C1,
-Q-C2, Q-C3 (with Q7) and the new Q-C4 below — each pointing back here.
+Q-C2, Q-C3 (with Q7) and the new Q-C4 below (since closed) — each pointing back here.
 
 ### Where the code differs from the design
 
@@ -716,21 +716,21 @@ Q-C2, Q-C3 (with Q7) and the new Q-C4 below — each pointing back here.
 - **Docker tier: one sandbox per class, warmed in `@BeforeAll` (review 2).** `SharedSandbox` provisions and seeds the
   python profile once per class (`ShellEngineContractIT`, `ShellEngineAvailabilityIT`, `OpenSandboxRuntimeFileSystemIT`).
   `ShellEngineAvailabilityIT` has one test each for the facts, static availability and a real probe, and a negative
-  seed test: an image without `python3` (the tier's image with `/usr/bin/python3*` removed) under a profile declaring
-  it fails provisioning permanently at `[step runtime-python3]`, and the probe reports the engine unavailable. The fork
+  seed test: an image without `python3` (the tier's image with every `python3*` on `PATH` removed; the build fails
+  saying so if one is still found) under a profile declaring it fails provisioning permanently at
+  `[step runtime-python3]`, and the probe reports the engine unavailable for a reason that names `python3`. The fork
   and the two negative cases of §6.10 are unit-tier only, since they do not depend on the provider.
 - **cmdline IT: the patterns reach `grep` in a file.** With the key's base64 as a `grep` argument, `grep`'s own
   `/proc/<pid>/cmdline` would hold it and the check could never be zero; the patterns are written through the file tools
   and passed with `-f`.
-- **Two inherited engine tests are disabled on the testkit tier (Q-C4 below).** `wallClock` and
-  `bridgeLimitStopsAtOnce` do not run in `ShellEngineContractTest` (a JUnit `ExecutionCondition` that names the reason);
-  they run on the docker tier. The runtime outlives the kill there too (until the class's shared sandbox goes), so
-  `ShellEngineContractIT` hands the engine an environment whose runtime file system drops a write made after the run's
-  shell cancellation tripped: the stopped run gets no reply, its runtime makes no further call, and
-  `bridgeLimitStopsAtOnce` no longer depends on how fast the kill returns.
+- **Every inherited engine test runs on both tiers (Q-C4 below, closed).** `wallClock` and `bridgeLimitStopsAtOnce`
+  were disabled on the testkit tier, and `ShellEngineContractIT` dropped the engine's replies to a stopped run, until
+  core's fix (aimon-core#336) was published; both workarounds are gone. The testkit tier checks after every test that
+  no `aimon_ptc.py` of the test's sandbox is left on the host; the docker tier has a test of its own that a timed-out
+  run whose program started a child leaves no runtime, no child and no zombie in the sandbox.
 - **Not done (optional in the design):** `SandboxContentSearch` does not log a kill cause.
 
-### Q-C4 — core's runtime outlives the shell's kill (found in build)
+### Q-C4 — core's runtime outlives the shell's kill (found in build) — **closed**
 
 Core's `aimon_ptc.py` starts with `os.setpgid(0, 0)` (shell doc §6, step 1). This repository's kill — a timeout, a
 cancellation, a line kill — reaches the exec's process group and no further (WS §9; execd offers nothing wider), so it
@@ -752,6 +752,26 @@ of its own for `_end_process`), or notice by itself that its shell call ended (e
 does not work around it (it would need a session-wide kill the image contract cannot promise). Recorded in WS §20 as
 an item to close before the shell engine is enabled in production.
 
+**Closed (aimon-core#336, backlog TC-19).** Core's runtime now forks first: the *anchor* — the process the shell
+started — stays in the exec's process group and holds no secret; the runtime under it leads its own group and
+double-forks a *watchdog* into that group, which kills the group when the anchor dies (the kernel closes the anchor's
+pipe, whatever signal killed it). So the group kill this repository makes is enough, and nothing changed here but the
+tests (above). What remains, checked here:
+
+- **Zombie watchdogs.** The double-forked watchdog is reparented to the sandbox's PID 1 and becomes its zombie once it
+  has killed its group, so PID 1 has to reap. On OpenSandbox PID 1 is the execd image's `bootstrap.sh` — read from the
+  pinned server: docker makes it the container's entrypoint, and Kubernetes (template mode) the sandbox container's
+  command. Its `/bin/sh` starts execd and the entrypoint (`tail -f /dev/null`) in the background and blocks in `wait`
+  on the latter; a POSIX shell's `wait` reaps any child that exits meanwhile, adopted orphans included. With
+  `runtime.execd_run_as_init = true` it execs `execd --init`, a reaper by design. The docker tier asserts it
+  (`ShellEngineContractIT.aTimedOutRunLeavesNothingInTheSandbox`: no `Z` process after the suite's runs); the K8s tier
+  was not run for it. Not covered: Kubernetes pool mode (`extensions.poolRef`, unused here) runs `bootstrap.sh` as a
+  task under the pool pod's task-executor, whose PID 1 the server does not choose. An image contract sentence is not
+  needed: the PID 1 is the provider's, not the image's.
+- **`shell()` and `supports` provision nothing** (core's javadoc, item 10 of its design). `SandboxExecutionEnvironment
+  .shell()` returns the shell built with the environment, and `SandboxShell.supports` / `getWorkingDirectory` are
+  static; `ShellEngineAvailabilityTest.askingTheShellProvisionsNothing` pins it (no provider call of any kind).
+
 ### Review 2's non-blocking items
 
 | Item | Done |
@@ -766,11 +786,12 @@ an item to close before the shell engine is enabled in production.
 
 ### Open questions — answers and where they went
 
-- **Q7** (testkit tier via the `reply_dir` decorator) — built as designed; it works (the inherited tests pass but the
-  two above). It goes to WS §20 together with Q-C3, the core change that would make it unnecessary.
+- **Q7** (testkit tier via the `reply_dir` decorator) — built as designed; it works (every inherited test passes, since
+  Q-C4's close the two that were disabled too). It goes to WS §20 together with Q-C3, the core change that would make
+  it unnecessary.
 - **O1** closed in the design (`toBuilder()`); **O2** — `ToolCallOrigin.direct()`; **O3** — no negative docker seed
   test; the fragment is run on the host against fake and real `python3` (`SandboxSeederTest`), and the docker tier's
   seed runs the check against the real image; **O5** closed in the design; **O6** — `ToolOfferContext.builder()` needs
   nothing before `putEnvironmentFacts` (no registry: `factsOf` reads Bash as not eligible, which §6.10 overrides with
   `bashUnconstrained(true)` anyway).
-- **Q1, Q3, Q4, Q5, Q6, Q-C1, Q-C2, Q-C3, Q-C4** — WS §20, each linking here.
+- **Q1, Q3, Q4, Q5, Q6, Q-C1, Q-C2, Q-C3** — WS §20, each linking here. **Q-C4** went there too and is closed (above).

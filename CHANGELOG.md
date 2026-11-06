@@ -46,9 +46,10 @@ and departures: [`docs/design/ptc-shell-provider.md`](docs/design/ptc-shell-prov
 - **`RuntimeFileSystemContract`** in `aimon-sandbox-testkit`: the runtime file system's contract suite, which core does
   not publish. The local provider and the docker tier run it, and core's engine contract suite
   (`aimon-code-engine-testkit`, test-only) runs on both tiers.
-- **Known core defect, not fixed here:** core's runtime moves into a process group of its own, so the sandbox's
-  timeout/cancel kill does not reach it — a timed-out or cancelled `ExecuteCode` run's code keeps running in the sandbox
-  (`docs/design/workspace-sandbox.md` §20).
+- **A timed-out, cancelled or limit-stopped `ExecuteCode` run leaves nothing running in the sandbox** — with the
+  `0.3.4-SNAPSHOT` that carries aimon-core#336 (Q-C4: core's runtime used to leave the exec's process group, so the
+  sandbox's kill missed it). No code change here; both tiers now run the whole engine contract suite, and the docker
+  tier checks that no runtime, child or zombie is left (`docs/design/ptc-shell-provider.md` §9 Q-C4).
 
 ### Added: groundwork for core's programmatic tool calling (shell engine)
 

@@ -42,6 +42,12 @@ final class OpenSandboxTestServer {
     /** This run's deployment label: sandboxes of other runs on a shared server are never touched. */
     static final String DEPLOYMENT = "ci-" + UUID.randomUUID().toString().substring(0, 8);
 
+    /** The build step of {@link #sandboxImageWithoutPython3()}: POSIX sh, as the image's {@code /bin/sh} may be. */
+    private static final String REMOVE_PYTHON3 = "IFS=:; for dir in $PATH; do rm -f \"$dir\"/python3 \"$dir\"/python3.*; done; "
+            + "if command -v python3 >/dev/null 2>&1; then "
+            + "echo \"python3 is still on PATH at $(command -v python3); the no-python3 image cannot be built\" >&2; "
+            + "exit 1; fi";
+
     private static final String API_KEY = "aimon-test-" + UUID.randomUUID();
     private static final Map<String, OpenSandboxTestServer> SERVERS = new ConcurrentHashMap<>();
     private static volatile String sandboxImage;
@@ -114,16 +120,15 @@ final class OpenSandboxTestServer {
 
     /**
      * @return {@link #sandboxImage()} with {@code python3} removed from {@code PATH} — an image that breaks the
-     *         optional
-     *         {@code python3} item of the image contract (§13.3) and nothing else, built once per run
+     *         optional {@code python3} item of the image contract (§13.3) and nothing else, built once per run. Every
+     *         {@code python3*} in every {@code PATH} directory goes, so an override image with {@code python3}
+     *         outside {@code /usr/bin} works too; if one is still found, the build fails saying so.
      */
     static synchronized String sandboxImageWithoutPython3() {
         if (sandboxImageWithoutPython3 == null) {
             final String base = sandboxImage();
             sandboxImageWithoutPython3 = new ImageFromDockerfile("aimon-sandbox-opensandbox-test-no-python3", false)
-                    .withDockerfileFromBuilder(
-                            dockerfile -> dockerfile.from(base).run("rm -f /usr/bin/python3*").build())
-                    .get();
+                    .withDockerfileFromBuilder(dockerfile -> dockerfile.from(base).run(REMOVE_PYTHON3).build()).get();
         }
         return sandboxImageWithoutPython3;
     }

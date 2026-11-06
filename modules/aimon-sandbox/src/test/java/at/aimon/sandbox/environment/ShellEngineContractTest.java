@@ -2,9 +2,9 @@ package at.aimon.sandbox.environment;
 
 import static at.aimon.sandbox.SandboxHarness.ALICE;
 import static at.aimon.sandbox.SandboxHarness.bash;
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
-import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
@@ -14,10 +14,6 @@ import java.util.function.UnaryOperator;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.extension.ConditionEvaluationResult;
-import org.junit.jupiter.api.extension.ExecutionCondition;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.junit.jupiter.api.extension.ExtensionContext;
 
 import at.aimon.core.agent.session.SessionId;
 import at.aimon.core.agent.tool.ToolContext;
@@ -58,16 +54,11 @@ import at.aimon.sandbox.testkit.SandboxTestProfiles;
  * fails — loudly, here. The docker tier ({@code ShellEngineContractIT}) runs the suite with nothing rewritten.
  *
  * <p>
- * Two inherited tests do not run on this tier ({@link RuntimeOutlivesItsKill}): core's runtime moves into a process
- * group of its own, so the shell's kill does not reach it (docs/design/workspace-sandbox.md §20). Here the runtime is a
- * host process: {@code wallClock} would leave its endless loop running on the developer's machine after every build,
- * and {@code bridgeLimitStopsAtOnce} fails when the runtime gets more calls out before the shell call returns. Both
- * run on the docker tier, which has the same defect — the runtime outlives the kill there too, until the sandbox the
- * whole class shares goes — but keeps it inside a container: {@code wallClock}'s loop dies with that sandbox, and
- * {@code ShellEngineContractIT} drops the engine's replies to a stopped run, so {@code bridgeLimitStopsAtOnce} does not
- * depend on how fast the kill returns.
+ * Every inherited test runs, {@code wallClock} and {@code bridgeLimitStopsAtOnce} included: core's runtime ends with
+ * the shell's process-group kill (its anchor stays in the exec's group, and a watchdog kills the runtime's own group
+ * when the anchor dies — aimon-core#336), so a timed-out or stopped run leaves no process on the host. After each
+ * test the host is checked for that: no {@code aimon_ptc.py} whose run directory lies in the test's sandbox remains.
  */
-@ExtendWith(ShellEngineContractTest.RuntimeOutlivesItsKill.class)
 class ShellEngineContractTest extends AbstractCodeExecutionEngineContractTest {
 
     /** The run-directory file core's runtime reads its reply directory from. */
@@ -76,6 +67,8 @@ class ShellEngineContractTest extends AbstractCodeExecutionEngineContractTest {
     private final SandboxHarness harness = SandboxHarness.builder()
             .profile(SandboxTestProfiles.local("python").runtimes(Set.of("python3")).build()).build();
     private ExecutionEnvironment environment;
+    /** The host path of the sandbox's run directories, which every runtime's command line names; null if skipped. */
+    private String runDirectories;
 
     @BeforeEach
     void provision() throws Exception {
@@ -83,11 +76,41 @@ class ShellEngineContractTest extends AbstractCodeExecutionEngineContractTest {
         final ExecutionEnvironment sandbox = harness.mainTurn(session, ALICE);
         assumeTrue(usablePython(sandbox), "the host has no python3 3.8 or later");
         environment = new HostPathEnvironment(sandbox, path -> harness.host(session, path).toString());
+        runDirectories = harness.host(session, "/workspace/.aimon-shell").toString();
     }
 
     @AfterEach
-    void close() {
-        harness.close();
+    void close() throws InterruptedException {
+        try {
+            if (runDirectories != null) {
+                assertNoRuntimeLeft(runDirectories);
+            }
+        } finally {
+            harness.close();
+        }
+    }
+
+    /**
+     * Fails if a runtime of this sandbox is still alive on the host a few seconds after the test — killing it first,
+     * so a failure leaves no stray process behind either.
+     */
+    private static void assertNoRuntimeLeft(String runDirectories) throws InterruptedException {
+        List<ProcessHandle> left = runtimes(runDirectories);
+        for (int attempt = 0; attempt < 50 && !left.isEmpty(); attempt++) {
+            Thread.sleep(100);
+            left = runtimes(runDirectories);
+        }
+        final List<String> described = left.stream()
+                .map(process -> process.pid() + " " + process.info().commandLine().orElse("")).toList();
+        left.forEach(ProcessHandle::destroyForcibly);
+        assertThat(described).as("aimon_ptc.py processes left on the host").isEmpty();
+    }
+
+    private static List<ProcessHandle> runtimes(String runDirectories) {
+        return ProcessHandle.allProcesses().filter(ProcessHandle::isAlive)
+                .filter(process -> process.info().commandLine()
+                        .filter(line -> line.contains("aimon_ptc.py") && line.contains(runDirectories)).isPresent())
+                .toList();
     }
 
     /**
@@ -113,22 +136,6 @@ class ShellEngineContractTest extends AbstractCodeExecutionEngineContractTest {
     @Override
     protected ToolContext toolContext() {
         return ToolContext.builder().put(ToolContextKeys.EXECUTION_ENVIRONMENT, environment).build();
-    }
-
-    /**
-     * Disables the inherited tests that core's runtime, which outlives the shell's kill, breaks on a host (class doc).
-     */
-    static final class RuntimeOutlivesItsKill implements ExecutionCondition {
-        private static final Set<String> TESTS = Set.of("wallClock", "bridgeLimitStopsAtOnce");
-
-        @Override
-        public ConditionEvaluationResult evaluateExecutionCondition(ExtensionContext context) {
-            return context.getTestMethod().map(Method::getName).filter(TESTS::contains)
-                    .map(name -> ConditionEvaluationResult.disabled("core's runtime leaves the exec's process group, "
-                            + "so the shell's kill misses it; on the host it would outlive the test "
-                            + "(docs/design/workspace-sandbox.md §20)"))
-                    .orElse(ConditionEvaluationResult.enabled("not affected"));
-        }
     }
 
     /** An environment that delegates everything, but whose shell rewrites {@code reply_dir} to the host path. */

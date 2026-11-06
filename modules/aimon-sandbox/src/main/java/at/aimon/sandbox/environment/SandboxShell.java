@@ -210,9 +210,8 @@ final class SandboxShell implements VirtualShell {
      * A streamed command takes the stream path of a hook's command (§9): no shell lock and no state save, the
      * session's cwd and exports to start from, the watchdog for its timeout, and its output in the exec's own streams.
      * Its stdout and stderr reach the listener as the provider delivers them ({@link StreamLines}); the wrapper's
-     * trailer
-     * line is taken out of stderr and never reaches the listener. The result keeps stdout capped as any stream run's
-     * is.
+     * trailer line is taken out of stderr and never reaches the listener. The result keeps stdout capped as any stream
+     * run's is.
      */
     @Override
     public ShellCommandResult execute(ShellCommand command, ExecutionOptions options, ShellLineListener listener)
@@ -1142,6 +1141,10 @@ final class SandboxShell implements VirtualShell {
         return binding.root();
     }
 
+    /**
+     * A static answer, as core's javadoc asks: it runs no command, touches no file and provisions nothing (offers call
+     * it on every iteration).
+     */
     @Override
     public boolean supports(ShellFeature feature) {
         return feature == ShellFeature.PIPE || feature == ShellFeature.REDIRECTION
