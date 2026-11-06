@@ -1364,6 +1364,7 @@ owner 그대로)하며 "/workspace 가 초기화되었다" notice 를 붙인다.
   .aimon-staged/<name>/<contentKey>/   staged skill files (on demand; read-only to file tools)
   .aimon-shell/<h(shellKey)>/          shell state, lock, owner, heartbeat (§9)
   .aimon-shell/.run.<hex>/             one hook run's private directory, removed after the run (§9)
+  .aimon-ptc/<run>/                    core's PTC shell engine replies (hidden from file tools; ptc-shell-prerequisites.md S9)
 /shared                 workspace volume, mounted per profile (sharedAccess: rw | ro | none)
   git/repo.git          bare repository used to exchange commits between slots
   context/ plans/ artifacts/ results/
@@ -1389,7 +1390,9 @@ worktree 를 만든 뒤에 환경을 돌려준다.
 실행이 고친 내용을 돌린다. 셸은 여전히 쓸 수 있고, 그것은 코어가 받아들인 한계다. 그래서 스테이징 경로를 권한 훅의
 허용 목록(예: `Bash(/workspace/.aimon-staged/**)`)에 넣으면 안 된다 — 셸로 심은 내용이 허용된 명령으로 돈다. 코어의 경로 규칙(`PathRule.readOnly`)
 을 코어의 공개 팩토리 `VirtualFileSystems.withPathRules` 로 그대로 건다. 대소문자·유니코드 별칭 처리를 이 모듈에 다시
-적지 않으려는 것이다. `/workspace/.aimon-shell/` 에도 같은 읽기 전용 규칙을 건다. 이름을 코어 로컬 제공자와 같은
+적지 않으려는 것이다. `/workspace/.aimon-shell/` 에도 같은 읽기 전용 규칙을 건다. `/workspace/.aimon-ptc/`(코어 PTC 셸 엔진의 응답 파일)는 파일 도구에서
+**숨긴다**(`PathRule.deny`) — 이것도 경계가 아니다: 셸은 읽고 쓰고, 응답의 무결성은 HMAC 이 지킨다([PTC 선행 작업](ptc-shell-prerequisites.md)
+S9). `Grep` 의 샌드박스 안 검색(`rg`)은 경로 규칙을 거치지 않는다(같은 문서 §10 Q4). 이름을 코어 로컬 제공자와 같은
 `.aimon-staged` 로 둔 것은, 코어에서 `.aimon/` 이 "제어 저장소(`DENY`)" 를 뜻하기 때문이다 — 샌드박스 안에서 같은
 이름이 스테이징 사본을 뜻하면 두 규칙이 헷갈린다.
 

@@ -38,6 +38,46 @@ class SseEventsTest {
         assertThat(texts(stream, 1024)).containsExactly("a", "b", "c", "é");
     }
 
+    /** Serves {@code bytes} at most {@code step} at a time, so every boundary falls inside a line, a CRLF or a char. */
+    private static InputStream trickle(byte[] bytes, int step) {
+        return new ByteArrayInputStream(bytes) {
+            @Override
+            public synchronized int read(byte[] b, int off, int len) {
+                return super.read(b, off, Math.min(len, step));
+            }
+        };
+    }
+
+    @Test
+    @DisplayName("reads split anywhere — inside a line, between \\r and \\n, inside a multibyte char — read the same")
+    void readsTheSameWhateverTheReadBoundaries() throws IOException {
+        final String stream = "{\"text\":\"é한😀\"}\r\n\r\n" + "data: {\"text\":\"b\"}\r" + "{\"text\":\"c\"}\n";
+        final byte[] bytes = stream.getBytes(StandardCharsets.UTF_8);
+
+        for (int step = 1; step <= 7; step++) {
+            final List<String> texts = new ArrayList<>();
+            SseEvents.read(trickle(bytes, step), JSON, event -> texts.add(event.path("text").asText()), 1024);
+
+            assertThat(texts).as("step %d", step).containsExactly("é한😀", "b", "c");
+        }
+    }
+
+    @Test
+    @DisplayName("the limit holds for a line spread over several reads, multibyte content counted in bytes")
+    void theLimitCountsBytesAcrossReads() throws IOException {
+        // 20 000 bytes of 3-byte chars plus the JSON around them: more than two 8 KiB reads.
+        final String line = "{\"text\":\"" + "한".repeat(20_000 / 3) + "\"}";
+        final int size = line.getBytes(StandardCharsets.UTF_8).length;
+        final byte[] twice = (line + "\n" + line + "\n").getBytes(StandardCharsets.UTF_8);
+        final List<String> texts = new ArrayList<>();
+
+        SseEvents.read(trickle(twice, 5000), JSON, event -> texts.add(event.path("text").asText()), size);
+        assertThat(texts).hasSize(2).allSatisfy(text -> assertThat(text).hasSize(20_000 / 3));
+
+        assertThatThrownBy(() -> SseEvents.read(trickle(twice, 5000), JSON, event -> true, size - 1))
+                .isInstanceOf(SseEvents.LineTooLongException.class);
+    }
+
     @Test
     void aTerminalEventStopsTheReading() throws IOException {
         final List<String> seen = new ArrayList<>();

@@ -8,6 +8,7 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -175,7 +176,9 @@ final class OpenSandboxRunningCommand implements RunningCommand {
 
     /**
      * Removes execd's spool files of a transient command, once, through the files API (which reports a missing file
-     * as success). Never throws: a failure is logged.
+     * as success). All paths go in one call; execd stops at the first path it cannot remove (a directory, or a path
+     * through a file — {@code /tmp/opensandbox-execd} made a plain file by the command), so a failed call is followed
+     * by one call per path, and one bad path does not spare the others. Never throws: a failure is logged.
      */
     private void removeSpool() {
         if (!spec.transientOutput() || !spoolRemoved.compareAndSet(false, true)) {
@@ -185,22 +188,42 @@ final class OpenSandboxRunningCommand implements RunningCommand {
         if (id == null || !SPOOL_ID.matcher(id).matches()) {
             return;
         }
-        final StringBuilder query = new StringBuilder();
+        final List<String> paths = new ArrayList<>();
         for (String directory : SPOOL_DIRECTORIES) {
-            for (String suffix : List.of(".stdout", ".stderr")) {
-                query.append(query.length() == 0 ? "?" : "&").append("path=")
-                        .append(encode(directory + "/" + id + suffix));
-            }
+            paths.add(directory + "/" + id + ".stdout");
+            paths.add(directory + "/" + id + ".stderr");
         }
+        if (removeFiles(paths, false)) {
+            return;
+        }
+        for (String path : paths) {
+            removeFiles(List.of(path), true);
+        }
+    }
+
+    /** @return whether execd removed (or did not find) every path */
+    private boolean removeFiles(List<String> paths, boolean warn) {
+        final StringBuilder query = new StringBuilder();
+        for (String path : paths) {
+            query.append(query.length() == 0 ? "?" : "&").append("path=").append(encode(path));
+        }
+        String failure;
         try {
             final HttpResponse<byte[]> response = execd.send(ep -> ep.request("/files" + query).DELETE(),
                     "remove command output");
-            if (response.statusCode() >= 300) {
-                log.warn("Removing the output of a command in {} answered HTTP {}", execd.ref(), response.statusCode());
+            if (response.statusCode() < 300) {
+                return true;
             }
+            failure = "HTTP " + response.statusCode();
         } catch (RuntimeException e) {
-            log.warn("Removing the output of a command in {} failed: {}", execd.ref(), e.getMessage());
+            failure = e.getMessage();
         }
+        if (warn) {
+            log.warn("Removing the output of a command in {} ({}) failed: {}", execd.ref(), paths, failure);
+        } else {
+            log.debug("Removing the output of a command in {} failed: {}; trying each file", execd.ref(), failure);
+        }
+        return false;
     }
 
     /** @return false on a terminal event */
@@ -208,7 +231,10 @@ final class OpenSandboxRunningCommand implements RunningCommand {
         final String type = event.path("type").asText("");
         switch (type) {
             case "init" :
-                commandId = event.path("text").asText(null);
+                // The first one names the command, for the kill and the spool paths; execd sends no other.
+                if (commandId == null) {
+                    commandId = event.path("text").asText(null);
+                }
                 synchronized (killLock) {
                     if (killRequested) {
                         sendKill();
@@ -318,20 +344,19 @@ final class OpenSandboxRunningCommand implements RunningCommand {
     @Override
     public ExecOutcome await(Duration timeout) throws InterruptedException {
         try {
-            final int code = exit.get(Math.max(0, timeout.toNanos()), TimeUnit.NANOSECONDS);
-            final boolean pastSpecTimeout = System.nanoTime() - startedNanos >= spec.timeout().toNanos();
-            return outcome(code, signalled && pastSpecTimeout);
-        } catch (TimeoutException e) {
-            kill();
             try {
-                return outcome(exit.get(KILL_GRACE.toMillis(), TimeUnit.MILLISECONDS), true);
-            } catch (TimeoutException | ExecutionException stillRunning) {
-                // Nothing answered even the kill (a half-open connection has no read timeout): give up on the
-                // stream so its reader thread and connection do not outlive the command.
-                exit.complete(SIGKILL_EXIT);
-                closeQuietly(stream);
-                return outcome(SIGKILL_EXIT, true);
+                return ended(exit.get(Math.max(0, timeout.toNanos()), TimeUnit.NANOSECONDS));
+            } catch (TimeoutException e) {
+                if (!ended) {
+                    return killed();
+                }
+                // The command ended in time and only the removal of its spool holds the exit back: it is neither
+                // killed nor reported as timed out. The removal is bounded by the request timeout.
+                return ended(exit.get(execd.transport().requestTimeout().plus(KILL_GRACE).toMillis(),
+                        TimeUnit.MILLISECONDS));
             }
+        } catch (TimeoutException stillRemoving) {
+            return outcome(SIGKILL_EXIT, true);
         } catch (ExecutionException e) {
             if (e.getCause() instanceof RuntimeException runtime) {
                 throw runtime;
@@ -339,6 +364,26 @@ final class OpenSandboxRunningCommand implements RunningCommand {
             throw new SandboxProviderException("the command failed: " + e.getCause(),
                     SandboxProviderException.Kind.TRANSIENT, e.getCause());
         }
+    }
+
+    /** {@link #await} ran out: the command is killed and given {@link #KILL_GRACE} to end. */
+    private ExecOutcome killed() throws InterruptedException {
+        kill();
+        try {
+            return outcome(exit.get(KILL_GRACE.toMillis(), TimeUnit.MILLISECONDS), true);
+        } catch (TimeoutException | ExecutionException stillRunning) {
+            // Nothing answered even the kill (a half-open connection has no read timeout): give up on the
+            // stream so its reader thread and connection do not outlive the command.
+            exit.complete(SIGKILL_EXIT);
+            closeQuietly(stream);
+            return outcome(SIGKILL_EXIT, true);
+        }
+    }
+
+    /** A command that ended by itself or by a kill: timed out when a signal ended it past its timeout. */
+    private ExecOutcome ended(int code) {
+        final boolean pastSpecTimeout = System.nanoTime() - startedNanos >= spec.timeout().toNanos();
+        return outcome(code, signalled && pastSpecTimeout);
     }
 
     private ExecOutcome outcome(int code, boolean timedOut) {

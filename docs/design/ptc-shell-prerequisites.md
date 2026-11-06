@@ -1,7 +1,7 @@
-# PTC 셸 엔진의 선행 작업 (S1–S7)
+# PTC 셸 엔진의 선행 작업 (S1–S9)
 
-> **Status**: S1 · S2 · S7 구현(이 브랜치 `feat/ptc-shell-prereqs`). S3 은 문서 초안. S4 · S5 · S6 은 코어 SPI(조각 D1)가
-> 배포된 뒤의 구현 방향 메모 — 지금은 코드를 바꾸지 않는다.
+> **Status**: S1 · S2 · S7 · S9 구현. S3 은 문서 초안. S4 · S5 · S6 · S8 은 코어 SPI(조각 D1)가 배포된 뒤의 구현 방향
+> 메모 — 지금은 코드를 바꾸지 않는다.
 >
 > 근거 설계: `aimon-core` 의 `docs/design/tool/programmatic-tool-calling-shell.md`(이하 **셸 엔진 설계**, 작성 시점에 커밋되지
 > 않음) §7, §12, §13, §15. 관련: [`workspace-sandbox-hook-identity.md`](workspace-sandbox-hook-identity.md)(EE-113, 같은
@@ -19,6 +19,8 @@
 | S5 | `RuntimeFileSystem` 구현 | 기댄다 | 방향 (§8) |
 | S6 | 서술자 `isolation()` · 런타임 능력 | 기댄다 | 방향 (§9) |
 | S7 | isolated 스트리밍이 포그라운드가 아님을 계약 테스트로 | 아니다 | **구현** (§5) |
+| S8 | 제공자가 명령을 끝낸 원인을 결과에 싣기 | 기댄다 (`ShellCommandResult`) | 질문 (§10 Q2) |
+| S9 | `.aimon-ptc/` 를 모델의 파일 도구에게 `DENY` | 아니다 | **구현** (§8 경로 규칙) |
 
 ## 2. 셸 엔진 설계와 실제 코드·업스트림이 어긋나는 점
 
@@ -32,7 +34,7 @@
 | execd | 위치 | 권한 | 삭제 |
 |---|---|---|---|
 | `docker/execd/v1.1.0` (이 저장소 docker 계층의 고정 버전, `OpenSandboxTestServer`) | `os.TempDir()/<id>.stdout`·`.stderr` — 하위 디렉터리 **없음** | 파일 `os.ModePerm &^ umask` | **안 지운다** (`pkg/runtime/command_common.go:65-104`) |
-| `release-1.1.0` 이상 (`release-1.1.1-rc.1` = K8s 차트 기본, `release-1.1.1`, `release-1.2.0-rc.1`, `main`) | `os.TempDir()/opensandbox-execd/<id>.stdout`·`.stderr` | 디렉터리 execd euid 소유 `0700`(아니면 거절, 심볼릭 링크 거절), 파일 `0600` `O_EXCL` (`command_output_unix.go`) | **execd 가 지운다.** 포그라운드 `runCommand` 가 반환할 때 `defer removeCommandOutputFiles(...)` — 성공·실패·타임아웃·interrupt 모두(`command.go:226-232`). 그 밖에 한 시간마다 24시간 지난 파일과 옛 위치(`$TMPDIR` 바로 아래)의 파일을 치우는 janitor(`StartCommandOutputJanitor`) |
+| `release-1.1.0` 이상 (`release-1.1.1-rc.1` = K8s 차트 기본, `release-1.1.1`, `release-1.2.0-rc.1`, `main`) | `os.TempDir()/opensandbox-execd/<id>.stdout`·`.stderr` | 디렉터리 execd euid 소유 `0700`(아니면 거절, 심볼릭 링크 거절), 파일 `0600` `O_EXCL` (`command_output_unix.go`) | **execd 가 지운다.** 포그라운드 `runCommand` 가 반환할 때 `defer removeCommandOutputFiles(...)` — 성공·실패·타임아웃·interrupt 모두(`command.go:226-232`). 그 밖에 한 시간마다 24시간 지난 스풀을 — 옛 위치(`$TMPDIR` 바로 아래, 이름이 32자리 hex 인 것)까지 — 치우는 janitor(`StartCommandOutputJanitor`). 옛 위치의 것도 24시간이 지나야 지운다 |
 
 결과:
 
@@ -55,7 +57,7 @@
 - 상한은 **받은 JSON 바이트**로 센다. 출력 한 줄이 N 바이트면 이벤트 줄은 N 이상이다(이스케이프로 최대 6배).
 - 셸 엔진 설계 §7 의 통로 줄 상한(64 KiB 미만)은 리더 상한(256 KiB)보다 작으므로 둘은 충돌하지 않는다. 다만 리스너에
   닿기 전에 `SandboxShell` 의 `StreamLines` 가 개행 없이 64 KiB(`MAX_LINE_BYTES`)에 이른 줄을 잘라 **별도의 줄로** 넘긴다
-  (§9.x). 그래서 64 KiB 이상의 통로 줄은 호스트에 두 조각으로 닿고 둘 다 MAC 이 맞지 않는다 — 결과는 같은 위반이지만,
+  (UTF-8 문자 경계에서 자른다). 그래서 64 KiB 이상의 통로 줄은 호스트에 두 조각으로 닿고 둘 다 MAC 이 맞지 않는다 — 결과는 같은 위반이지만,
   호스트가 "줄이 너무 길다" 를 따로 진단하려면 이 분할을 알아야 한다.
 
 ### 2.3 기존 결정 D8 과의 관계
@@ -88,15 +90,23 @@
   남는다. 셸 엔진 설계는 "isolated·hook" 만 말했다. 스트리밍 모니터까지 넓힌 것은 같은 경로이기 때문이다.
 - **OpenSandbox 프로바이더**(`OpenSandboxRunningCommand`): `init` 이벤트의 command id 로, 명령의 끝이 정해진 뒤
   `DELETE /files?path=…` **한 번**에 네 경로를 지운다 — `/tmp/opensandbox-execd/<id>.{stdout,stderr}` 와
-  `/tmp/<id>.{stdout,stderr}`. execd 의 `RemoveFiles` 는 `path` 를 여럿 받고, 없는 파일은 성공으로 친다.
+  `/tmp/<id>.{stdout,stderr}`. execd 의 `RemoveFiles` 는 `path` 를 여럿 받고, 없는 파일은 성공으로 친다
+  (`DeleteFile` 의 `os.Stat` 이 `ErrNotExist` 면 `nil`). 다만 **처음 실패한 경로에서 멈추고** 나머지는 손대지 않는다 — 경로가
+  디렉터리이거나, 같은 uid 의 명령이 `/tmp/opensandbox-execd` 를 보통 파일로 만들어 두면(`ENOTDIR`) 그 뒤의 `v1.1.0` 경로가
+  남는다. 그래서 한 번의 호출이 실패하면 경로마다 한 번씩 다시 부른다(실패할 때만 HTTP 네 번이 더 든다).
   - **언제**: 종료 이벤트(`execution_complete`·`error`)를 받았거나 스트림이 끊긴 뒤 status 로 종료 코드를 읽었을 때, `await` 가
     결과를 돌려주기 **전에** 지운다. 그래서 `await` 가 끝나면 스풀도 없다(호출 하나에 HTTP 한 번이 더 든다). `await` 가 kill 에도
     답이 없는 명령을 포기한 경우에는 결과가 먼저 나가고, 리더 스레드가 스트림을 닫은 뒤 지운다.
-  - id 가 `[A-Za-z0-9_-]{1,128}` 이 아니면 경로를 만들지 않는다(execd 의 id 는 32자리 hex). `init` 전에 끝난 명령은 지울 것이
-    없다. 샌드박스가 사라진 경우(`SandboxNotFoundException`)에는 시도하지 않는다.
+  - 경로는 명령의 출력으로 움직일 수 없다: id 는 **첫** `init` 이벤트의 것만 쓴다(execd 가 출력을 JSON 문자열로 실으므로 출력이
+    이벤트를 만들 수 없고, 혹시 두 번째 `init` 이 와도 무시한다). id 가 `[A-Za-z0-9_-]{1,128}` 이 아니면 경로를 만들지 않는다
+    (execd 의 id 는 32자리 hex). `init` 전에 끝난 명령은 지울 것이 없다. 샌드박스가 사라진 경우(`SandboxNotFoundException`)에는
+    시도하지 않는다.
+  - 삭제는 `await` 의 시간 안에 든다. 명령이 시간 안에 끝났는데 삭제 때문에 결과가 늦으면, `await` 는 kill 하지 않고 타임아웃으로
+    보고하지도 않으며 삭제를 기다린다(요청 타임아웃 + `KILL_GRACE` 까지).
   - 삭제가 도는 동안 들어온 `kill()` 은 보내지 않는다(이미 끝난 명령에 대한 `DELETE /command` 는 500).
 - **시험**: `OpenSandboxProviderTest` — 두 위치 모두 `await` 반환 시점에 없음, 비-transient 는 건드리지 않음, 타임아웃 kill ·
-  끊긴 스트림 · 포기한 명령에서도 지움, 삭제 실패가 명령의 실패가 되지 않음. `SandboxShellIT` — 어느 실행이 transient 인가.
+  끊긴 스트림 · 포기한 명령에서도 지움, 삭제 실패가 명령의 실패가 되지 않음, 지울 수 없는 경로 하나가 나머지를 남기지 않음,
+  느린 삭제가 시간 안에 끝난 명령을 타임아웃으로 만들지 않음. `SandboxShellIT` — 어느 실행이 transient 인가.
   docker 계층(`OpenSandboxWorkspaceIT`, 실제 `execd:v1.1.0`) — 훅·격리·스트리밍·타임아웃 실행 뒤 `$TMPDIR` 아래 어느 파일에도
   출력 표지가 없음.
 
@@ -111,10 +121,14 @@
 - `SandboxShell` 쪽에서는 트레일러가 오지 않은 stream 실행이므로 `ShellExecutionException("the sandbox shell wrapper failed (exit
   137)…")` 이 된다. **원인(줄 상한)이 메시지에 실리지 않는다** — `ExecOutcome` 에 그런 필드가 없다. PTC 엔진이 이 경우를
   `PROTOCOL_VIOLATION` 으로 따로 다루려면 SPI 에 "제공자가 끊었다" 표지가 필요하다(§10 Q2).
+- **출력을 숨기는 데 쓸 수 없다.** 명령이 일부러 긴 줄을 내면 그 뒤의 출력을 잃지만, 결과는 조용한 성공이 아니라 잘림 표시와
+  137 이다. 같은 uid 의 공존 프로세스가 스풀에 긴 줄을 덧붙여 실행을 끝내게 하는 것은 셸 엔진 설계 §12.1 의 R7(실행 방해, DoS)과
+  같은 무게이고, 그 프로세스는 어차피 명령을 kill 할 수 있다.
 - **동작 변화**: 줄 하나가 256 KiB(JSON 바이트)를 넘는 출력을 내는 훅·격리·스트리밍 명령은 이제 끝까지 돌지 못하고 실패한다.
   예전에는 JVM 이 그 줄 전체를 메모리에 올린 뒤 캡처 상한에서 잘랐다. 모델의 포그라운드·백그라운드 명령은 출력이 `run.out` 으로
   가므로 영향이 없다.
-- **시험**: `SseEventsTest`(줄 구분, 상한 경계, 끝없는 줄이 `상한 + 청크` 이상 읽히지 않음), `OpenSandboxProviderTest`(kill,
+- **시험**: `SseEventsTest`(줄 구분, 상한 경계, 끝없는 줄이 `상한 + 청크` 이상 읽히지 않음, 읽기 경계가 줄·`\r\n`·멀티바이트
+  문자 가운데에 떨어져도 같은 결과, 여러 번의 읽기에 걸친 줄의 상한을 바이트로 셈), `OpenSandboxProviderTest`(kill,
   잘림 표시, 그 줄이 sink 에 가지 않음), docker 계층(약 300 KiB 한 줄 → 타임아웃이 아닌 실패, 20초 안에).
 
 ## 5. S7 — isolated 스트리밍은 포그라운드가 아니다 (구현)
@@ -203,9 +217,13 @@ python3 -I -c 'import sys, asyncio, hmac, hashlib, json, base64, tempfile; sys.e
 - **루트**: `/workspace` 로 둔다. `.aimon-ptc/<128비트>/` 는 `/workspace/.aimon-ptc/...` 가 된다. `/tmp` 는 이미지 계약 밖이고,
   testkit 의 files API 가 `/workspace` 만 번역한다([실행 디렉터리 설계](workspace-sandbox-run-directory.md) 의 `PRIVATE_BASE`
   기각 이유와 같다). 런타임 FS 의 상대 경로가 루트를 벗어나면(`..`, 절대 경로, NUL) 거절한다.
-- **경로 규칙**: 셸 엔진 설계 §5 는 `.aimon-ptc/` 를 모델 파일 도구에게 `DENY` 로 둔다. 지금 `SandboxFileSystem.RULES` 는
-  `.aimon-staged`·`.aimon-shell` 을 `readOnly` 로만 둔다. `PathRule.deny("workspace/.aimon-ptc")` 를 더한다(코어 0.3.4 에
-  `PathRule.deny` 가 있다). 운영자용 `SandboxWorkspaceFiles` 는 최상위 `.aimon-*` 를 이미 읽기 전용으로 둔다.
+- **경로 규칙 (S9, 구현)**: 셸 엔진 설계 §5 는 `.aimon-ptc/` 를 모델 파일 도구에게 `DENY` 로 둔다.
+  `SandboxFileSystem.RULES` 에 `PathRule.deny("workspace/.aimon-ptc")` 를 더했다(코어 0.3.4 의 `PathRule.deny`). 읽기·쓰기·목록에서
+  보이지 않고, 셸은 그대로 읽고 쓴다(`SandboxFileSystemTest`). 운영자용 `SandboxWorkspaceFiles` 는 최상위 `.aimon-*` 를 이미 읽기
+  전용으로 둔다. **`Grep` 은 막지 않는다**: 코어의 `GrepTool` 은 환경의 `contentSearch()` 가 있으면 경로 규칙을 거치지 않고 그
+  결과를 쓰고, `SandboxContentSearch` 는 샌드박스 안에서 `rg --hidden --no-ignore` 를 돌린다. `.aimon-staged`·`.aimon-shell` 도
+  지금 같은 처지다. 무결성은 HMAC 에 기대므로(셸 엔진 설계 §5) 막을 일은 아니지만, 응답 내용(R2)이 `Grep` 결과에 나올 수 있다 —
+  §10 Q4.
 - **탐침**(셸 엔진 설계 §4): 런타임 FS 로 쓴 프로브 파일을 셸의 `test -f` 로 본다 — 같은 `/workspace` 를 보므로 성립한다.
   testkit 에서도 성립한다(`LocalConnection` 이 `/workspace` 를 번역한다).
 - **정리**: 엔진이 환경 객체당 첫 실행에서 `.aimon-ptc/` 아래 오래된 항목을 지운다(셸 엔진 설계 §8). 샌드박스 쪽 스윕은 더하지
@@ -232,3 +250,5 @@ python3 -I -c 'import sys, asyncio, hmac, hashlib, json, base64, tempfile; sys.e
   제공자는 줄을 물질화하기 전에 상한을 건다" 를 코어 셸 계약에 올릴 때 함께 정할 것.
 - **Q3 — `.aimon-ptc` 의 샌드박스 쪽 스윕.** 엔진의 스윕은 환경 객체의 첫 실행에서만 돈다. 오래 쓰지 않은 워크스페이스에는 응답
   파일이 남는다(HMAC 된 도구 결과 — R2 의 잔여물). seed 에서 지울지.
+- **Q4 — `Grep` 과 경로 규칙.** 코어가 `contentSearch()` 결과에도 경로 규칙을 적용할지(코어 쪽 한 곳), 이 저장소가 `rg` 에
+  `DENY` 접두어를 `--glob '!…'` 로 넘길지(사용자 glob 과의 순서를 정해야 한다). 셸 엔진이 들어오기 전에 정한다(§8).

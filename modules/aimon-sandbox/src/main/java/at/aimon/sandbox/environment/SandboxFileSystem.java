@@ -28,8 +28,8 @@ import at.aimon.sandbox.workspace.SandboxWorkspaceManager;
  * <li>this class resolves a relative path against the binding's {@code root} and reports {@code root} as its working
  * directory — file tools resolve relative paths against {@code root}, never against the shell's cwd;</li>
  * <li>{@link VirtualFileSystems#withPathRules} anchored at {@code /} makes {@code /workspace/.aimon-staged} and
- * {@code /workspace/.aimon-shell} read-only ("Access denied") — a guard against edits by mistake, not a security
- * boundary: the shell can still write there;</li>
+ * {@code /workspace/.aimon-shell} read-only ("Access denied") and hides {@code /workspace/.aimon-ptc} — guards against
+ * mistakes, not a security boundary: the shell can still read and write there;</li>
  * <li>{@link ProviderFileSystem} over the connection's files API.</li>
  * </ol>
  *
@@ -39,9 +39,13 @@ import at.aimon.sandbox.workspace.SandboxWorkspaceManager;
  */
 final class SandboxFileSystem implements VirtualFileSystem {
 
-    /** The read-only areas, relative to {@code /}. */
+    /**
+     * The read-only areas and the hidden one, relative to {@code /}. {@code .aimon-ptc} holds core's programmatic tool
+     * calling replies (docs/design/ptc-shell-prerequisites.md S9): hidden from the file tools, not from the shell —
+     * the replies are authenticated, not secret from the sandbox.
+     */
     static final List<PathRule> RULES = List.of(PathRule.readOnly("workspace/.aimon-staged"),
-            PathRule.readOnly("workspace/.aimon-shell"));
+            PathRule.readOnly("workspace/.aimon-shell"), PathRule.deny("workspace/.aimon-ptc"));
 
     private final SandboxBinding binding;
     private final SandboxWorkspaceManager manager;

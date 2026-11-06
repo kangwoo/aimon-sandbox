@@ -22,6 +22,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.AfterEach;
@@ -651,6 +652,56 @@ class OpenSandboxProviderTest {
 
             assertThat(outcome.exitCode()).isZero();
             assertThat(text(outcome.stdout())).isEqualTo("ok\n");
+        }
+
+        @Test
+        @DisplayName("S1: a path execd cannot remove does not spare the others — each is then removed alone")
+        void aSpoolPathThatCannotBeRemovedDoesNotSpareTheOthers() throws Exception {
+            final String id = "0123456789abcdef0123456789abcdef";
+            final List<String> paths = spool(id);
+            // As execd does when the command made /tmp/opensandbox-execd a plain file: the first path fails, and the
+            // call stops there.
+            final String blocked = "/tmp/opensandbox-execd/" + id + ".stdout";
+            server.overrides.put("DELETE /v1/sandboxes/",
+                    request -> request.path.endsWith("/files") && request.params("path").contains(blocked)
+                            ? Reply.error(500, "RUNTIME_ERROR", "not a directory")
+                            : null);
+            server.commands = body -> Reply.events(List.of(init(id), complete()), null);
+
+            final ExecOutcome outcome = connection.run(transientSpec(Duration.ofSeconds(10)), OutputSink.DISCARD)
+                    .await(Duration.ofSeconds(10));
+
+            assertThat(outcome.exitCode()).isZero();
+            assertThat(server.files.keySet()).contains(blocked)
+                    .doesNotContainAnyElementsOf(paths.stream().filter(p -> !p.equals(blocked)).toList());
+            assertThat(spoolDeletes()).hasSize(1 + paths.size());
+        }
+
+        @Test
+        @DisplayName("S1: a command that ended in time is not timed out while its spool removal is still going on")
+        void aSlowSpoolRemovalDoesNotMakeTheCommandTimeOut() throws Exception {
+            final CountDownLatch removing = new CountDownLatch(1);
+            server.overrides.put("DELETE /v1/sandboxes/", request -> {
+                if (request.path.endsWith("/files")) {
+                    removing.countDown();
+                    try {
+                        Thread.sleep(600);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                }
+                return null;
+            });
+            server.commands = body -> Reply.events(List.of(init("c1"), out("ok"), exit("3", "exit status 3")), null);
+
+            final RunningCommand command = connection.run(transientSpec(Duration.ofSeconds(10)), OutputSink.DISCARD);
+            assertThat(removing.await(5, TimeUnit.SECONDS)).isTrue();
+            final ExecOutcome outcome = command.await(Duration.ofMillis(50));
+
+            assertThat(outcome.exitCode()).isEqualTo(3);
+            assertThat(outcome.timedOut()).isFalse();
+            assertThat(text(outcome.stdout())).isEqualTo("ok\n");
+            assertThat(server.interrupted).isEmpty();
         }
 
         private void awaitGone(List<String> paths) throws InterruptedException {
