@@ -63,7 +63,10 @@ final class OpenSandboxRunningCommand implements RunningCommand {
 
     private static final Logger log = LoggerFactory.getLogger(OpenSandboxRunningCommand.class);
 
-    /** How long {@link #await} waits for a killed command's stream to end before reporting without it. */
+    /**
+     * How long {@link #await} waits for a killed command's stream to end before reporting without it — the default of
+     * the provider's {@code killGrace}, which only tests set otherwise.
+     */
     static final Duration KILL_GRACE = Duration.ofSeconds(8);
     /** How long past the spec's timeout status polling may go on after a dropped stream. */
     private static final Duration POLL_SLACK = Duration.ofSeconds(30);
@@ -82,6 +85,7 @@ final class OpenSandboxRunningCommand implements RunningCommand {
     private final ExecdClient execd;
     private final ExecSpec spec;
     private final OutputSink sink;
+    private final Duration killGrace;
     private final Capture stdout;
     private final Capture stderr;
     private final CompletableFuture<Integer> exit = new CompletableFuture<>();
@@ -101,10 +105,11 @@ final class OpenSandboxRunningCommand implements RunningCommand {
     private boolean killRequested;
     private boolean killSent;
 
-    private OpenSandboxRunningCommand(ExecdClient execd, ExecSpec spec, OutputSink sink) {
+    private OpenSandboxRunningCommand(ExecdClient execd, ExecSpec spec, OutputSink sink, Duration killGrace) {
         this.execd = execd;
         this.spec = spec;
         this.sink = sink;
+        this.killGrace = killGrace;
         this.stdout = new Capture(spec.maxCaptureBytes());
         this.stderr = new Capture(spec.maxCaptureBytes());
     }
@@ -113,7 +118,8 @@ final class OpenSandboxRunningCommand implements RunningCommand {
      * Starts the command: the request is sent here, so a refused one (a missing working directory is 400, a gone
      * sandbox 404) fails the call itself; the stream is read on {@code executor}.
      */
-    static OpenSandboxRunningCommand start(ExecdClient execd, ExecSpec spec, OutputSink sink, Executor executor) {
+    static OpenSandboxRunningCommand start(ExecdClient execd, ExecSpec spec, OutputSink sink, Executor executor,
+            Duration killGrace) {
         final ObjectNode body = execd.transport().json.createObjectNode().put("command", spec.command());
         spec.workingDirectory().ifPresent(cwd -> body.put("cwd", cwd));
         if (!spec.environment().isEmpty()) {
@@ -134,7 +140,7 @@ final class OpenSandboxRunningCommand implements RunningCommand {
             }
             throw HttpErrors.failure(response.statusCode(), "run command", new String(error, StandardCharsets.UTF_8));
         }
-        final OpenSandboxRunningCommand command = new OpenSandboxRunningCommand(execd, spec, sink);
+        final OpenSandboxRunningCommand command = new OpenSandboxRunningCommand(execd, spec, sink, killGrace);
         command.stream = response.body();
         try {
             executor.execute(() -> command.read(response.body()));
@@ -404,15 +410,18 @@ final class OpenSandboxRunningCommand implements RunningCommand {
     }
 
     /**
-     * {@link #await} ran out: the command is killed and given {@link #KILL_GRACE} to end. Whatever ends it inside the
+     * {@link #await} ran out: the command is killed and given the kill grace ({@link #KILL_GRACE}) to end. Whatever
+     * ends it inside the
      * grace — the kill, or itself just after the timeout — it is reported with its exit code and as timed out: the
      * caller's wait did run out before it ended.
      */
     private ExecOutcome killed() throws InterruptedException {
         kill();
         try {
-            return outcome(exit.get(KILL_GRACE.toMillis(), TimeUnit.MILLISECONDS), true);
+            return outcome(exit.get(killGrace.toMillis(), TimeUnit.MILLISECONDS), true);
         } catch (TimeoutException | ExecutionException stillRunning) {
+            // endedExit completing between the grace running out and this check reads as not done: that counts as
+            // not ending inside the grace, so the command is given up on below with 137 like one that never ended.
             if (endedExit.isDone() && !endedExit.isCompletedExceptionally()) {
                 // It ended inside the grace; only the removal of its spool outlasts it, and settles exit after.
                 log.debug("Reporting a killed command in {} before its spool is removed", execd.ref());

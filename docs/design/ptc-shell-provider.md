@@ -715,14 +715,19 @@ Q-C2, Q-C3 (with Q7) and the new Q-C4 below — each pointing back here.
   (`bash` in the environment), not `LocalProcessSandboxProvider.BASE_PATH`, which is package-private.
 - **Docker tier: one sandbox per class, warmed in `@BeforeAll` (review 2).** `SharedSandbox` provisions and seeds the
   python profile once per class (`ShellEngineContractIT`, `ShellEngineAvailabilityIT`, `OpenSandboxRuntimeFileSystemIT`).
-  `ShellEngineAvailabilityIT` is one test — the facts, static availability and a real probe; the fork and the two
-  negative cases of §6.10 are unit-tier only, since they do not depend on the provider.
+  `ShellEngineAvailabilityIT` has one test each for the facts, static availability and a real probe, and a negative
+  seed test: an image without `python3` (the tier's image with `/usr/bin/python3*` removed) under a profile declaring
+  it fails provisioning permanently at `[step runtime-python3]`, and the probe reports the engine unavailable. The fork
+  and the two negative cases of §6.10 are unit-tier only, since they do not depend on the provider.
 - **cmdline IT: the patterns reach `grep` in a file.** With the key's base64 as a `grep` argument, `grep`'s own
   `/proc/<pid>/cmdline` would hold it and the check could never be zero; the patterns are written through the file tools
   and passed with `-f`.
 - **Two inherited engine tests are disabled on the testkit tier (Q-C4 below).** `wallClock` and
   `bridgeLimitStopsAtOnce` do not run in `ShellEngineContractTest` (a JUnit `ExecutionCondition` that names the reason);
-  they run on the docker tier.
+  they run on the docker tier. The runtime outlives the kill there too (until the class's shared sandbox goes), so
+  `ShellEngineContractIT` hands the engine an environment whose runtime file system drops a write made after the run's
+  shell cancellation tripped: the stopped run gets no reply, its runtime makes no further call, and
+  `bridgeLimitStopsAtOnce` no longer depends on how fast the kill returns.
 - **Not done (optional in the design):** `SandboxContentSearch` does not log a kill cause.
 
 ### Q-C4 — core's runtime outlives the shell's kill (found in build)
@@ -739,7 +744,8 @@ never reaches the runtime. What follows:
   minutes when observed).
 - The suite's `bridgeLimitStopsAtOnce` failed 1 run in 5 on its own and once under `checkAll`: after the bridge trips the
   stop, the runtime is not killed, keeps sending calls, and `ShellProgramRun` forwards them to the bridge until the
-  shell call returns (6 calls recorded, the suite allows 5).
+  shell call returns (6 calls recorded, the suite allows 5). The docker tier had the same race in principle; it is now
+  closed there by dropping the replies to a stopped run (above).
 
 The fix belongs in core: the runtime should stay in the exec's process group (and put the model's children in a group
 of its own for `_end_process`), or notice by itself that its shell call ended (e.g. watch its parent). This repository

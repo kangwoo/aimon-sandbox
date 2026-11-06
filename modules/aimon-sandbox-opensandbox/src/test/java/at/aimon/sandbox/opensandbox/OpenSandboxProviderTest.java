@@ -14,6 +14,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.net.ServerSocket;
 import java.nio.charset.StandardCharsets;
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
@@ -422,6 +423,11 @@ class OpenSandboxProviderTest {
             connection = provider.connect(created());
         }
 
+        /** A provider whose kill grace is short, for a test whose command nothing ends: it waits the grace out. */
+        private OpenSandboxProvider hasty() {
+            return new OpenSandboxProvider(server.config().build(), Clock.systemUTC(), Duration.ofMillis(200));
+        }
+
         private ExecOutcome run(String command, long maxCapture) throws InterruptedException {
             return connection.run(ExecSpec.builder().command(command).maxCaptureBytes(maxCapture)
                     .timeout(Duration.ofSeconds(10)).build(), OutputSink.DISCARD).await(Duration.ofSeconds(10));
@@ -497,8 +503,8 @@ class OpenSandboxProviderTest {
         void aCommandThatIgnoresEvenTheKillIsGivenUpAndItsStreamClosed() throws Exception {
             final CountDownLatch never = new CountDownLatch(1);
             server.commands = body -> Reply.events(List.of(init("c8")), never);
-            try {
-                final RunningCommand command = connection.run(
+            try (OpenSandboxProvider hasty = hasty()) {
+                final RunningCommand command = hasty.connect(hasty.create(spec("ws:a", 1).build())).run(
                         ExecSpec.builder().command("sleep 60").timeout(Duration.ofSeconds(60)).build(),
                         OutputSink.DISCARD);
 
@@ -630,9 +636,9 @@ class OpenSandboxProviderTest {
             final List<String> paths = spool("c8");
             final CountDownLatch never = new CountDownLatch(1);
             server.commands = body -> Reply.events(List.of(init("c8")), never);
-            try {
-                final ExecOutcome outcome = connection.run(transientSpec(Duration.ofSeconds(60)), OutputSink.DISCARD)
-                        .await(Duration.ofMillis(100));
+            try (OpenSandboxProvider hasty = hasty()) {
+                final ExecOutcome outcome = hasty.connect(hasty.create(spec("ws:a", 1).build()))
+                        .run(transientSpec(Duration.ofSeconds(60)), OutputSink.DISCARD).await(Duration.ofMillis(100));
 
                 assertThat(outcome.exitCode()).isEqualTo(137);
                 awaitGone(paths);
@@ -654,7 +660,8 @@ class OpenSandboxProviderTest {
             final CountDownLatch removing = new CountDownLatch(1);
             final CountDownLatch release = new CountDownLatch(1);
             // The removal is held at the server until the test lets it go, well inside its 30 s request timeout: it
-            // outlasts the kill grace whatever the runner's speed.
+            // outlasts the kill grace whatever the runner's speed. The grace is shortened to 2 s, still ample for the
+            // kill, the stream's end and the status to land inside it; the grace itself is waited out in full.
             server.overrides.put("DELETE /v1/sandboxes/", request -> {
                 if (request.path.endsWith("/files")) {
                     removing.countDown();
@@ -663,7 +670,8 @@ class OpenSandboxProviderTest {
                 return null;
             });
             try (OpenSandboxProvider patient = new OpenSandboxProvider(
-                    server.config().requestTimeout(Duration.ofSeconds(30)).build())) {
+                    server.config().requestTimeout(Duration.ofSeconds(30)).build(), Clock.systemUTC(),
+                    Duration.ofSeconds(2))) {
                 final RunningCommand command = patient.connect(patient.create(spec("ws:a", 1).build()))
                         .run(transientSpec(Duration.ofSeconds(60)), OutputSink.DISCARD);
 

@@ -7,11 +7,11 @@ All notable aimon-sandbox changes are recorded here. The format is loosely based
 
 Requires aimon-core **0.3.4** (pinned to `0.3.4-SNAPSHOT` until core releases it; see below) — 0.3.3 for the seams of
 [`docs/design/workspace-sandbox-core-033.md`](docs/design/workspace-sandbox-core-033.md), 0.3.4 for streaming and the
-sandbox SPI of core's Python `ExecuteCode` shell engine. `aimon-sandbox` exposes core
-as an `api` dependency, so upgrading from 0.1.0 also raises core from 0.3.1 to 0.3.3, which core itself declares
-incompatible with 0.3.2 — upgrade it as you would across a minor: the auto-compact buffer and ratio members are gone
-(kangwoo/aimon-core#285), and the session log is written as version 2 by default, so a mixed-version cluster must pin
-`v1` (kangwoo/aimon-core#286). See core's [0.3.3 release notes](https://github.com/kangwoo/aimon-core/releases/tag/v0.3.3).
+sandbox SPI of core's Python `ExecuteCode` shell engine. `aimon-sandbox` exposes core as an `api` dependency, so
+upgrading from 0.1.0 also raises core from 0.3.1 to 0.3.3, which core itself declares incompatible with 0.3.2 — upgrade
+it as you would across a minor: the auto-compact buffer and ratio members are gone (kangwoo/aimon-core#285), and the
+session log is written as version 2 by default, so a mixed-version cluster must pin `v1` (kangwoo/aimon-core#286). See
+core's [0.3.3 release notes](https://github.com/kangwoo/aimon-core/releases/tag/v0.3.3).
 
 ### Added: the sandbox half of core's Python `ExecuteCode` shell engine (D2)
 
@@ -21,25 +21,26 @@ and departures: [`docs/design/ptc-shell-provider.md`](docs/design/ptc-shell-prov
 [`docs/design/ptc-shell-prerequisites.md`](docs/design/ptc-shell-prerequisites.md) §6–§12.
 
 - **`SandboxProfile.runtimes(Set<String>)` (S3)**, empty by default; only `python3` is accepted, and startup refuses any
-  other name. A declared `python3` is checked by the seed (new permanent step `runtime-python3`: on `PATH`, 3.8 or later,
-  `python3 -I` imports the standard-library modules core's runtime imports) and carried by the descriptor. A profile
-  that declares none keeps its `contentHash`. The image contract gains the optional `python3` item
+  other name. A declared `python3` is checked by the seed (new permanent step `runtime-python3`: on `PATH`, 3.8 or
+  later, `python3 -I` imports the standard-library modules core's runtime imports) and carried by the descriptor. A
+  profile that declares none keeps its `contentHash`. The image contract gains the optional `python3` item
   (`docs/design/workspace-sandbox.md` §13.3); the docker tier's image installs `python3`.
 - **Secret run files are never inlined (S4).** A `RunDirectory` with any file marked secret is uploaded whole — the
   manifest and the blob, two uploads — however small, so the secret is on no process's command line. **Behaviour
-  change:** every `ExecuteCode` run (core marks its key secret) takes the upload path, and a small secret set can now fail
-  with "could not pass … into the sandbox" where it used to be inlined.
+  change:** every `ExecuteCode` run (core marks its key secret) takes the upload path, and a small secret set can now
+  fail with "could not pass … into the sandbox" where it used to be inlined.
 - **`SandboxExecutionEnvironment.runtimeFileSystem()` (S5)** is present: core's framework-only file access, confined to
-  `/workspace/**`, outside the file tools' path rules. `writeNew` is the files API's create-new (atomic, refuses anything
-  existing, a dangling link included), `read` and `delete` never follow a link at the path (one in-sandbox helper exec
-  each), every failure — connecting included — is an `IOException`. Asking for it provisions nothing.
+  `/workspace/**`, outside the file tools' path rules. `writeNew` is the files API's create-new (atomic, refuses
+  anything existing, a dangling link included), `read` and `delete` never follow a link at the path (one in-sandbox
+  helper exec each), every failure — connecting included — is an `IOException`, a failed existence check behind
+  `writeNew` too (it is never taken for "nothing there"). Asking for it provisions nothing.
 - **The descriptor declares `isolation() = SANDBOXED` and the profile's `runtimes()` (S6)**, for forks too.
 - **The provider says why it ended a command (S8).** New provider SPI `ExecKillCause` and `ExecOutcome.killCause()`
   (never together with `timedOut()`); the OpenSandbox provider sets `LINE_LIMIT_EXCEEDED` when it ends a command for an
   event line over 256 KiB, unless a timeout's or caller's kill was already on its way. **Behaviour change:** an isolated
   command that is not a hook's and is ended that way now returns a result — exit 137, truncated,
-  `killCause() = LINE_LIMIT_EXCEEDED`, which core's engine reports as a protocol violation — instead of throwing. Hook and
-  monitor runs still throw; the message now names the cause.
+  `killCause() = LINE_LIMIT_EXCEEDED`, which core's engine reports as a protocol violation — instead of throwing. Hook
+  and monitor runs still throw; the message now names the cause.
 - **`{root}/.aimon-ptc/` is hidden from the file tools too (S9 follow-up)**: core places the engine's directory under
   the descriptor's working directory, which is the binding root (`/workspace/repo` by default), not `/workspace`.
 - **`RuntimeFileSystemContract`** in `aimon-sandbox-testkit`: the runtime file system's contract suite, which core does
@@ -53,16 +54,16 @@ and departures: [`docs/design/ptc-shell-provider.md`](docs/design/ptc-shell-prov
 
 See [`docs/design/ptc-shell-prerequisites.md`](docs/design/ptc-shell-prerequisites.md).
 
-- **Stream runs leave no execd spool behind (S1).** `ExecSpec.transientOutput()` asks a provider to remove its in-sandbox
-  copy of a command's output once the command has ended, however it ended. `SandboxShell` sets it for hook, isolated
-  and streamed execs. The OpenSandbox provider then removes execd's spool files of the command, in both execd layouts,
-  before `await` reports it — one call, then one per file if execd refuses a path, so one bad path does not keep the
-  others (not when execd did not take the call: a timeout, an I/O failure, the server proxy's 502 for "cannot connect to
-  execd", or a 503/504 is not retried, and that run's spool stays). A command that ended in time is never reported as
-  timed out because of the removal: `await` waits one request timeout for it, then reports the command's real exit
-  while the removal goes on. A command killed past `await`'s timeout that ends inside the kill grace is reported with
-  its real exit code too, not 137, when its removal outlasts the grace. execd `release-1.1.0` and later already remove their own;
-  `docker/execd/v1.1.0` keeps them in `/tmp`.
+- **Stream runs leave no execd spool behind (S1).** `ExecSpec.transientOutput()` asks a provider to remove its
+  in-sandbox copy of a command's output once the command has ended, however it ended. `SandboxShell` sets it for hook,
+  isolated and streamed execs. The OpenSandbox provider then removes execd's spool files of the command, in both execd
+  layouts, before `await` reports it — one call, then one per file if execd refuses a path, so one bad path does not
+  keep the others (not when execd did not take the call: a timeout, an I/O failure, the server proxy's 502 for "cannot
+  connect to execd", or a 503/504 is not retried, and that run's spool stays). A command that ended in time is never
+  reported as timed out because of the removal: `await` waits one request timeout for it, then reports the command's
+  real exit while the removal goes on. A command killed past `await`'s timeout that ends inside the kill grace is
+  reported with its real exit code too, not 137, when its removal outlasts the grace. execd `release-1.1.0` and later
+  already remove their own; `docker/execd/v1.1.0` keeps them in `/tmp`.
 - **One output line is bounded (S2).** The OpenSandbox provider stops reading a `/command` stream at an event line over
   256 KiB, kills the command and marks both streams truncated, instead of holding the whole line in memory. A hook,
   isolated or streamed command printing such a line now fails (the wrapper's exit 137). The model's own commands are not
