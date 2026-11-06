@@ -325,4 +325,36 @@ class OpenSandboxWorkspaceIT {
                 .as("no private directory left").isEqualTo("0\n");
         writer.cancel(true);
     }
+
+    @Test
+    @DisplayName("S1/S2: stream runs leave no execd spool behind; an output line over the SSE limit kills the run")
+    void streamRunsLeaveNoSpoolAndAHugeLineIsRefused() throws Exception {
+        final WorkspaceSandbox assembly = assembly(profile().build(), new InMemorySandboxWorkspaceStore());
+        final ExecutionEnvironment env = mainTurn(assembly, SessionId.generate());
+        final String id = UUID.randomUUID().toString().replace("-", "");
+        final ExecutionOptions.Builder isolated = ExecutionOptions.builder().timeout(Duration.ofSeconds(60))
+                .isolated(true);
+
+        // Each run prints the marker on both streams; the check below spells it so that its own text never holds it.
+        final String print = "echo SPOOLMARK" + id + "; echo SPOOLMARK" + id + " >&2";
+        env.shell().execute(() -> print, isolated.build());
+        env.shell().execute(() -> print, ExecutionOptions.builder().timeout(Duration.ofSeconds(60)).hook(true).build());
+        env.shell().execute(() -> print, isolated.build(), line -> {
+        });
+        assertThatThrownBy(
+                () -> env.shell().execute(() -> print + "; sleep 30", isolated.timeout(Duration.ofSeconds(1)).build()))
+                .isInstanceOf(ShellTimeoutException.class);
+
+        // execd release-1.1.0+ spools to $TMPDIR/opensandbox-execd and removes it itself; docker/execd/v1.1.0 spools
+        // to $TMPDIR and keeps it — what the provider removes.
+        assertThat(bash(env, "m=SPOOLMARK; grep -rlF -- \"$m" + id + "\" \"${TMPDIR:-/tmp}\" 2>/dev/null | wc -l")
+                .stdout().strip()).as("spool files holding the runs' output").isEqualTo("0");
+
+        // One output line of ~300 KiB arrives as one SSE event line: the reader stops before holding it and kills.
+        final long started = System.nanoTime();
+        assertThatThrownBy(() -> env.shell().execute(() -> "head -c 300000 /dev/zero | tr '\\0' x; echo; sleep 30",
+                ExecutionOptions.builder().timeout(Duration.ofSeconds(60)).hook(true).isolated(true).build()))
+                .isInstanceOf(ShellExecutionException.class).isNotInstanceOf(ShellTimeoutException.class);
+        assertThat(Duration.ofNanos(System.nanoTime() - started)).isLessThan(Duration.ofSeconds(20));
+    }
 }

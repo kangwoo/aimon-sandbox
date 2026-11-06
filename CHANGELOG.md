@@ -12,6 +12,22 @@ incompatible with 0.3.2 — upgrade it as you would across a minor: the auto-com
 (kangwoo/aimon-core#285), and the session log is written as version 2 by default, so a mixed-version cluster must pin
 `v1` (kangwoo/aimon-core#286). See core's [0.3.3 release notes](https://github.com/kangwoo/aimon-core/releases/tag/v0.3.3).
 
+### Added: groundwork for core's programmatic tool calling (shell engine)
+
+See [`docs/design/ptc-shell-prerequisites.md`](docs/design/ptc-shell-prerequisites.md).
+
+- **Stream runs leave no execd spool behind (S1).** `ExecSpec.transientOutput()` asks a provider to remove its in-sandbox
+  copy of a command's output once the command has ended, however it ended. `SandboxShell` sets it for hook, isolated
+  and streamed execs. The OpenSandbox provider then removes execd's spool files of the command, in both execd layouts,
+  before `await` reports it. execd `release-1.1.0` and later already remove their own; `docker/execd/v1.1.0` keeps
+  them in `/tmp`.
+- **One output line is bounded (S2).** The OpenSandbox provider stops reading a `/command` stream at an event line over
+  256 KiB, kills the command and marks both streams truncated, instead of holding the whole line in memory. A hook,
+  isolated or streamed command printing such a line now fails (the wrapper's exit 137). The model's own commands are not
+  affected: their output goes through the wrapper's files.
+- **Contract tests (S7)** pin that `isolated(true)` streaming is not foreground: it streams, takes no shell lock, and
+  neither reads nor saves the session's state — also with a run directory, as core's shell engine runs it.
+
 ### Added: streaming shell output
 
 - **Standard error streams too** (`ShellLineListener#onStderrLine`, aimon-core 0.3.4), without the wrapper's trailer

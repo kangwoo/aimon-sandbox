@@ -432,7 +432,12 @@ files API 에는 uid 인자가 없으므로, 명령만 다른 uid 로 돌리면 
 그대로의 출력이 필요한 소비자가 생기면 래퍼의 `run.out` 을 files API 로 읽는 길이 남아 있다([스파이크](opensandbox-spike.md) §4-3).
 프로바이더는 `maxCaptureBytes` 를 넘는 출력을 버리고 잘림을 표시할 뿐 **명령을 끝내지 않는다** — 명령은 제 끝이나 타임아웃까지
 돈다([단계 4 구현 설계](workspace-sandbox-step4.md) D8. 스파이크 §3 의 "명령을 끝낸다" 는 따르지 않았다: 출력을 많이 낸 명령의 종료 코드를 바꾸고, 로컬 프로바이더와도
-다르다).
+다르다). 예외는 **한 줄**이다: execd 는 줄 하나를 상한 없이 모아 이벤트 하나로 보내므로, OpenSandbox 프로바이더는 SSE 이벤트
+한 줄을 물질화하기 전에 256 KiB(`SseEvents.MAX_LINE_BYTES`, 받은 JSON 바이트)로 막고, 넘으면 명령을 끝내고 두 스트림을 잘림으로
+표시한다 — 상한까지 버리며 읽는 길은 그 줄을 다 받기 전에는 메모리를 묶지 못한다([PTC 선행 작업](ptc-shell-prerequisites.md)
+S2). `ExecSpec.transientOutput()` 이 켜진 명령은 끝난 뒤(완료·실패·타임아웃·kill 모두) 프로바이더가 샌드박스 안에 남긴 출력
+사본을 지운다 — OpenSandbox 에서는 execd 의 스풀 파일이다. `SandboxShell` 은 stream 실행(훅·격리·스트리밍)에 이것을 켠다(같은 문서
+S1).
 
 `verify` 는 seed 단계에서 세대마다 한 번, seed 스크립트 **앞에** 불린다(§11.3). 선언으로 광고한 capability 가 실제로
 걸렸는지 살아 있는 샌드박스에서만 볼 수 있는 것을 본다 — OpenSandbox 는 `EGRESS_POLICY` 가 필요하면
