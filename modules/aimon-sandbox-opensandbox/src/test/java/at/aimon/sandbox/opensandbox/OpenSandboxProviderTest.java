@@ -641,6 +641,47 @@ class OpenSandboxProviderTest {
         }
 
         @Test
+        @DisplayName("S1: a command that ends inside the kill grace reports its own exit even if its removal outlasts it")
+        void aKilledCommandWhoseRemovalOutlastsTheGraceReportsItsRealExit() throws Exception {
+            final List<String> paths = spool("c9");
+            final CountDownLatch hold = new CountDownLatch(1);
+            server.holds.put("c9", hold);
+            // The kill releases the hold: the stream ends without a terminal event, and the status gives exit 3.
+            server.commands = body -> Reply.events(List.of(init("c9"), out("started")), hold);
+            server.commandStatus = FakeOpenSandboxServer.JSON.createObjectNode().put("running", false).put("exit_code",
+                    3);
+            final CountDownLatch removing = new CountDownLatch(1);
+            final CountDownLatch release = new CountDownLatch(1);
+            // The removal is held at the server until the test lets it go, well inside its 30 s request timeout: it
+            // outlasts the kill grace whatever the runner's speed.
+            server.overrides.put("DELETE /v1/sandboxes/", request -> {
+                if (request.path.endsWith("/files")) {
+                    removing.countDown();
+                    await(release);
+                }
+                return null;
+            });
+            try (OpenSandboxProvider patient = new OpenSandboxProvider(
+                    server.config().requestTimeout(Duration.ofSeconds(30)).build())) {
+                final RunningCommand command = patient.connect(patient.create(spec("ws:a", 1).build()))
+                        .run(transientSpec(Duration.ofSeconds(60)), OutputSink.DISCARD);
+
+                final ExecOutcome outcome = command.await(Duration.ofMillis(300));
+
+                assertThat(removing.getCount()).as("it ended inside the grace").isZero();
+                assertThat(outcome.exitCode()).isEqualTo(3);
+                assertThat(outcome.timedOut()).as("await's own wait did run out").isTrue();
+                assertThat(text(outcome.stdout())).isEqualTo("started\n");
+                assertThat(server.interrupted).containsExactly("c9");
+                release.countDown();
+                awaitGone(paths);
+                assertThat(command.await(Duration.ofSeconds(5)).exitCode()).as("settled with it, not 137").isEqualTo(3);
+            } finally {
+                release.countDown();
+            }
+        }
+
+        @Test
         @DisplayName("S1: a failing removal is logged, never the command's failure")
         void aFailingSpoolRemovalDoesNotFailTheCommand() throws Exception {
             server.overrides.put("DELETE /v1/sandboxes/",
@@ -707,41 +748,60 @@ class OpenSandboxProviderTest {
         @Test
         @DisplayName("S1: a spool removal that outlasts await's wait for it still reports the real exit, not a timeout")
         void aSpoolRemovalThatOutlastsItsWaitReportsTheRealExit() throws Exception {
-            final Duration requestTimeout = Duration.ofMillis(300);
-            final CountDownLatch perPath = new CountDownLatch(1);
-            // The batch is refused at once; each of the four per-path calls then hangs past the request timeout.
-            server.overrides.put("DELETE /v1/sandboxes/", request -> {
-                if (!request.path.endsWith("/files")) {
-                    return null;
-                }
-                if (request.params("path").size() > 1) {
-                    return Reply.error(500, "RUNTIME_ERROR", "not a directory");
-                }
-                perPath.countDown();
-                sleep(Duration.ofSeconds(1));
-                return null;
-            });
+            final List<String> paths = spool("c1");
             server.commands = body -> Reply.events(List.of(init("c1"), out("ok"), exit("3", "exit status 3")), null);
-            try (OpenSandboxProvider impatient = new OpenSandboxProvider(
-                    server.config().requestTimeout(requestTimeout).build())) {
-                final RunningCommand command = impatient.connect(impatient.create(spec("ws:a", 1).build()))
-                        .run(transientSpec(Duration.ofSeconds(10)), OutputSink.DISCARD);
-                assertThat(perPath.await(5, TimeUnit.SECONDS)).isTrue();
+            final CountDownLatch holding = new CountDownLatch(1);
+            final CountDownLatch release = new CountDownLatch(1);
+            // One call permit, and a create the server keeps open holds it: the removal waits on the permit, with no
+            // timeout of its own, until the test lets it go — no clock decides which of the two ends first.
+            try (OpenSandboxProvider oneAtATime = new OpenSandboxProvider(
+                    server.config().requestTimeout(Duration.ofMillis(300)).maxConcurrentCalls(1)
+                            .createTimeout(Duration.ofSeconds(30)).build())) {
+                final SandboxConnection oneConnection = oneAtATime.connect(oneAtATime.create(spec("ws:a", 1).build()));
+                server.overrides.put("POST /v1/sandboxes", request -> {
+                    if (request.path.equals("/v1/sandboxes") && request.query.isEmpty()) {
+                        holding.countDown();
+                        await(release);
+                    }
+                    return null;
+                });
+                final Thread holder = new Thread(() -> {
+                    try {
+                        oneAtATime.create(spec("ws:b", 1).build());
+                    } catch (RuntimeException e) {
+                        // only its permit mattered
+                    }
+                });
+                holder.start();
+                try {
+                    assertThat(holding.await(5, TimeUnit.SECONDS)).isTrue();
+                    final OpenSandboxRunningCommand command = (OpenSandboxRunningCommand) oneConnection
+                            .run(transientSpec(Duration.ofSeconds(10)), OutputSink.DISCARD);
+                    final long deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
+                    while (!command.hasEnded() && System.nanoTime() < deadline) {
+                        Thread.sleep(20);
+                    }
+                    assertThat(command.hasEnded()).isTrue();
 
-                final long started = System.nanoTime();
-                final ExecOutcome outcome = command.await(Duration.ofMillis(50));
+                    final ExecOutcome outcome = command.await(Duration.ZERO);
 
-                assertThat(outcome.exitCode()).isEqualTo(3);
-                assertThat(outcome.timedOut()).isFalse();
-                assertThat(text(outcome.stdout())).isEqualTo("ok\n");
-                // Reported after one request timeout more, not after the four calls (4 x 300 ms) the removal takes.
-                assertThat(Duration.ofNanos(System.nanoTime() - started)).isLessThan(Duration.ofMillis(1000));
-                assertThat(server.interrupted).isEmpty();
+                    assertThat(spoolDeletes()).as("reported while the removal still waits").isEmpty();
+                    assertThat(outcome.exitCode()).isEqualTo(3);
+                    assertThat(outcome.timedOut()).isFalse();
+                    assertThat(text(outcome.stdout())).isEqualTo("ok\n");
+                    assertThat(server.interrupted).isEmpty();
+                    release.countDown();
+                    awaitGone(paths);
+                    assertThat(command.await(Duration.ofSeconds(5)).exitCode()).isEqualTo(3);
+                } finally {
+                    release.countDown();
+                    holder.join(10_000);
+                }
             }
         }
 
         @Test
-        @DisplayName("S1: a removal execd did not answer (timeout, or a gateway's 503) is not retried path by path")
+        @DisplayName("S1: a removal execd did not act on (timeout, the proxy's 502, a 503) is not retried path by path")
         void anUnansweredSpoolRemovalIsNotRetriedPerPath() throws Exception {
             server.commands = body -> Reply.events(List.of(init("c1"), complete()), null);
             try (OpenSandboxProvider impatient = new OpenSandboxProvider(
@@ -768,6 +828,17 @@ class OpenSandboxProviderTest {
                 assertThat(impatientConnection.run(transientSpec(Duration.ofSeconds(10)), OutputSink.DISCARD)
                         .await(Duration.ofSeconds(10)).exitCode()).isZero();
                 assertThat(spoolDeletes()).as("after a 503").hasSize(1);
+
+                // What the release-1.1.0 server proxy answers when it cannot connect to execd.
+                server.requests.clear();
+                server.overrides.put("DELETE /v1/sandboxes/",
+                        request -> request.path.endsWith("/files")
+                                ? Reply.error(502, "BACKEND_CONNECTION_FAILED", "could not connect")
+                                : null);
+
+                assertThat(impatientConnection.run(transientSpec(Duration.ofSeconds(10)), OutputSink.DISCARD)
+                        .await(Duration.ofSeconds(10)).exitCode()).isZero();
+                assertThat(spoolDeletes()).as("after a 502").hasSize(1);
             }
         }
 
@@ -801,6 +872,14 @@ class OpenSandboxProviderTest {
         private static void sleep(Duration duration) {
             try {
                 Thread.sleep(duration.toMillis());
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }
+
+        private static void await(CountDownLatch latch) {
+            try {
+                latch.await(20, TimeUnit.SECONDS);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
             }
