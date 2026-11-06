@@ -80,7 +80,9 @@ import at.aimon.sandbox.workspace.SandboxWorkspaceManager;
  * and a larger stdin is uploaded, copied into a private directory and checked against a digest the script carries. A
  * timeout is the JVM's clock, not a marker file. Their exec is killed once the trailer has arrived
  * ({@link #TRAILER_KILL_GRACE} later), so a hook's {@code cmd &} ends with the hook instead of holding the call open
- * until the exec's backstop.
+ * until the exec's backstop. Their exec is {@link ExecSpec#transientOutput() transient}: the provider removes its own
+ * copy of the output from the sandbox (execd's spool files) once the exec has ended, however it ended. A streamed
+ * command takes the same path.
  *
  * <p>
  * <b>Run directories</b> ({@link ShellFeature#RUN_DIRECTORY}). The files of
@@ -481,9 +483,11 @@ final class SandboxShell implements VirtualShell {
             }
             // Not binding.root(): a command may have removed it, and an exec server may refuse a missing directory
             // before the wrapper could fall back. The wrapper moves into the root itself.
+            // A stream run's output is the exec's own streams, so the provider's copy of them is the only one left in
+            // the sandbox after the run: it goes too (transientOutput, docs/design/ptc-shell-prerequisites.md S1).
             final ExecSpec spec = ExecSpec.builder().command(plan.script).workingDirectory(ShellWrapper.EXEC_DIRECTORY)
                     .environment(slot.profile().environment()).timeout(plan.backstop)
-                    .maxCaptureBytes(captureBackstop(plan.run.max)).build();
+                    .maxCaptureBytes(captureBackstop(plan.run.max)).transientOutput(plan.run.mode.streams()).build();
             final ShellCommandResult result = await(slot, spec, options.getCancellation(), plan.run, plan.listener);
             // A result means the trailer was read, and the wrapper removed its run files before printing it.
             wrapperCleanedUp = true;

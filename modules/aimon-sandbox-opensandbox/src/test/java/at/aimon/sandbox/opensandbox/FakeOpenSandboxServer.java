@@ -85,6 +85,18 @@ final class FakeOpenSandboxServer implements AutoCloseable {
             return null;
         }
 
+        /** Every value of a repeated query parameter, in order. */
+        List<String> params(String name) {
+            final List<String> values = new ArrayList<>();
+            for (String pair : query.split("&")) {
+                final int eq = pair.indexOf('=');
+                if (eq > 0 && pair.substring(0, eq).equals(name)) {
+                    values.add(URLDecoder.decode(pair.substring(eq + 1), StandardCharsets.UTF_8));
+                }
+            }
+            return values;
+        }
+
         @Override
         public String toString() {
             return method + " " + path + (query.isEmpty() ? "" : "?" + query);
@@ -502,7 +514,8 @@ final class FakeOpenSandboxServer implements AutoCloseable {
                 return Reply.status(200);
             }
             case "DELETE /files" :
-                files.remove(path);
+                // execd removes every path given; a missing one is not an error.
+                request.params("path").forEach(files::remove);
                 return Reply.status(200);
             case "DELETE /directories" :
                 files.keySet().removeIf(p -> p.equals(path) || p.startsWith(path + "/"));

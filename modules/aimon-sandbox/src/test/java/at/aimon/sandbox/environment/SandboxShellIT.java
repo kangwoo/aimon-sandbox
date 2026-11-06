@@ -465,6 +465,105 @@ class SandboxShellIT {
     }
 
     @Test
+    @DisplayName("STREAMING (contract): isolated(true) alone is not foreground — it streams, takes no lock, keeps no state")
+    void isolatedStreamingIsNotForeground() throws Exception {
+        // Core's contract: foreground = !background && !hook && !isolated. The PTC shell engine streams with
+        // isolated(true) only — neither background (a command outliving the call) nor hook (docs/design S7).
+        bash(env, "mkdir -p src && cd src && export SEEN=yes");
+        final Future<ShellCommandResult> model = executor
+                .submit(() -> bash(env, ": > /workspace/model-running; sleep 3; echo done"));
+        awaitHostFile("/workspace/model-running");
+        final List<String> out = new CopyOnWriteArrayList<>();
+        final List<String> err = new CopyOnWriteArrayList<>();
+
+        final long started = System.nanoTime();
+        final ShellCommandResult isolated = env.shell().execute(
+                () -> "pwd; echo \"[$SEEN]\"; echo warn >&2; export ISO=1; cd /tmp; exit 4",
+                ExecutionOptions.builder().timeout(Duration.ofSeconds(10)).isolated(true).build(),
+                new ShellLineListener() {
+                    @Override
+                    public void onStdoutLine(String line) {
+                        out.add(line);
+                    }
+
+                    @Override
+                    public void onStderrLine(String line) {
+                        err.add(line);
+                    }
+                });
+
+        assertThat(Duration.ofNanos(System.nanoTime() - started)).as("did not wait for the shell lock")
+                .isLessThan(Duration.ofMillis(1500));
+        assertThat(model.isDone()).isFalse();
+        assertThat(isolated.exitCode()).isEqualTo(4);
+        assertThat(out).hasSize(2);
+        assertThat(out.get(0)).as("the root, not the session's cwd").endsWith("/workspace/repo");
+        assertThat(out.get(1)).as("not the session's exports").isEqualTo("[]");
+        assertThat(err).containsExactly("warn");
+        assertThat(model.get(20, TimeUnit.SECONDS).stdout()).isEqualTo("done\n");
+        assertThat(bash(env, "pwd; echo \"ISO=$ISO\"").stdout()).isEqualTo("/workspace/repo/src\nISO=\n");
+        assertNoRunFiles();
+    }
+
+    @Test
+    @DisplayName("STREAMING (contract): an isolated streamed run with a run directory — the PTC shell engine's shape")
+    void isolatedStreamingWithARunDirectory() throws Exception {
+        final List<String> lines = new CopyOnWriteArrayList<>();
+        final CountDownLatch first = new CountDownLatch(1);
+        final ShellCancellationSource source = ShellCancellationSource.create();
+        final at.aimon.core.shell.RunDirectory run = at.aimon.core.shell.RunDirectory.builder()
+                .variable("AIMON_RUN_DIR")
+                .file("main.sh", "echo from-run-dir; sleep 30\n".getBytes(java.nio.charset.StandardCharsets.UTF_8))
+                .build();
+
+        final Future<ShellCommandResult> streamed = executor
+                .submit(() -> env.shell().execute(() -> "bash \"$AIMON_RUN_DIR/main.sh\"",
+                        cancellable(source).isolated(true).runDirectory(run).build(), line -> {
+                            lines.add(line);
+                            first.countDown();
+                        }));
+
+        assertThat(first.await(15, TimeUnit.SECONDS)).as("a line while the run is still going").isTrue();
+        assertThat(streamed.isDone()).isFalse();
+        source.cancel();
+
+        assertThat(failureOf(streamed)).isInstanceOf(ShellCancelledException.class);
+        assertThat(lines).containsExactly("from-run-dir");
+        assertNoRunFiles();
+    }
+
+    @Test
+    @DisplayName("S1: hook, isolated and streamed execs ask the provider to drop its output copy; model commands do not")
+    void streamRunsAreTransientAndModelCommandsAreNot() throws Exception {
+        final RecordingProvider[] recording = new RecordingProvider[1];
+        try (SandboxHarness recorded = SandboxHarness.builder()
+                .decorate((provider, clock) -> recording[0] = new RecordingProvider(provider)).build()) {
+            final ExecutionEnvironment otherEnv = recorded.mainTurn(SessionId.generate(), ALICE);
+            bash(otherEnv, "true");
+            final java.util.function.Supplier<Boolean> last = () -> recording[0].runs.get(recording[0].runs.size() - 1)
+                    .transientOutput();
+
+            bash(otherEnv, "echo fg");
+            assertThat(last.get()).as("foreground").isFalse();
+            bash(otherEnv, "echo bg",
+                    ExecutionOptions.builder().timeout(Duration.ofSeconds(10)).background(true).build());
+            assertThat(last.get()).as("background").isFalse();
+            bash(otherEnv, "echo hook", ExecutionOptions.builder().timeout(Duration.ofSeconds(10)).hook(true).build());
+            assertThat(last.get()).as("hook").isTrue();
+            bash(otherEnv, "echo iso", isolated().build());
+            assertThat(last.get()).as("isolated").isTrue();
+            otherEnv.shell().execute(() -> "echo streamed",
+                    ExecutionOptions.builder().timeout(Duration.ofSeconds(10)).isolated(true).build(), line -> {
+                    });
+            assertThat(last.get()).as("isolated streamed").isTrue();
+            otherEnv.shell().execute(() -> "echo monitor",
+                    ExecutionOptions.builder().timeout(Duration.ofSeconds(10)).background(true).build(), line -> {
+                    });
+            assertThat(last.get()).as("background streamed").isTrue();
+        }
+    }
+
+    @Test
     void aCommandChangingIfsKeepsEveryPersistedExport() throws Exception {
         bash(env, "export FOO=1 BAR='two words'");
 

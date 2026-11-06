@@ -22,6 +22,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.AfterEach;
@@ -545,6 +546,195 @@ class OpenSandboxProviderTest {
             assertThat(text(outcome.stdout())).isEqualTo("partial\n");
             assertThat(server.requests("GET", "/v1/sandboxes").stream()
                     .anyMatch(r -> r.path.endsWith("/command/status/c2"))).isTrue();
+        }
+
+        /** Spool files of command {@code id} in both execd layouts, as the fake's file system holds them. */
+        private List<String> spool(String id) {
+            final List<String> paths = List.of("/tmp/opensandbox-execd/" + id + ".stdout",
+                    "/tmp/opensandbox-execd/" + id + ".stderr", "/tmp/" + id + ".stdout", "/tmp/" + id + ".stderr");
+            paths.forEach(p -> server.files.put(p, "secret\n".getBytes(StandardCharsets.UTF_8)));
+            return paths;
+        }
+
+        private ExecSpec transientSpec(Duration timeout) {
+            return ExecSpec.builder().command("x").timeout(timeout).transientOutput(true).build();
+        }
+
+        private List<FakeOpenSandboxServer.Request> spoolDeletes() {
+            return server.requests("DELETE", "/v1/sandboxes").stream().filter(r -> r.path.endsWith("/files")).toList();
+        }
+
+        @Test
+        @DisplayName("S1: a transient command's spool, in either execd layout, is gone when await reports it")
+        void aTransientCommandsSpoolIsRemovedBeforeAwaitReturns() throws Exception {
+            final String id = "0123456789abcdef0123456789abcdef";
+            final List<String> paths = spool(id);
+            server.commands = body -> Reply.events(List.of(init(id), out("a"), exit("7", "exit status 7")), null);
+
+            final ExecOutcome outcome = connection.run(transientSpec(Duration.ofSeconds(10)), OutputSink.DISCARD)
+                    .await(Duration.ofSeconds(10));
+
+            assertThat(outcome.exitCode()).isEqualTo(7);
+            assertThat(server.files.keySet()).doesNotContainAnyElementsOf(paths);
+            assertThat(spoolDeletes()).singleElement()
+                    .satisfies(r -> assertThat(r.params("path")).containsExactlyInAnyOrderElementsOf(paths));
+        }
+
+        @Test
+        @DisplayName("S1: a command that is not transient leaves execd's spool alone")
+        void aCommandThatIsNotTransientRemovesNothing() throws Exception {
+            final List<String> paths = spool("c1");
+
+            assertThat(run("x", 100).exitCode()).isZero();
+
+            assertThat(server.files.keySet()).containsAll(paths);
+            assertThat(spoolDeletes()).isEmpty();
+        }
+
+        @Test
+        @DisplayName("S1: a transient command killed past its timeout has its spool removed too")
+        void aKilledTransientCommandsSpoolIsRemoved() throws Exception {
+            final List<String> paths = spool("c9");
+            final CountDownLatch hold = new CountDownLatch(1);
+            server.holds.put("c9", hold);
+            // The kill releases the hold: the stream then ends without a terminal event, and the status settles it.
+            server.commands = body -> Reply.events(List.of(init("c9"), out("started")), hold);
+            final RunningCommand command = connection.run(transientSpec(Duration.ofSeconds(60)), OutputSink.DISCARD);
+
+            final ExecOutcome outcome = command.await(Duration.ofMillis(300));
+
+            assertThat(outcome.timedOut()).isTrue();
+            assertThat(server.interrupted).containsExactly("c9");
+            awaitGone(paths);
+        }
+
+        @Test
+        @DisplayName("S1: a transient command whose stream dropped has its spool removed once the status settles it")
+        void aDroppedTransientCommandsSpoolIsRemovedAfterTheStatus() throws Exception {
+            final List<String> paths = spool("c2");
+            server.commands = body -> Reply.events(List.of(init("c2"), out("partial")), null);
+            server.commandStatus = FakeOpenSandboxServer.JSON.createObjectNode().put("running", false).put("exit_code",
+                    3);
+
+            final ExecOutcome outcome = connection.run(transientSpec(Duration.ofSeconds(10)), OutputSink.DISCARD)
+                    .await(Duration.ofSeconds(10));
+
+            assertThat(outcome.exitCode()).isEqualTo(3);
+            assertThat(server.files.keySet()).doesNotContainAnyElementsOf(paths);
+        }
+
+        @Test
+        @DisplayName("S1: a transient command given up on (the kill unanswered) has its spool removed afterwards")
+        void aGivenUpTransientCommandsSpoolIsRemoved() throws Exception {
+            final List<String> paths = spool("c8");
+            final CountDownLatch never = new CountDownLatch(1);
+            server.commands = body -> Reply.events(List.of(init("c8")), never);
+            try {
+                final ExecOutcome outcome = connection.run(transientSpec(Duration.ofSeconds(60)), OutputSink.DISCARD)
+                        .await(Duration.ofMillis(100));
+
+                assertThat(outcome.exitCode()).isEqualTo(137);
+                awaitGone(paths);
+            } finally {
+                never.countDown();
+            }
+        }
+
+        @Test
+        @DisplayName("S1: a failing removal is logged, never the command's failure")
+        void aFailingSpoolRemovalDoesNotFailTheCommand() throws Exception {
+            server.overrides.put("DELETE /v1/sandboxes/",
+                    request -> request.path.endsWith("/files") ? Reply.error(500, "RUNTIME_ERROR", "boom") : null);
+            server.commands = body -> Reply.events(List.of(init("c1"), out("ok"), complete()), null);
+
+            final ExecOutcome outcome = connection.run(transientSpec(Duration.ofSeconds(10)), OutputSink.DISCARD)
+                    .await(Duration.ofSeconds(10));
+
+            assertThat(outcome.exitCode()).isZero();
+            assertThat(text(outcome.stdout())).isEqualTo("ok\n");
+        }
+
+        @Test
+        @DisplayName("S1: a path execd cannot remove does not spare the others — each is then removed alone")
+        void aSpoolPathThatCannotBeRemovedDoesNotSpareTheOthers() throws Exception {
+            final String id = "0123456789abcdef0123456789abcdef";
+            final List<String> paths = spool(id);
+            // As execd does when the command made /tmp/opensandbox-execd a plain file: the first path fails, and the
+            // call stops there.
+            final String blocked = "/tmp/opensandbox-execd/" + id + ".stdout";
+            server.overrides.put("DELETE /v1/sandboxes/",
+                    request -> request.path.endsWith("/files") && request.params("path").contains(blocked)
+                            ? Reply.error(500, "RUNTIME_ERROR", "not a directory")
+                            : null);
+            server.commands = body -> Reply.events(List.of(init(id), complete()), null);
+
+            final ExecOutcome outcome = connection.run(transientSpec(Duration.ofSeconds(10)), OutputSink.DISCARD)
+                    .await(Duration.ofSeconds(10));
+
+            assertThat(outcome.exitCode()).isZero();
+            assertThat(server.files.keySet()).contains(blocked)
+                    .doesNotContainAnyElementsOf(paths.stream().filter(p -> !p.equals(blocked)).toList());
+            assertThat(spoolDeletes()).hasSize(1 + paths.size());
+        }
+
+        @Test
+        @DisplayName("S1: a command that ended in time is not timed out while its spool removal is still going on")
+        void aSlowSpoolRemovalDoesNotMakeTheCommandTimeOut() throws Exception {
+            final CountDownLatch removing = new CountDownLatch(1);
+            server.overrides.put("DELETE /v1/sandboxes/", request -> {
+                if (request.path.endsWith("/files")) {
+                    removing.countDown();
+                    try {
+                        Thread.sleep(600);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                    }
+                }
+                return null;
+            });
+            server.commands = body -> Reply.events(List.of(init("c1"), out("ok"), exit("3", "exit status 3")), null);
+
+            final RunningCommand command = connection.run(transientSpec(Duration.ofSeconds(10)), OutputSink.DISCARD);
+            assertThat(removing.await(5, TimeUnit.SECONDS)).isTrue();
+            final ExecOutcome outcome = command.await(Duration.ofMillis(50));
+
+            assertThat(outcome.exitCode()).isEqualTo(3);
+            assertThat(outcome.timedOut()).isFalse();
+            assertThat(text(outcome.stdout())).isEqualTo("ok\n");
+            assertThat(server.interrupted).isEmpty();
+        }
+
+        private void awaitGone(List<String> paths) throws InterruptedException {
+            final long deadline = System.nanoTime() + Duration.ofSeconds(5).toNanos();
+            while (paths.stream().anyMatch(server.files::containsKey) && System.nanoTime() < deadline) {
+                Thread.sleep(20);
+            }
+            assertThat(server.files.keySet()).doesNotContainAnyElementsOf(paths);
+        }
+
+        @Test
+        @DisplayName("S2: an event line over the limit kills the command; both streams read as cut")
+        void anOversizedEventLineKillsTheCommand() throws Exception {
+            final CountDownLatch hold = new CountDownLatch(1);
+            server.holds.put("c5", hold);
+            server.commands = body -> Reply.events(
+                    List.of(init("c5"), out("before"), out("x".repeat(SseEvents.MAX_LINE_BYTES)), out("after")), hold);
+            server.commandStatus = FakeOpenSandboxServer.JSON.createObjectNode().put("running", false).put("exit_code",
+                    -1);
+            final List<String> sunk = new java.util.concurrent.CopyOnWriteArrayList<>();
+
+            final ExecOutcome outcome = connection
+                    .run(ExecSpec.builder().command("x").timeout(Duration.ofSeconds(10)).build(),
+                            (stream, bytes, offset, length) -> sunk
+                                    .add(new String(bytes, offset, length, StandardCharsets.UTF_8)))
+                    .await(Duration.ofSeconds(10));
+
+            assertThat(server.interrupted).containsExactly("c5");
+            assertThat(outcome.exitCode()).isEqualTo(137);
+            assertThat(text(outcome.stdout())).isEqualTo("before\n");
+            assertThat(outcome.stdoutTruncated()).isTrue();
+            assertThat(outcome.stderrTruncated()).isTrue();
+            assertThat(sunk).containsExactly("before\n");
         }
 
         @Test

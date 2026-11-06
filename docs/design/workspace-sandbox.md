@@ -432,7 +432,12 @@ files API 에는 uid 인자가 없으므로, 명령만 다른 uid 로 돌리면 
 그대로의 출력이 필요한 소비자가 생기면 래퍼의 `run.out` 을 files API 로 읽는 길이 남아 있다([스파이크](opensandbox-spike.md) §4-3).
 프로바이더는 `maxCaptureBytes` 를 넘는 출력을 버리고 잘림을 표시할 뿐 **명령을 끝내지 않는다** — 명령은 제 끝이나 타임아웃까지
 돈다([단계 4 구현 설계](workspace-sandbox-step4.md) D8. 스파이크 §3 의 "명령을 끝낸다" 는 따르지 않았다: 출력을 많이 낸 명령의 종료 코드를 바꾸고, 로컬 프로바이더와도
-다르다).
+다르다). 예외는 **한 줄**이다: execd 는 줄 하나를 상한 없이 모아 이벤트 하나로 보내므로, OpenSandbox 프로바이더는 SSE 이벤트
+한 줄을 물질화하기 전에 256 KiB(`SseEvents.MAX_LINE_BYTES`, 받은 JSON 바이트)로 막고, 넘으면 명령을 끝내고 두 스트림을 잘림으로
+표시한다 — 상한까지 버리며 읽는 길은 그 줄을 다 받기 전에는 메모리를 묶지 못한다([PTC 선행 작업](ptc-shell-prerequisites.md)
+S2). `ExecSpec.transientOutput()` 이 켜진 명령은 끝난 뒤(완료·실패·타임아웃·kill 모두) 프로바이더가 샌드박스 안에 남긴 출력
+사본을 지운다 — OpenSandbox 에서는 execd 의 스풀 파일이다. `SandboxShell` 은 stream 실행(훅·격리·스트리밍)에 이것을 켠다(같은 문서
+S1).
 
 `verify` 는 seed 단계에서 세대마다 한 번, seed 스크립트 **앞에** 불린다(§11.3). 선언으로 광고한 capability 가 실제로
 걸렸는지 살아 있는 샌드박스에서만 볼 수 있는 것을 본다 — OpenSandbox 는 `EGRESS_POLICY` 가 필요하면
@@ -1359,6 +1364,7 @@ owner 그대로)하며 "/workspace 가 초기화되었다" notice 를 붙인다.
   .aimon-staged/<name>/<contentKey>/   staged skill files (on demand; read-only to file tools)
   .aimon-shell/<h(shellKey)>/          shell state, lock, owner, heartbeat (§9)
   .aimon-shell/.run.<hex>/             one hook run's private directory, removed after the run (§9)
+  .aimon-ptc/<run>/                    core's PTC shell engine replies (hidden from file tools; ptc-shell-prerequisites.md S9)
 /shared                 workspace volume, mounted per profile (sharedAccess: rw | ro | none)
   git/repo.git          bare repository used to exchange commits between slots
   context/ plans/ artifacts/ results/
@@ -1384,7 +1390,9 @@ worktree 를 만든 뒤에 환경을 돌려준다.
 실행이 고친 내용을 돌린다. 셸은 여전히 쓸 수 있고, 그것은 코어가 받아들인 한계다. 그래서 스테이징 경로를 권한 훅의
 허용 목록(예: `Bash(/workspace/.aimon-staged/**)`)에 넣으면 안 된다 — 셸로 심은 내용이 허용된 명령으로 돈다. 코어의 경로 규칙(`PathRule.readOnly`)
 을 코어의 공개 팩토리 `VirtualFileSystems.withPathRules` 로 그대로 건다. 대소문자·유니코드 별칭 처리를 이 모듈에 다시
-적지 않으려는 것이다. `/workspace/.aimon-shell/` 에도 같은 읽기 전용 규칙을 건다. 이름을 코어 로컬 제공자와 같은
+적지 않으려는 것이다. `/workspace/.aimon-shell/` 에도 같은 읽기 전용 규칙을 건다. `/workspace/.aimon-ptc/`(코어 PTC 셸 엔진의 응답 파일)는 파일 도구에서
+**숨긴다**(`PathRule.deny`) — 이것도 경계가 아니다: 셸은 읽고 쓰고, 응답의 무결성은 HMAC 이 지킨다([PTC 선행 작업](ptc-shell-prerequisites.md)
+S9). `Grep` 의 샌드박스 안 검색(`rg`)은 경로 규칙을 거치지 않는다(같은 문서 §10 Q4). 이름을 코어 로컬 제공자와 같은
 `.aimon-staged` 로 둔 것은, 코어에서 `.aimon/` 이 "제어 저장소(`DENY`)" 를 뜻하기 때문이다 — 샌드박스 안에서 같은
 이름이 스테이징 사본을 뜻하면 두 규칙이 헷갈린다.
 

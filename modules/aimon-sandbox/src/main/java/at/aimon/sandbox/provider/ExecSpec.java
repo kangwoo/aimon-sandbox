@@ -14,7 +14,8 @@ import java.util.Optional;
  * script (§9); the one other use is staging verification pinning {@code PATH}. {@link #timeout()} is a provider-side
  * backstop: when it passes, the provider kills the process group and reports {@link ExecOutcome#timedOut()}.
  * {@link #maxCaptureBytes()} caps each of stdout and stderr separately; the rest is counted and dropped, never
- * buffered.
+ * buffered. {@link #transientOutput()} asks the provider to keep no copy of the output in the sandbox once the command
+ * has ended.
  */
 public final class ExecSpec {
 
@@ -23,6 +24,7 @@ public final class ExecSpec {
     private final Map<String, String> environment;
     private final Duration timeout;
     private final long maxCaptureBytes;
+    private final boolean transientOutput;
 
     private ExecSpec(Builder builder) {
         this.command = Objects.requireNonNull(builder.command, "command must not be null");
@@ -33,6 +35,7 @@ public final class ExecSpec {
             throw new IllegalArgumentException("maxCaptureBytes must be >= 0, got " + builder.maxCaptureBytes);
         }
         this.maxCaptureBytes = builder.maxCaptureBytes;
+        this.transientOutput = builder.transientOutput;
     }
 
     /** @return a new builder */
@@ -65,10 +68,23 @@ public final class ExecSpec {
         return maxCaptureBytes;
     }
 
+    /**
+     * Whether the command's output is meant for this call only. When set, a provider that keeps a copy of a command's
+     * output inside the sandbox (an exec server's spool file) removes it once the command has ended — completed,
+     * failed, timed out or killed — so that nothing the command printed stays readable there afterwards. Best effort:
+     * a failure to remove is logged, never reported as the command's. A provider that keeps no copy does nothing.
+     *
+     * @return whether to remove in-sandbox copies of the output after the command
+     */
+    public boolean transientOutput() {
+        return transientOutput;
+    }
+
     @Override
     public String toString() {
         return "ExecSpec{workingDirectory=" + workingDirectory + ", timeout=" + timeout + ", maxCaptureBytes="
-                + maxCaptureBytes + ", command.length=" + command.length() + '}';
+                + maxCaptureBytes + ", transientOutput=" + transientOutput + ", command.length=" + command.length()
+                + '}';
     }
 
     /** Builder for {@link ExecSpec}. */
@@ -78,6 +94,7 @@ public final class ExecSpec {
         private Map<String, String> environment = Map.of();
         private Duration timeout = Duration.ofMinutes(2);
         private long maxCaptureBytes = 1024 * 1024;
+        private boolean transientOutput;
 
         private Builder() {
         }
@@ -104,6 +121,12 @@ public final class ExecSpec {
 
         public Builder maxCaptureBytes(long maxCaptureBytes) {
             this.maxCaptureBytes = maxCaptureBytes;
+            return this;
+        }
+
+        /** @see ExecSpec#transientOutput() */
+        public Builder transientOutput(boolean transientOutput) {
+            this.transientOutput = transientOutput;
             return this;
         }
 

@@ -67,6 +67,23 @@ class SandboxFileSystemTest {
     }
 
     @Test
+    @DisplayName("S9: .aimon-ptc is hidden from the file tools; Bash still sees it")
+    void theProgrammaticToolCallingAreaIsHiddenFromFileTools() throws Exception {
+        assertThat(bash(env, "mkdir -p /workspace/.aimon-ptc/run/r && echo reply > /workspace/.aimon-ptc/run/r/1 && "
+                + "cat /workspace/.aimon-ptc/run/r/1").stdout()).isEqualTo("reply\n");
+
+        assertThatThrownBy(() -> fs.read("/workspace/.aimon-ptc/run/r/1"))
+                .isInstanceOf(VirtualFileSystemException.class);
+        assertThatThrownBy(() -> fs.write("/workspace/.aimon-ptc/run/r/2", "forged"))
+                .isInstanceOf(FileAccessDeniedException.class);
+        assertThatThrownBy(() -> fs.write("../.aimon-ptc/run/r/2", "forged"))
+                .isInstanceOf(FileAccessDeniedException.class);
+        assertThat(fs.exists("/workspace/.aimon-ptc/run/r/1")).isFalse();
+        assertThat(fs.list("/workspace")).contains("/workspace/.aimon-shell").doesNotContain("/workspace/.aimon-ptc");
+        assertThat(harness.hostFile(session, "/workspace/.aimon-ptc/run/r/1")).isEqualTo("reply\n");
+    }
+
+    @Test
     void relativePathsResolveAgainstTheRootNotTheShellCwd() throws Exception {
         bash(env, "mkdir -p /workspace/repo/src && cd src");
 
