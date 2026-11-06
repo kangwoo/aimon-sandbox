@@ -6,6 +6,7 @@ import java.io.InputStream;
 import java.net.URLEncoder;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.net.http.HttpTimeoutException;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -184,8 +185,10 @@ final class OpenSandboxRunningCommand implements RunningCommand {
      * as success). All paths go in one call; execd stops at the first path it cannot remove (a directory, or a path
      * through a file — {@code /tmp/opensandbox-execd} made a plain file by the command) and answers 500, so a refused
      * call is followed by one call per path, and one bad path does not spare the others. A call that got no answer
-     * from execd (a transport failure or timeout, or a gateway's 502/503/504) is not: four more calls would only wait
-     * on it again. Never throws: a failure is logged.
+     * from execd (a timeout, a connect failure, or a gateway's 502/503/504) is not: four more calls would only wait
+     * on it again. A call whose connection broke before any answer (a pooled keep-alive connection the server had
+     * just closed, which the JDK client does not retry for a {@code DELETE}) is sent once more, on a fresh one. Never
+     * throws: a failure is logged.
      */
     private void removeSpool() {
         if (!spec.transientOutput() || !spoolRemoved.compareAndSet(false, true)) {
@@ -200,7 +203,11 @@ final class OpenSandboxRunningCommand implements RunningCommand {
             paths.add(directory + "/" + id + ".stdout");
             paths.add(directory + "/" + id + ".stderr");
         }
-        if (removeFiles(paths, false) != Removal.REFUSED) {
+        Removal removal = removeFiles(paths, false);
+        if (removal == Removal.BROKEN) {
+            removal = removeFiles(paths, true);
+        }
+        if (removal != Removal.REFUSED) {
             return;
         }
         for (String path : paths) {
@@ -214,6 +221,8 @@ final class OpenSandboxRunningCommand implements RunningCommand {
         REMOVED,
         /** execd answered with an error: it stopped at a path it could not remove. */
         REFUSED,
+        /** The connection broke at once, before any answer: worth one more call. */
+        BROKEN,
         /** No answer from execd itself. */
         UNANSWERED
     }
@@ -236,14 +245,24 @@ final class OpenSandboxRunningCommand implements RunningCommand {
             removal = status == 502 || status == 503 || status == 504 ? Removal.UNANSWERED : Removal.REFUSED;
         } catch (RuntimeException e) {
             failure = e.getMessage();
-            removal = Removal.UNANSWERED;
+            removal = brokenConnection(e) ? Removal.BROKEN : Removal.UNANSWERED;
         }
         if (warn || removal == Removal.UNANSWERED) {
             log.warn("Removing the output of a command in {} ({}) failed: {}", execd.ref(), paths, failure);
         } else {
-            log.debug("Removing the output of a command in {} failed: {}; trying each file", execd.ref(), failure);
+            log.debug("Removing the output of a command in {} failed: {}; {}", execd.ref(), failure,
+                    removal == Removal.BROKEN ? "trying again" : "trying each file");
         }
         return removal;
+    }
+
+    /**
+     * An I/O failure that is neither a timeout (execd may be hung: waiting again costs as much) nor a connect failure
+     * ({@link ExecdClient} has already re-resolved and retried that one).
+     */
+    private static boolean brokenConnection(RuntimeException e) {
+        return !(e instanceof Transport.ConnectFailed) && e.getCause() instanceof IOException io
+                && !(io instanceof HttpTimeoutException);
     }
 
     /** @return false on a terminal event */
