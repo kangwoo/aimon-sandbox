@@ -148,11 +148,6 @@ final class FakeOpenSandboxServer implements AutoCloseable {
             return new Reply(status, body, null, null);
         }
 
-        /** No answer at all: the connection is closed before the status line, as a server's idle close does. */
-        static Reply drop() {
-            return new Reply(-1, new byte[0], null, null);
-        }
-
         /** An SSE stream of these event objects; {@code hold} keeps it open after them until counted down. */
         static Reply events(List<String> events, CountDownLatch hold) {
             return new Reply(200, new byte[0], events, hold);
@@ -292,11 +287,6 @@ final class FakeOpenSandboxServer implements AutoCloseable {
     }
 
     private static void send(HttpExchange exchange, Reply reply) throws IOException {
-        if (reply.status < 0) {
-            // Closed before the response headers, the exchange closes its connection.
-            exchange.close();
-            return;
-        }
         if (reply.events != null) {
             exchange.getResponseHeaders().add("Content-Type", "text/event-stream");
             exchange.sendResponseHeaders(200, 0);

@@ -20,10 +20,9 @@ See [`docs/design/ptc-shell-prerequisites.md`](docs/design/ptc-shell-prerequisit
   copy of a command's output once the command has ended, however it ended. `SandboxShell` sets it for hook, isolated
   and streamed execs. The OpenSandbox provider then removes execd's spool files of the command, in both execd layouts,
   before `await` reports it — one call, then one per file if execd refuses a path, so one bad path does not keep the
-  others (not when execd does not answer: a timeout or a gateway's 502/503/504 is not retried; a call whose connection
-  broke before any answer, such as a pooled keep-alive connection the server had just closed, is sent once more). A
-  command that ended in time is never reported as timed out because of the removal: `await` waits one request timeout
-  for it, then reports the command's real exit while the removal goes on. execd `release-1.1.0` and later already remove their own;
+  others (not when execd does not answer: a timeout or a gateway's 502/503/504 is not retried). A command that ended in
+  time is never reported as timed out because of the removal: `await` waits one request timeout for it, then reports
+  the command's real exit while the removal goes on. execd `release-1.1.0` and later already remove their own;
   `docker/execd/v1.1.0` keeps them in `/tmp`.
 - **One output line is bounded (S2).** The OpenSandbox provider stops reading a `/command` stream at an event line over
   256 KiB, kills the command and marks both streams truncated, instead of holding the whole line in memory. A hook,

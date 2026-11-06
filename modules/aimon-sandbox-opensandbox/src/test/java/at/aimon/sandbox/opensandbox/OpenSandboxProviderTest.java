@@ -772,31 +772,6 @@ class OpenSandboxProviderTest {
         }
 
         @Test
-        @DisplayName("S1: a removal whose connection broke before any answer is sent once more, not path by path")
-        void aBrokenSpoolRemovalIsSentOnceMore() throws Exception {
-            final List<String> paths = spool("c1");
-            server.commands = body -> Reply.events(List.of(init("c1"), out("ok"), complete()), null);
-            final AtomicInteger dropped = new AtomicInteger();
-            server.overrides.put("DELETE /v1/sandboxes/",
-                    request -> request.path.endsWith("/files") && dropped.getAndIncrement() == 0 ? Reply.drop() : null);
-
-            assertThat(connection.run(transientSpec(Duration.ofSeconds(10)), OutputSink.DISCARD)
-                    .await(Duration.ofSeconds(10)).exitCode()).isZero();
-
-            assertThat(server.files.keySet()).as("removed by the second call").doesNotContainAnyElementsOf(paths);
-            assertThat(spoolDeletes()).hasSize(2)
-                    .allSatisfy(r -> assertThat(r.params("path")).containsExactlyInAnyOrderElementsOf(paths));
-
-            server.requests.clear();
-            server.overrides.put("DELETE /v1/sandboxes/",
-                    request -> request.path.endsWith("/files") ? Reply.drop() : null);
-
-            assertThat(connection.run(transientSpec(Duration.ofSeconds(10)), OutputSink.DISCARD)
-                    .await(Duration.ofSeconds(10)).exitCode()).isZero();
-            assertThat(spoolDeletes()).as("broken twice: given up, no call per path").hasSize(2);
-        }
-
-        @Test
         @DisplayName("S1: only the first init names the command — a second one does not move the spool paths")
         void aSecondInitIsIgnored() throws Exception {
             final List<String> paths = spool("c1");
