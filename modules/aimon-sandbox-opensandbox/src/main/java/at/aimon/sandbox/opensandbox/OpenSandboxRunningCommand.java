@@ -183,9 +183,12 @@ final class OpenSandboxRunningCommand implements RunningCommand {
      * Removes execd's spool files of a transient command, once, through the files API (which reports a missing file
      * as success). All paths go in one call; execd stops at the first path it cannot remove (a directory, or a path
      * through a file — {@code /tmp/opensandbox-execd} made a plain file by the command) and answers 500, so a refused
-     * call is followed by one call per path, and one bad path does not spare the others. A call that got no answer
-     * from execd (a transport failure or timeout, or a gateway's 502/503/504) is not: four more calls would only wait
-     * on it again. Never throws: a failure is logged.
+     * call is followed by one call per path, and one bad path does not spare the others. A call execd did not act on
+     * is not: a transport failure or timeout, a 502 (the {@code release-1.1.0} server proxy's answer when it cannot
+     * connect to execd — at once on a refused connection, after its own timeout on a connect timeout), or a 503/504
+     * (execd before its runtime init, or a gateway in front). No path was tried, so none is known to be unremovable,
+     * and four more calls would only reach the same execd that did not take the first — at best as fast failures, at
+     * worst each waiting out its timeout. That run's spool then stays. Never throws: a failure is logged.
      */
     private void removeSpool() {
         if (!spec.transientOutput() || !spoolRemoved.compareAndSet(false, true)) {
@@ -214,7 +217,7 @@ final class OpenSandboxRunningCommand implements RunningCommand {
         REMOVED,
         /** execd answered with an error: it stopped at a path it could not remove. */
         REFUSED,
-        /** No answer from execd itself. */
+        /** execd did not act on the call: it never reached execd, or got no answer from it. */
         UNANSWERED
     }
 
@@ -389,12 +392,21 @@ final class OpenSandboxRunningCommand implements RunningCommand {
         }
     }
 
-    /** {@link #await} ran out: the command is killed and given {@link #KILL_GRACE} to end. */
+    /**
+     * {@link #await} ran out: the command is killed and given {@link #KILL_GRACE} to end. Whatever ends it inside the
+     * grace — the kill, or itself just after the timeout — it is reported with its exit code and as timed out: the
+     * caller's wait did run out before it ended.
+     */
     private ExecOutcome killed() throws InterruptedException {
         kill();
         try {
             return outcome(exit.get(KILL_GRACE.toMillis(), TimeUnit.MILLISECONDS), true);
         } catch (TimeoutException | ExecutionException stillRunning) {
+            if (endedExit.isDone() && !endedExit.isCompletedExceptionally()) {
+                // It ended inside the grace; only the removal of its spool outlasts it, and settles exit after.
+                log.debug("Reporting a killed command in {} before its spool is removed", execd.ref());
+                return outcome(endedExit.join(), true);
+            }
             // Nothing answered even the kill (a half-open connection has no read timeout): give up on the
             // stream so its reader thread and connection do not outlive the command.
             exit.complete(SIGKILL_EXIT);
@@ -412,6 +424,11 @@ final class OpenSandboxRunningCommand implements RunningCommand {
     private ExecOutcome outcome(int code, boolean timedOut) {
         return ExecOutcome.builder().exitCode(code).stdout(stdout.bytes()).stderr(stderr.bytes())
                 .stdoutTruncated(stdout.truncated()).stderrTruncated(stderr.truncated()).timedOut(timedOut).build();
+    }
+
+    /** Whether the command's exit is known, though its spool may still be being removed (for tests). */
+    boolean hasEnded() {
+        return endedExit.isDone();
     }
 
     @Override
