@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.io.IOException;
+import java.nio.file.FileAlreadyExistsException;
 import java.util.EnumSet;
 
 import org.junit.jupiter.api.AfterEach;
@@ -14,7 +15,9 @@ import org.junit.jupiter.api.Test;
 import at.aimon.core.agent.session.SessionId;
 import at.aimon.core.environment.ExecutionEnvironment;
 import at.aimon.core.environment.RuntimeFileSystem;
+import at.aimon.sandbox.RecordingProvider;
 import at.aimon.sandbox.SandboxHarness;
+import at.aimon.sandbox.provider.ExecSpec;
 import at.aimon.sandbox.provider.SandboxProviderException;
 import at.aimon.sandbox.testkit.FaultInjectingSandboxProvider.Fault;
 import at.aimon.sandbox.testkit.FaultInjectingSandboxProvider.Operation;
@@ -31,7 +34,9 @@ class SandboxRuntimeFileSystemContractTest extends RuntimeFileSystemContract {
             Operation.FILES_WRITE, Operation.FILES_STAT, Operation.FILES_LIST, Operation.FILES_MKDIR,
             Operation.FILES_DELETE, Operation.FILES_MOVE);
 
-    private final SandboxHarness harness = SandboxHarness.standard();
+    private final RecordingProvider[] recording = new RecordingProvider[1];
+    private final SandboxHarness harness = SandboxHarness.builder()
+            .decorate((provider, clock) -> recording[0] = new RecordingProvider(provider)).build();
 
     @Override
     protected ExecutionEnvironment environment() {
@@ -102,5 +107,22 @@ class SandboxRuntimeFileSystemContractTest extends RuntimeFileSystemContract {
         files.createDirectories(dir());
         files.writeNew(dir() + "/after", new byte[]{1});
         assertThat(files.read(dir() + "/after", 1)).containsExactly(1);
+    }
+
+    @Test
+    @DisplayName("a refused write whose existence check fails is that failure, never a FileAlreadyExistsException")
+    void aFailedExistenceCheckIsAnIoException() throws Exception {
+        final RuntimeFileSystem files = files();
+        files.createDirectories(dir() + "/taken");
+        // Only the existence check ends "then exit 0; fi"; it now exits 2, as a helper that failed would.
+        recording[0].rewrite(spec -> spec.command().contains("then exit 0; fi")
+                ? ExecSpec.builder().command("exit 2").workingDirectory(spec.workingDirectory().orElse(null))
+                        .environment(spec.environment()).timeout(spec.timeout()).maxCaptureBytes(spec.maxCaptureBytes())
+                        .transientOutput(spec.transientOutput()).build()
+                : spec);
+
+        assertThatThrownBy(() -> files.writeNew(dir() + "/taken", new byte[]{1})).isInstanceOf(IOException.class)
+                .isNotInstanceOf(FileAlreadyExistsException.class).hasMessageContaining("cannot check")
+                .hasMessageContaining("(exit 2)").satisfies(e -> assertThat(e.getSuppressed()).hasSize(1));
     }
 }

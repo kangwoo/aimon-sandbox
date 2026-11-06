@@ -1,5 +1,6 @@
 package at.aimon.sandbox.opensandbox;
 
+import java.time.Duration;
 import java.util.concurrent.Executor;
 
 import at.aimon.sandbox.provider.ExecSpec;
@@ -14,16 +15,18 @@ final class OpenSandboxConnection implements SandboxConnection {
     private final ExecdClient execd;
     private final Executor executor;
     private final OpenSandboxFiles files;
+    private final Duration killGrace;
 
-    OpenSandboxConnection(ExecdClient execd, Retry retry, Executor executor) {
+    OpenSandboxConnection(ExecdClient execd, Retry retry, Executor executor, Duration killGrace) {
         this.execd = execd;
         this.executor = executor;
+        this.killGrace = killGrace;
         this.files = new OpenSandboxFiles(this, execd, retry);
     }
 
     @Override
     public RunningCommand run(ExecSpec spec, OutputSink sink) {
-        return OpenSandboxRunningCommand.start(execd, spec, sink, executor);
+        return OpenSandboxRunningCommand.start(execd, spec, sink, executor, killGrace);
     }
 
     @Override

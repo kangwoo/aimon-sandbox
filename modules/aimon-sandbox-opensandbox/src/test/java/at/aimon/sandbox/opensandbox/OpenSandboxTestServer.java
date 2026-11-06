@@ -45,6 +45,7 @@ final class OpenSandboxTestServer {
     private static final String API_KEY = "aimon-test-" + UUID.randomUUID();
     private static final Map<String, OpenSandboxTestServer> SERVERS = new ConcurrentHashMap<>();
     private static volatile String sandboxImage;
+    private static volatile String sandboxImageWithoutPython3;
 
     private final URI endpoint;
     private final String apiKey;
@@ -109,6 +110,22 @@ final class OpenSandboxTestServer {
                             .withDockerfile(Path.of("src/test/docker/Dockerfile")).get();
         }
         return sandboxImage;
+    }
+
+    /**
+     * @return {@link #sandboxImage()} with {@code python3} removed from {@code PATH} — an image that breaks the
+     *         optional
+     *         {@code python3} item of the image contract (§13.3) and nothing else, built once per run
+     */
+    static synchronized String sandboxImageWithoutPython3() {
+        if (sandboxImageWithoutPython3 == null) {
+            final String base = sandboxImage();
+            sandboxImageWithoutPython3 = new ImageFromDockerfile("aimon-sandbox-opensandbox-test-no-python3", false)
+                    .withDockerfileFromBuilder(
+                            dockerfile -> dockerfile.from(base).run("rm -f /usr/bin/python3*").build())
+                    .get();
+        }
+        return sandboxImageWithoutPython3;
     }
 
     URI endpoint() {

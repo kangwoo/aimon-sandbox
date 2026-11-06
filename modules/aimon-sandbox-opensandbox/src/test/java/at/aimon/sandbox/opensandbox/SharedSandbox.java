@@ -37,10 +37,10 @@ final class SharedSandbox implements AutoCloseable {
     final WorkspaceSandbox assembly;
     final ExecutionEnvironment environment;
 
-    private SharedSandbox(Set<String> runtimes) {
+    private SharedSandbox(String image, Set<String> runtimes) {
         this.provider = new OpenSandboxProvider(OpenSandboxTestServer.dnsNft().config().build());
-        final SandboxProfile profile = SandboxProfile.builder().name("ptc").image(OpenSandboxTestServer.sandboxImage())
-                .platform("linux").terminateAfter(Duration.ofHours(1)).runtimes(runtimes)
+        final SandboxProfile profile = SandboxProfile.builder().name("ptc").image(image).platform("linux")
+                .terminateAfter(Duration.ofHours(1)).runtimes(runtimes)
                 .insecureAllow(Set.of(Capability.HARDENED_SECURITY_CONTEXT, Capability.NETWORK_ISOLATION)).build();
         final SandboxSettings settings = SandboxSettings.builder().deployment(OpenSandboxTestServer.DEPLOYMENT)
                 .nodeId("it-" + UUID.randomUUID()).profiles(List.of(profile)).defaultProfile(profile.name())
@@ -57,7 +57,7 @@ final class SharedSandbox implements AutoCloseable {
      *         ran the {@code runtime-python3} check, and no test pays the creation inside its own timeout
      */
     static SharedSandbox started() throws Exception {
-        final SharedSandbox sandbox = new SharedSandbox(Set.of("python3"));
+        final SharedSandbox sandbox = new SharedSandbox(OpenSandboxTestServer.sandboxImage(), Set.of("python3"));
         try {
             sandbox.bash("true");
         } catch (Exception | Error e) {
@@ -65,6 +65,16 @@ final class SharedSandbox implements AutoCloseable {
             throw e;
         }
         return sandbox;
+    }
+
+    /**
+     * @param image
+     *            the sandbox image
+     * @return a sandbox whose profile declares {@code python3} on {@code image}, not provisioned yet: its first use
+     *         creates and seeds it
+     */
+    static SharedSandbox unstarted(String image) {
+        return new SharedSandbox(image, Set.of("python3"));
     }
 
     /** @return another main-turn environment, of a new session: a new sandbox once it is used */

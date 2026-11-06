@@ -67,6 +67,8 @@ final class SandboxRuntimeFileSystem implements RuntimeFileSystem {
     private static final int UNREADABLE_EXIT = 42;
     private static final int REMAINS_EXIT = 43;
     private static final int MISSING_EXIT = 44;
+    /** {@link #exists}'s "nothing there"; its 0 is "something there", anything else a failed helper. */
+    private static final int ABSENT_EXIT = 1;
 
     private final SandboxBinding binding;
     private final SandboxWorkspaceManager manager;
@@ -92,7 +94,14 @@ final class SandboxRuntimeFileSystem implements RuntimeFileSystem {
                 // Both providers refuse a directory at the target this way ("Is a directory"), and the testkit's
                 // refuses a dangling link before link(2) could; the interface says anything existing is
                 // FileAlreadyExistsException. Asked in the sandbox, since the files API's stat may follow a link.
-                if (exists(slot.connection(), path)) {
+                final boolean exists;
+                try {
+                    exists = exists(slot.connection(), path);
+                } catch (IOException check) {
+                    check.addSuppressed(e);
+                    throw check;
+                }
+                if (exists) {
                     throw new FileAlreadyExistsException(path);
                 }
                 throw new IOException("cannot write " + path + ": " + e.getMessage(), e);
@@ -171,12 +180,24 @@ final class SandboxRuntimeFileSystem implements RuntimeFileSystem {
         }
     }
 
-    /** Whether anything — a link included, dangling or not — is at {@code path}, without following it. */
+    /**
+     * Whether anything — a link included, dangling or not — is at {@code path}, without following it. Only the
+     * helper's exit 1 means "nothing there"; any other non-zero exit (a killed or failed helper) is an
+     * {@link IOException}, so a failure to ask is not reported as an absence.
+     */
     private static boolean exists(SandboxConnection connection, String path) throws IOException {
-        final ExecOutcome outcome = helper(connection,
-                "set -- " + ShellWrapper.quote(path) + "\nif [ -e \"$1\" ] || [ -L \"$1\" ]; then exit 0; fi\nexit 1\n",
+        final ExecOutcome outcome = helper(
+                connection, "set -- " + ShellWrapper.quote(path)
+                        + "\nif [ -e \"$1\" ] || [ -L \"$1\" ]; then exit 0; fi\nexit " + ABSENT_EXIT + "\n",
                 8 * 1024, false);
-        return outcome.exitCode() == 0;
+        switch (outcome.exitCode()) {
+            case 0 :
+                return true;
+            case ABSENT_EXIT :
+                return false;
+            default :
+                throw failed("check", path, outcome);
+        }
     }
 
     @Override

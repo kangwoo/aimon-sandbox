@@ -62,7 +62,10 @@ import at.aimon.sandbox.testkit.SandboxTestProfiles;
  * group of its own, so the shell's kill does not reach it (docs/design/workspace-sandbox.md §20). Here the runtime is a
  * host process: {@code wallClock} would leave its endless loop running on the developer's machine after every build,
  * and {@code bridgeLimitStopsAtOnce} fails when the runtime gets more calls out before the shell call returns. Both
- * run on the docker tier, where the runtime dies with the sandbox.
+ * run on the docker tier, which has the same defect — the runtime outlives the kill there too, until the sandbox the
+ * whole class shares goes — but keeps it inside a container: {@code wallClock}'s loop dies with that sandbox, and
+ * {@code ShellEngineContractIT} drops the engine's replies to a stopped run, so {@code bridgeLimitStopsAtOnce} does not
+ * depend on how fast the kill returns.
  */
 @ExtendWith(ShellEngineContractTest.RuntimeOutlivesItsKill.class)
 class ShellEngineContractTest extends AbstractCodeExecutionEngineContractTest {

@@ -79,6 +79,7 @@ public final class OpenSandboxProvider implements SandboxProvider {
 
     private final OpenSandboxProviderConfig config;
     private final Clock clock;
+    private final Duration killGrace;
     private final Transport transport;
     private final Retry retry;
     private final LifecycleClient lifecycle;
@@ -95,8 +96,18 @@ public final class OpenSandboxProvider implements SandboxProvider {
     }
 
     OpenSandboxProvider(OpenSandboxProviderConfig config, Clock clock) {
+        this(config, clock, OpenSandboxRunningCommand.KILL_GRACE);
+    }
+
+    /**
+     * @param killGrace
+     *            how long a command killed when its {@code await} ran out is waited for: {@link
+     *            OpenSandboxRunningCommand#KILL_GRACE} but in the tests that would otherwise wait it out
+     */
+    OpenSandboxProvider(OpenSandboxProviderConfig config, Clock clock, Duration killGrace) {
         this.config = config;
         this.clock = clock;
+        this.killGrace = killGrace;
         this.transport = new Transport(config.requestTimeout(), config.maxConcurrentCalls());
         this.retry = new Retry(config.retryMaxAttempts(), config.retryBackoff());
         this.lifecycle = new LifecycleClient(transport, config.endpoint(), config.apiKey(), retry,
@@ -475,7 +486,7 @@ public final class OpenSandboxProvider implements SandboxProvider {
         }
         final ExecdClient execd = new ExecdClient(transport, lifecycle, ref, ExecdClient.EXECD_PORT);
         execd.resolve();
-        return new OpenSandboxConnection(execd, retry, readers);
+        return new OpenSandboxConnection(execd, retry, readers, killGrace);
     }
 
     private VaultClient vault(ProviderSandboxRef ref) {
