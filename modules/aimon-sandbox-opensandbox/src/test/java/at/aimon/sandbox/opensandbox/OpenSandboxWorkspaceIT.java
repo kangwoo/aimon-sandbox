@@ -15,6 +15,8 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -69,6 +71,11 @@ class OpenSandboxWorkspaceIT {
 
     private static final AgentRuntimeId RUNTIME = AgentRuntimeId.fromName("opensandbox-it");
     private static final Principal ALICE = Principal.user("alice");
+
+    /** The out-of-memory command's timeout: the kill may wait for the cgroup's swap (see the test). */
+    private static final Duration OOM_COMMAND = Duration.ofSeconds(180);
+    private static final String MEMORY_FILES = "memory.max memory.swap.max memory.current memory.swap.current "
+            + "memory.peak memory.events memory.swap.events";
 
     private final ManualClock clock = new ManualClock(Instant.now());
     private final ManualScheduler scheduler = new ManualScheduler(clock);
@@ -210,6 +217,15 @@ class OpenSandboxWorkspaceIT {
         assertThat(provider.status(orphan)).as("after orphan-grace").isEmpty();
     }
 
+    /**
+     * {@code tail} grows until the cgroup's OOM killer ends it. The server sets only Docker's memory limit, so Docker's
+     * default memory-swap (twice the limit) lets the cgroup swap up to 256 Mi before that kill: on a slow or contended
+     * runner disk that took past 60 s once (CI, PR #52) where it takes 3–12 s otherwise. The command therefore has
+     * {@link #OOM_COMMAND}, and the sandbox's memory accounting — limits, swap, {@code memory.events} — before and
+     * after
+     * goes to stdout, and into the failure when the command times out, so a slow kill can be told apart from one that
+     * never came. The kill itself is checked twice: exit 137, and the cgroup's {@code oom_kill} count went up.
+     */
     @Test
     @DisplayName("§12.2: an out-of-memory command dies inside its sandbox; the sandbox and its neighbours answer")
     void resourceLimitsHoldInsideTheSandbox() throws Exception {
@@ -220,12 +236,46 @@ class OpenSandboxWorkspaceIT {
         final ExecutionEnvironment neighbour = mainTurn(assembly, SessionId.generate());
 
         final ShellCommandResult pids = bash(env, "cat /sys/fs/cgroup/pids.max");
-        final ShellCommandResult oom = bash(env, "head -c 600000000 /dev/zero | tail -n 1 > /dev/null; echo rc=$?");
+        final String before = memory(env);
+        final long started = System.nanoTime();
+        final ShellCommandResult oom;
+        try {
+            oom = bash(env, "head -c 600000000 /dev/zero | tail -n 1 > /dev/null; echo rc=$?", OOM_COMMAND);
+        } catch (ShellTimeoutException e) {
+            throw new AssertionError("the out-of-memory command was not killed within " + OOM_COMMAND
+                    + ". The sandbox's memory before it:\n" + before + "after it:\n" + memory(env), e);
+        }
+        final String after = memory(env);
+        System.out.printf("[§12.2] the out-of-memory command ended in %d ms; memory before:%n%safter:%n%s",
+                TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started), before, after);
 
         assertThat(pids.stdout().strip()).as("the server's pids_limit").isEqualTo("4096");
         assertThat(oom.stdout()).isEqualTo("rc=137\n");
+        assertThat(oomKills(after)).as("the cgroup's oom_kill count, before:%n%safter:%n%s", before, after)
+                .isGreaterThan(oomKills(before));
         assertThat(bash(env, "echo alive").stdout()).isEqualTo("alive\n");
         assertThat(bash(neighbour, "echo neighbour").stdout()).isEqualTo("neighbour\n");
+    }
+
+    /**
+     * @return the sandbox's cgroup memory files, one {@code name: content} line each (an unreadable one says so), or
+     *         why
+     *         they could not be read at all — a sandbox whose execd stopped answering must not hide the failure that
+     *         asked
+     */
+    private static String memory(ExecutionEnvironment env) {
+        try {
+            return bash(env, "cd /sys/fs/cgroup && for f in " + MEMORY_FILES
+                    + "; do printf '%s: %s\\n' \"$f\" \"$(tr '\\n' ' ' 2>&1 < \"$f\")\"; done").stdout();
+        } catch (Exception e) {
+            return "(unreadable: " + e + ")\n";
+        }
+    }
+
+    /** @return the {@code oom_kill} count of {@link #memory}'s {@code memory.events} line, -1 when it has none */
+    static long oomKills(String memory) {
+        final Matcher matcher = Pattern.compile("(?m)^memory\\.events: .*\\boom_kill (\\d+)").matcher(memory);
+        return matcher.find() ? Long.parseLong(matcher.group(1)) : -1;
     }
 
     @Test

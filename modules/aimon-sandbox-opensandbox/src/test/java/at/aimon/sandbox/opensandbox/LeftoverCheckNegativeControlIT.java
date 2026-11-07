@@ -60,7 +60,7 @@ class LeftoverCheckNegativeControlIT {
     @DisplayName("an escaped child of a timed-out run fails the leftover check, named by its mark")
     void anEscapedChildIsCaught() throws Exception {
         final String mark = "62" + ThreadLocalRandom.current().nextInt(1000, 10000);
-        final Set<Integer> baseline = SandboxLeftovers.baseline(SandboxLeftovers.snapshot(sandbox::bash),
+        final Set<SandboxLeftovers.Key> baseline = SandboxLeftovers.baseline(SandboxLeftovers.snapshot(sandbox::bash),
                 SandboxLeftovers.leftOver(mark));
         final CodeExecutionOutcome outcome;
         try (ScriptedToolCallBridge bridge = ScriptedToolCallBridge.succeedingWith("unused");
@@ -89,7 +89,7 @@ class LeftoverCheckNegativeControlIT {
     @Timeout(value = 60, unit = TimeUnit.SECONDS)
     @DisplayName("an unreaped zombie fails the leftover check, named with the parent that did not reap it")
     void anUnreapedZombieIsCaught() throws Exception {
-        final Set<Integer> baseline = SandboxLeftovers.baseline(SandboxLeftovers.snapshot(sandbox::bash),
+        final Set<SandboxLeftovers.Key> baseline = SandboxLeftovers.baseline(SandboxLeftovers.snapshot(sandbox::bash),
                 SandboxLeftovers.leftOver(null));
         final SandboxLeftovers.Zombie zombie = SandboxLeftovers.startUnreapedZombie(sandbox::bash);
 

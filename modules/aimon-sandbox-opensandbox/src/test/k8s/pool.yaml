@@ -7,10 +7,14 @@
 # hardening is template-hardened-ctr.yaml's, at container level. `recycleStrategy: Delete` (the default, written out):
 # a pod is never handed to a second sandbox, so no run inherits another's processes or zombies.
 #
-# The `/bin/sh -c` form of the command is load-bearing: Debian's sh does not exec a lone command, so it stays PID 1 and
-# reaps orphans (core's watchdogs, the shell wrapper's helpers) while it waits for task-executor. task-executor as PID 1
-# reaps nothing; measured, and so is the alternative — the server's `execd_run_as_init = true`, which makes execd a
-# subreaper (docs/design/ptc-shell-provider.md §9, "K8s tier, measured").
+# Something in the pod has to reap orphans (core's watchdogs, the shell wrapper's helpers); task-executor as PID 1 reaps
+# nothing, measured (docs/design/ptc-shell-provider.md §9, "K8s tier, measured"). Two things here do:
+# - the server's `execd_run_as_init = true`, which `scripts/k8s-tier.sh` sets and an operator must set
+#   (docs/guide/opensandbox-kubernetes.md §4.2): the task's bootstrap execs `execd --init`, a subreaper under
+#   task-executor. This is the requirement; a pool whose PID 1 is task-executor reaps with it and leaks without it;
+# - the `/bin/sh -c` form of the command: Debian's sh does not exec a lone command, so it stays PID 1 and reaps while it
+#   waits for task-executor. A base whose sh execs it (bash does) loses this, which is why it is not the requirement.
+# ShellEngineContractK8sPoolIT fails, naming the cause, when PID 1 is task-executor and no `execd --init` runs.
 apiVersion: sandbox.opensandbox.io/v1alpha1
 kind: Pool
 metadata:

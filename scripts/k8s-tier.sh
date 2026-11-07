@@ -14,8 +14,13 @@
 # `kind create` and `kind delete` edit only that file, and neither the user's ~/.kube/config nor its current context is
 # touched. To run k8sTest by hand, export KUBECONFIG to the same file (the runtime-class check runs kubectl). `up`
 # refuses a cluster name that already exists, so it never adopts a cluster it did not create. AIMON_K8S_CLUSTER names
-# the cluster (default aimon-k8s-tier). AIMON_K8S_EXECD_INIT=1 sets the server's `execd_run_as_init` (execd as the
-# sandbox's init, OSEP-0018), for `up` and `reconfigure`.
+# the cluster (default aimon-k8s-tier).
+#
+# The server runs with `execd_run_as_init = true` (execd as the sandbox's init, OSEP-0018): in template mode execd is
+# PID 1, in pool mode a subreaper under task-executor, and either way it reaps the orphans of a run (core's watchdogs).
+# Pool mode needs it — task-executor as a pool pod's PID 1 reaps nothing — so this is the configuration the tier
+# verifies and the one an operator deploys (docs/guide/opensandbox-kubernetes.md §9.3). AIMON_K8S_EXECD_INIT=0 leaves it out, for
+# `up` and `reconfigure`, to measure the server's default.
 #
 # The values are the spike's (spike/opensandbox/k8s/deploy/, reports/C-k8s.md §1): docker.io images instead of the
 # chart's default registry, the container-level hardened template (pod-level runAsUser breaks the privileged init
@@ -35,10 +40,10 @@ runtime_class=spike-runc
 pool=aimon-pool
 export KUBECONFIG="${AIMON_K8S_KUBECONFIG:-$work/kubeconfig}"
 
-# The chart values, with `execd_run_as_init = true` under [runtime] when AIMON_K8S_EXECD_INIT=1.
+# The chart values, with `execd_run_as_init = true` under [runtime] unless AIMON_K8S_EXECD_INIT=0.
 values() {
   mkdir -p "$work"
-  if [ "${AIMON_K8S_EXECD_INIT:-}" = 1 ]; then
+  if [ "${AIMON_K8S_EXECD_INIT:-1}" != 0 ]; then
     awk '{ print } /^    \[runtime\]$/ { print "    execd_run_as_init = true" }' "$deploy/values-sr-spike-runc.yaml" \
       > "$work/values.yaml"
   else

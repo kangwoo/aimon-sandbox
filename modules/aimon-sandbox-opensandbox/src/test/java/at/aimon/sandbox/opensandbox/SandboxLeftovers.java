@@ -22,8 +22,11 @@ import at.aimon.core.shell.ShellCommandResult;
  */
 final class SandboxLeftovers {
 
-    /** Five fields, so the command's own line ({@code ps -eo …}) is parsed like any other and filtered by args. */
-    static final String PS = "ps -eo pid=,ppid=,pgid=,stat=,args=";
+    /**
+     * Four fields, the start time ({@code lstart}: five words in the C locale, to the second) and the args, so the
+     * command's own line ({@code ps -eo …}) is parsed like any other and filtered by args.
+     */
+    static final String PS = "LC_ALL=C ps -eo pid=,ppid=,pgid=,stat=,lstart=,args=";
 
     /** How long a check waits for the watchdog's kill and the reaper's {@code wait} to finish: 50 × 200 ms. */
     private static final int ATTEMPTS = 50;
@@ -38,11 +41,16 @@ final class SandboxLeftovers {
         ShellCommandResult bash(String command) throws Exception;
     }
 
-    /** One line of {@link #PS}. */
-    record Proc(int pid, int ppid, int pgid, String stat, String args) {
+    /** One line of {@link #PS}; {@code started} is its {@code lstart}, empty where nothing recorded it. */
+    record Proc(int pid, int ppid, int pgid, String stat, String started, String args) {
 
         boolean zombie() {
             return stat.startsWith("Z");
+        }
+
+        /** A process, not just a pid: a pid an exited leftover freed and a new one took has another start time. */
+        Key key() {
+            return new Key(pid, started);
         }
 
         /** {@code pid ppid pgid stat args}, and for a zombie {@code [parent: <its parent's args>]}. */
@@ -56,21 +64,27 @@ final class SandboxLeftovers {
         }
     }
 
+    /** What a baseline holds of a process: its pid and its start time, which a reused pid does not share. */
+    record Key(int pid, String started) {
+    }
+
     /**
      * @param ps
      *            the output of {@link #PS}
-     * @return its processes; a line that does not have five fields is skipped
+     * @return its processes; a line that does not have the four fields, the five words of the start time and the args
+     *         is skipped
      */
     static List<Proc> parse(String ps) {
         final List<Proc> procs = new ArrayList<>();
         for (String line : ps.lines().map(String::strip).toList()) {
-            final String[] fields = line.split("\\s+", 5);
-            if (fields.length < 5) {
+            final String[] fields = line.split("\\s+", 10);
+            if (fields.length < 10) {
                 continue;
             }
             try {
-                procs.add(new Proc(Integer.parseInt(fields[0]), Integer.parseInt(fields[1]),
-                        Integer.parseInt(fields[2]), fields[3], fields[4]));
+                procs.add(
+                        new Proc(Integer.parseInt(fields[0]), Integer.parseInt(fields[1]), Integer.parseInt(fields[2]),
+                                fields[3], String.join(" ", List.of(fields).subList(4, 9)), fields[9]));
             } catch (NumberFormatException e) {
                 // a header or a wrapped line: not a process
             }
@@ -100,9 +114,12 @@ final class SandboxLeftovers {
         return procs;
     }
 
-    /** @return the pids of {@code procs} that count as left over: the baseline a later check subtracts */
-    static Set<Integer> baseline(List<Proc> procs, Predicate<Proc> leftOver) {
-        return procs.stream().filter(leftOver).map(Proc::pid).collect(Collectors.toUnmodifiableSet());
+    /**
+     * @return the processes of {@code procs} that count as left over, by pid and start time: the baseline a later check
+     *         subtracts
+     */
+    static Set<Key> baseline(List<Proc> procs, Predicate<Proc> leftOver) {
+        return procs.stream().filter(leftOver).map(Proc::key).collect(Collectors.toUnmodifiableSet());
     }
 
     /**
@@ -110,14 +127,14 @@ final class SandboxLeftovers {
      *
      * @return empty when nothing new is left over; otherwise the new lines, then the ones present before
      */
-    static String describeNew(List<Proc> procs, Set<Integer> baseline, Predicate<Proc> leftOver) {
+    static String describeNew(List<Proc> procs, Set<Key> baseline, Predicate<Proc> leftOver) {
         final Map<Integer, Proc> all = procs.stream()
                 .collect(Collectors.toMap(Proc::pid, Function.identity(), (a, b) -> a));
         final List<String> fresh = new ArrayList<>();
         final List<String> before = new ArrayList<>();
         for (Proc proc : procs) {
             if (leftOver.test(proc)) {
-                (baseline.contains(proc.pid()) ? before : fresh).add(proc.render(all));
+                (baseline.contains(proc.key()) ? before : fresh).add(proc.render(all));
             }
         }
         if (fresh.isEmpty()) {
@@ -131,7 +148,7 @@ final class SandboxLeftovers {
      * Polls until nothing left over is new since {@code baseline}, and fails naming {@code label} otherwise. The
      * watchdog's kill and PID 1's reaping are asynchronous to the shell call's return.
      */
-    static void awaitNone(Shell shell, Set<Integer> baseline, Predicate<Proc> leftOver, String label) throws Exception {
+    static void awaitNone(Shell shell, Set<Key> baseline, Predicate<Proc> leftOver, String label) throws Exception {
         String left = describeNew(snapshot(shell), baseline, leftOver);
         for (int attempt = 0; attempt < ATTEMPTS && !left.isEmpty(); attempt++) {
             Thread.sleep(PAUSE_MILLIS);
@@ -143,9 +160,9 @@ final class SandboxLeftovers {
     /**
      * A Python program that records, before it does anything else, what the process running it sees: itself, its
      * parent (the anchor, in the shell's group) and the watchdog candidates — processes whose group is the one it leads
-     * ({@code pgid == self}) that are neither itself nor its direct children, which is what aimon_ptc.py's double fork
-     * leaves (reparented to PID 1 or a
-     * subreaper). It writes {@code key=value} lines to {@code path}; {@link #parseProbe} reads them back.
+     * ({@code pgid == self}) that are neither itself nor its direct children, with their command lines. aimon_ptc.py's
+     * double fork leaves the watchdog there, reparented to PID 1 or a subreaper; {@link WatchdogProbe#watchdogs} picks
+     * it out. It writes {@code key=value} lines to {@code path}; {@link #parseProbe} reads them back.
      */
     static String watchdogProbeProgram(String path) {
         return String.join("\n", "import os as _os", "def _probe_stat(pid):",
@@ -158,16 +175,27 @@ final class SandboxLeftovers {
                 "for _d in _os.listdir('/proc'):", "    if _d.isdigit() and int(_d) != _me:", "        try:",
                 "            _p, _g = _probe_stat(int(_d))", "        except (OSError, ValueError, IndexError):",
                 "            continue", "        if _g == _me and _p != _me:",
-                "            _lines.append('watchdog=%s ppid=%d pgid=%d' % (_d, _p, _g))",
+                "            _lines.append('watchdog=%s ppid=%d pgid=%d args=%s' % (_d, _p, _g, _probe_args(int(_d))))",
                 "with open('" + path + "', 'w') as f:", "    f.write('\\n'.join(_lines) + '\\n')", "");
     }
 
     /** What {@link #watchdogProbeProgram} saw. */
-    record WatchdogProbe(int self, int selfPgid, int parent, int parentPgid, String parentArgs, List<Proc> watchdogs) {
+    record WatchdogProbe(int self, int selfPgid, int parent, int parentPgid, String parentArgs, List<Proc> candidates) {
 
         /** The runtime leads its own group, which is not the anchor's (the exec's). */
         boolean runtimeLeadsItsOwnGroup() {
             return selfPgid == self && parentPgid != selfPgid;
+        }
+
+        /**
+         * @return the candidates that are the runtime's watchdog: a fork of the runtime, so its command line names
+         *         {@code aimon_ptc}, whose parent is neither the runtime nor the anchor — an unrelated grandchild in
+         *         the
+         *         group, or a child of the anchor, does not count
+         */
+        List<Proc> watchdogs() {
+            return candidates.stream().filter(c -> c.ppid() != self && c.ppid() != parent)
+                    .filter(c -> c.args().contains("aimon_ptc")).toList();
         }
     }
 
@@ -181,16 +209,16 @@ final class SandboxLeftovers {
     static WatchdogProbe parseProbe(String text) {
         Map<String, String> self = null;
         Map<String, String> parent = null;
-        final List<Proc> watchdogs = new ArrayList<>();
+        final List<Proc> candidates = new ArrayList<>();
         for (String line : text.lines().toList()) {
             if (line.startsWith("self=")) {
                 self = fields(line, 2);
             } else if (line.startsWith("parent=")) {
                 parent = fields(line, 3);
             } else if (line.startsWith("watchdog=")) {
-                final Map<String, String> w = fields(line, 3);
-                watchdogs.add(new Proc(Integer.parseInt(w.get("watchdog")), Integer.parseInt(w.get("ppid")),
-                        Integer.parseInt(w.get("pgid")), "", ""));
+                final Map<String, String> w = fields(line, 4);
+                candidates.add(new Proc(Integer.parseInt(w.get("watchdog")), Integer.parseInt(w.get("ppid")),
+                        Integer.parseInt(w.get("pgid")), "", "", w.getOrDefault("args", "")));
             }
         }
         if (self == null || parent == null) {
@@ -198,7 +226,7 @@ final class SandboxLeftovers {
         }
         return new WatchdogProbe(Integer.parseInt(self.get("self")), Integer.parseInt(self.get("pgid")),
                 Integer.parseInt(parent.get("parent")), Integer.parseInt(parent.get("pgid")), parent.get("args"),
-                List.copyOf(watchdogs));
+                List.copyOf(candidates));
     }
 
     /** A zombie under a live parent that never waits for it, both started by {@link #startUnreapedZombie}. */

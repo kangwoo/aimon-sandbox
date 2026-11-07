@@ -2402,8 +2402,10 @@ docker 계층, K8s 에서만 드러나는 것은 k8s 계층 — 는 [`workspace-
   파드의 task-executor 아래 task 로 돌고, 그 파드의 PID 1 은 서버가 아니라 `Pool` 이 정한다. task-executor 는 고아를 거두지
   않으므로, 그것이 PID 1 이면 코어 워치독과 이 모듈의 셸 래퍼가 남긴 좀비가 쌓인다(측정: 모든 테스트가 남은 좀비로 실패).
   거두는 PID 1(k8s 계층의 풀은 `/bin/sh -c` 형태라 `sh` 가 PID 1 로 남는다)이나 서버의 `execd_run_as_init = true`(execd 가
-  subreaper 가 된다)로 풀린다 — 둘 다 측정했다. 공개 풀 지원이 이를 운영자 요구 사항으로 둘지, seed 로 확인할지 정해야 한다
-  ([검증 설계](ptc-shell-verification.md) §9 · [PTC 셸 엔진의 제공자 쪽 설계](ptc-shell-provider.md) §9 "K8s tier, measured")
+  subreaper 가 된다)로 풀린다 — 둘 다 측정했다. `execd_run_as_init = true` 를 운영자 요구 사항으로 두었다([설치 가이드
+  §4.2](../guide/opensandbox-kubernetes.md#42-valuesyaml), `scripts/k8s-tier.sh` 의 기본값). 풀 모드 테스트는 PID 1 이
+  task-executor 인데 `execd --init` 이 없으면 그 원인을 이름으로 대며 실패한다. 남은 것: 공개 풀 지원이 이를 seed 로 확인할지
+  정한다([검증 설계](ptc-shell-verification.md) §9 · [PTC 셸 엔진의 제공자 쪽 설계](ptc-shell-provider.md) §9 "K8s tier, measured")
 - **K8s 경로와 docker 계층의 서버 버전** — k8s 계층은 차트 커밋 `3738975` 와 `release-1.1.1-rc.1` 이미지를, docker 계층은
   digest 로 고정한 `release-1.1.0` · execd `v1.1.0` 을 쓴다. 두 계층이 다른 서버를 검증하는 셈이다. 다음에 서버를 올릴 때
   하나로 맞출지 정한다([검증 설계](ptc-shell-verification.md) O5)

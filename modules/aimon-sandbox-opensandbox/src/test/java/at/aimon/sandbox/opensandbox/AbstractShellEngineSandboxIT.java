@@ -41,7 +41,7 @@ import at.aimon.programmatic.testkit.ScriptedToolCallBridge;
  */
 abstract class AbstractShellEngineSandboxIT extends AbstractCodeExecutionEngineContractTest {
 
-    private Set<Integer> before;
+    private Set<SandboxLeftovers.Key> before;
 
     /** @return the class's shared sandbox, started */
     protected abstract SharedSandbox sandbox();
@@ -83,7 +83,7 @@ abstract class AbstractShellEngineSandboxIT extends AbstractCodeExecutionEngineC
     void aTimedOutRunLeavesNothingInTheSandbox() throws Exception {
         final String mark = "61" + ThreadLocalRandom.current().nextInt(1000, 10000);
         final String probe = "/tmp/aimon-probe-" + UUID.randomUUID();
-        final Set<Integer> baseline = SandboxLeftovers.baseline(SandboxLeftovers.snapshot(sandbox()::bash),
+        final Set<SandboxLeftovers.Key> baseline = SandboxLeftovers.baseline(SandboxLeftovers.snapshot(sandbox()::bash),
                 SandboxLeftovers.leftOver(mark));
         final CodeExecutionOutcome outcome;
         try (ScriptedToolCallBridge bridge = ScriptedToolCallBridge.succeedingWith("unused")) {
@@ -99,8 +99,9 @@ abstract class AbstractShellEngineSandboxIT extends AbstractCodeExecutionEngineC
         final SandboxLeftovers.WatchdogProbe seen = SandboxLeftovers.parseProbe(read.stdout());
         assertThat(seen.runtimeLeadsItsOwnGroup())
                 .as("the runtime leads its own group and its anchor is in another: %s", read.stdout()).isTrue();
-        assertThat(seen.watchdogs()).as("a watchdog in the runtime's group, outside its children: %s", read.stdout())
-                .isNotEmpty();
+        assertThat(seen.watchdogs()).as(
+                "a watchdog: an aimon_ptc process in the runtime's group, parented by neither it nor its anchor: %s",
+                read.stdout()).isNotEmpty();
 
         SandboxLeftovers.awaitNone(sandbox()::bash, baseline, SandboxLeftovers.leftOver(mark),
                 "the timed-out run (child mark sleep " + mark + ")");

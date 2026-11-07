@@ -2,6 +2,7 @@ package at.aimon.sandbox.opensandbox;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.util.List;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
@@ -21,18 +22,26 @@ abstract class AbstractShellEngineK8sIT extends AbstractShellEngineSandboxIT {
     /**
      * @param args
      *            PID 1's command line, its arguments separated by spaces
+     * @param procs
+     *            every process of the sandbox, for a check that rests on more than PID 1 (a subreaper under it)
      */
-    protected abstract void checkPid1(String args);
+    protected abstract void checkPid1(String args, List<SandboxLeftovers.Proc> procs);
 
-    /** PID 1's command line, {@code ps}'s view of it and the pod's name go to stdout, which the JUnit XML keeps. */
+    /**
+     * PID 1's command line, {@code ps}'s view of it, the pod's name and the execd processes (one is the subreaper when
+     * execd runs as {@code --init} under another PID 1) go to stdout, which the JUnit XML keeps.
+     */
     @Test
     @DisplayName("PID 1 of the sandbox is recorded, and is what this mode expects")
     void pid1IsRecorded() throws Exception {
         final ShellCommandResult pid1 = sandbox()
                 .bash("tr '\\0' ' ' </proc/1/cmdline; echo; ps -o pid,ppid,stat,args -p 1; echo \"pod: $(hostname)\"");
         assertThat(pid1.exitCode()).as("reading PID 1: %s", pid1.stderr()).isZero();
-        System.out.println("[" + getClass().getSimpleName() + "] PID 1:\n" + pid1.stdout());
-        checkPid1(pid1.stdout().lines().findFirst().orElse("").strip());
+        final List<SandboxLeftovers.Proc> procs = SandboxLeftovers.snapshot(sandbox()::bash);
+        System.out.println("[" + getClass().getSimpleName() + "] PID 1:\n" + pid1.stdout() + "execd (pid ppid args): "
+                + procs.stream().filter(proc -> proc.args().contains("execd"))
+                        .map(proc -> proc.pid() + " " + proc.ppid() + " " + proc.args()).toList());
+        checkPid1(pid1.stdout().lines().findFirst().orElse("").strip(), procs);
     }
 
     /**

@@ -71,6 +71,20 @@ and departures: [`docs/design/ptc-shell-provider.md`](docs/design/ptc-shell-prov
     port-forward running or exits 1 after a green run (its EXIT trap named an out-of-scope local under `set -u`).
   - `OpenSandboxProviderConfig` has a package-private `extensions` seam that the pool class uses for
     `extensions.poolRef`. It is not API. Pools stay out of the SPI (WS §6.4).
+  - Follow-up, re-verified on kind on the final code (template, pool, and `OpenSandboxK8sIT` in pool mode as the new
+    `OpenSandboxK8sPoolIT`: 4 pass, 4 skip for needing a network policy, a credential or the runtime class):
+    - **`scripts/k8s-tier.sh` now runs the server with `execd_run_as_init = true`** (`AIMON_K8S_EXECD_INIT=0` leaves it
+      out), and the Kubernetes guide (§4.2) makes it an operator requirement: task-executor as a pool pod's PID 1 reaps
+      nothing. The pool class asserts that PID 1 is not task-executor or that `execd --init` runs, so a pool without it
+      fails naming the cause (measured both ways).
+    - The leftover baseline is keyed on pid and start time, so a pid an exited leftover freed cannot hide a new one;
+      the watchdog probe counts only an `aimon_ptc` process whose parent is neither the runtime nor its anchor.
+    - Docker tier flakes: the egress IT attaches the server's log of a create that answered HTTP 500, and retries it
+      once only when that log shows a host-port conflict — the server's own allocation probes ports inside its
+      container and, on the egress path, does not retry a conflict (reproduced: `Bind for 0.0.0.0:… failed: port is
+      already allocated` → "Egress sidecar container failed to start."). The out-of-memory test records the sandbox's
+      `memory.*` accounting (swap is allowed up to the limit), asserts the cgroup's `oom_kill` count rose, and gives
+      the command 180 s.
 
 ### Added: groundwork for core's programmatic tool calling (shell engine)
 
