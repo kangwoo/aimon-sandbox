@@ -103,7 +103,9 @@ WorkspaceSandbox sandbox = WorkspaceSandbox.builder().settings(settings).provide
 파드를 만든다)와 `ShellEngineContractK8sPoolIT`(서버가 [`src/test/k8s/pool.yaml`](src/test/k8s/pool.yaml) 의 `Pool` 에서
 파드를 받는다, `extensions.poolRef` — 프로바이더의 테스트 전용 이음매다). 둘 다 코어의 엔진 계약 스위트, 남은 프로세스 검사,
 PID 1 기록, 고아 좀비 회수를 돈다. 측정 결과는
-[`ptc-shell-verification.md`](../../docs/design/ptc-shell-verification.md) 에 있다. 손으로 할 때는 스파이크의 절차([`C-k8s.md`](../../spike/opensandbox/reports/C-k8s.md) §1)와
+[`ptc-shell-provider.md`](../../docs/design/ptc-shell-provider.md) §9 "K8s tier, measured" 에, 검증 설계는
+[`ptc-shell-verification.md`](../../docs/design/ptc-shell-verification.md) 에 있다. 스크립트는 서버를
+`execd_run_as_init = true` 로 띄운다 — 풀 모드에는 필수다([설치 가이드 §4.2](../../docs/guide/opensandbox-kubernetes.md#42-valuesyaml)). 손으로 할 때는 스파이크의 절차([`C-k8s.md`](../../spike/opensandbox/reports/C-k8s.md) §1)와
 [`spike/opensandbox/k8s/deploy/`](../../spike/opensandbox/k8s/deploy/) 의 값 — kind, OpenSandbox 차트, 샌드박스 컨테이너 단위로
 강화한 템플릿, `netpol-sandbox-isolation.yaml` — 으로 준비한 뒤 `kubectl port-forward` 로 서버를 열고 다음을 준다:
 `OPENSANDBOX_K8S_ENDPOINT` · `OPENSANDBOX_K8S_API_KEY` · `OPENSANDBOX_K8S_IMAGE`(클러스터가 받을 수 있는 계약 이미지) ·

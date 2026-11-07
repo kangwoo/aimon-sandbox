@@ -347,7 +347,8 @@ build departed from it, which review notes it adopted, and how the open question
 - **`execd_run_as_init` is a `reconfigure` subcommand (§3.3(7)).** The server's config is a TOML string inside the
   chart values, so `helm --set` cannot change one key in it. `k8s-tier.sh` renders `$work/values.yaml` (awk adds the key
   under `[runtime]` when `AIMON_K8S_EXECD_INIT=1`). `up` installs with it, and `reconfigure` runs `helm upgrade` with it
-  and restarts the server.
+  and restarts the server. A follow-up made the key the default (`AIMON_K8S_EXECD_INIT=0` leaves it out) and an
+  operator requirement; see `ptc-shell-provider.md` §9 "K8s tier, measured".
 - **A pre-existing script bug, fixed.** `run_tests` kept the port-forward's pid in a `local`. The EXIT trap runs after
   the function has returned, and under `set -u` the unbound name aborted the trap. The forward kept running, and a
   green run exited 1 (seen on the second `OpenSandboxK8sIT` run). The pid is now global.

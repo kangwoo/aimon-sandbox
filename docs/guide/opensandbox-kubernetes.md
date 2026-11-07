@@ -142,6 +142,7 @@ opensandbox-server:
     [runtime]
     type = "kubernetes"
     execd_image = "docker.io/opensandbox/execd:release-1.1.1-rc.1"
+    execd_run_as_init = true                   # 필수: execd 가 샌드박스의 init 으로 고아를 거둔다(아래)
 
     [kubernetes]
     kubeconfig_path = ""                       # 클러스터 안의 서비스 계정을 쓴다
@@ -163,6 +164,13 @@ opensandbox-server:
   적는다. 프로바이더 값이 더 크면 `create` 가 400 이다. 모든 프로파일의 `terminateAfter` 는 이 값 이하여야 한다
 - **`egress.mode`**: `dns` 는 이름만 거르고 IP 직접 연결을 막지 못한다. aimon-sandbox 는 `dns+nft` 만 egress 집행으로
   인정한다
+- **`execd_run_as_init = true` 는 필수다.** aimon-core 의 Python 셸 엔진은 실행마다 watchdog 을 이중 fork 로 띄우고,
+  그 watchdog 은 샌드박스의 PID 1(또는 가장 가까운 subreaper)에게 넘어가 거기서 거둬져야 한다. 이 설정이 있으면 execd 가
+  템플릿 모드에서는 PID 1(`execd --init`), 풀(`Pool`) 모드에서는 task-executor 아래의 subreaper 가 되어 거둔다.
+  템플릿 모드는 이 설정 없이도 bootstrap 셸이 PID 1 로 거두지만, 풀 파드의 PID 1 이 task-executor 이면 아무도 거두지
+  않아 실행마다 좀비가 쌓인다(실측: [`ptc-shell-provider.md`](../design/ptc-shell-provider.md) §9 "K8s tier, measured").
+  `scripts/k8s-tier.sh` 도 이 설정으로 서버를 띄우고, 풀 모드 테스트는 PID 1 이 task-executor 인데 `execd --init` 이 없으면
+  그 원인을 이름으로 대며 실패한다
 - 컨트롤러의 `snapshot.*` 은 pause/resume 용이다. aimon-sandbox 는 아직 pause 를 쓰지 않으므로 스냅숏 레지스트리
   (`snapshot.registry`)는 두지 않아도 된다
 
@@ -373,7 +381,8 @@ scripts/k8s-tier.sh status # 클러스터 · 파드 · 풀을 찍는다
 scripts/k8s-tier.sh down   # 클러스터를 지운다
 ```
 
-스크립트는 자기 kubeconfig(`AIMON_K8S_KUBECONFIG`, 기본 `$AIMON_K8S_WORK/kubeconfig`)만 쓴다. `~/.kube/config` 와 그 현재
+서버는 §4.2 처럼 `execd_run_as_init = true` 로 뜬다. 서버 기본값을 재 보려면 `AIMON_K8S_EXECD_INIT=0` 으로 `up` 하거나
+`reconfigure` 한다. 스크립트는 자기 kubeconfig(`AIMON_K8S_KUBECONFIG`, 기본 `$AIMON_K8S_WORK/kubeconfig`)만 쓴다. `~/.kube/config` 와 그 현재
 컨텍스트는 그대로이고, 같은 이름의 클러스터가 이미 있으면 `up` 이 멈춘다. 손으로 `k8sTest` 를 돌릴 때는 `KUBECONFIG` 를
 그 파일로 export 한다.
 

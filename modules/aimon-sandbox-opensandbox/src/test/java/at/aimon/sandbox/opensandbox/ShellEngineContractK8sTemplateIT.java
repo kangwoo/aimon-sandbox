@@ -3,6 +3,8 @@ package at.aimon.sandbox.opensandbox;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
+import java.util.List;
+
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Tag;
@@ -41,7 +43,7 @@ class ShellEngineContractK8sTemplateIT extends AbstractShellEngineK8sIT {
      * §9); with the server's {@code execd_run_as_init} it is {@code execd --init} instead, which reaps too.
      */
     @Override
-    protected void checkPid1(String args) {
+    protected void checkPid1(String args, List<SandboxLeftovers.Proc> procs) {
         assertThat(args).as("PID 1 of a template-mode sandbox").containsAnyOf("bootstrap.sh", "execd --init");
     }
 }

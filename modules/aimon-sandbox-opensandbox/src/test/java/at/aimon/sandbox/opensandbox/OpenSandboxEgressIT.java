@@ -26,6 +26,7 @@ import at.aimon.sandbox.provider.OutputSink;
 import at.aimon.sandbox.provider.ProviderSandboxRef;
 import at.aimon.sandbox.provider.SandboxConnection;
 import at.aimon.sandbox.provider.SandboxLabels;
+import at.aimon.sandbox.provider.SandboxProviderException;
 
 /**
  * Egress on the real server (docs/design/workspace-sandbox.md §12.1, §16): {@code dns+nft} with a deny default blocks
@@ -54,7 +55,37 @@ class OpenSandboxEgressIT {
         return provider;
     }
 
-    private ProviderSandboxRef create(OpenSandboxProvider provider, List<String> egress, List<String> credentials) {
+    /**
+     * Creates a sandbox on {@code server}. The server answers a sidecar that failed to start with a bare HTTP 500 and
+     * logs the Docker error, so a 500 fails with the server's log of this create attached. One cause is the server's,
+     * not the tier's: it picks the sidecar's host ports by probing them inside its own container, which does not see
+     * what the host already publishes (another sandbox, the other fork's server), and on the egress path it does not
+     * retry a port conflict as it does without a policy. A 500 whose log shows that conflict is retried once, said on
+     * stderr; any other 500, or a second conflict, fails.
+     */
+    private ProviderSandboxRef create(OpenSandboxTestServer server, OpenSandboxProvider provider, List<String> egress,
+            List<String> credentials) {
+        for (int attempt = 1;; attempt++) {
+            final int mark = server.logMark();
+            try {
+                return createOnce(provider, egress, credentials);
+            } catch (SandboxProviderException e) {
+                if (e.getMessage() == null || !e.getMessage().contains("HTTP 500")) {
+                    throw e;
+                }
+                final String log = server.logSince(mark);
+                if (attempt > 1 || !OpenSandboxTestServer.isPortConflict(log)) {
+                    e.addSuppressed(
+                            new AssertionError("the server's log of this create (attempt " + attempt + "):\n" + log));
+                    throw e;
+                }
+                System.err.println("[OpenSandboxEgressIT] create answered HTTP 500 on a host-port conflict of the "
+                        + "server's own allocation; retrying once. The server's log of it:\n" + log);
+            }
+        }
+    }
+
+    private ProviderSandboxRef createOnce(OpenSandboxProvider provider, List<String> egress, List<String> credentials) {
         final String workspace = "ws:" + UUID.randomUUID();
         final ProviderSandboxRef ref = provider.create(CreateSpec.builder()
                 .key(SandboxLabels.key(OpenSandboxTestServer.DEPLOYMENT, workspace, "inc", "primary", 1))
@@ -79,13 +110,14 @@ class OpenSandboxEgressIT {
     @Test
     @DisplayName("§12.1: dns+nft deny-all blocks names, addresses, the metadata address and direct DNS")
     void denyAllBlocksEverything() throws Exception {
-        final OpenSandboxProvider provider = provider(OpenSandboxTestServer.dnsNft().config().build());
-        final ProviderSandboxRef open = create(provider, null, List.of());
+        final OpenSandboxTestServer server = OpenSandboxTestServer.dnsNft();
+        final OpenSandboxProvider provider = provider(server.config().build());
+        final ProviderSandboxRef open = create(server, provider, null, List.of());
         try (SandboxConnection control = provider.connect(open)) {
             assumeTrue(!"000".equals(http(control, "http://1.1.1.1")),
                     "an unrestricted sandbox cannot reach the internet either: the blocked rows prove nothing here");
         }
-        final ProviderSandboxRef denied = create(provider, List.of(), List.of());
+        final ProviderSandboxRef denied = create(server, provider, List.of(), List.of());
 
         assertThat(provider.verify(denied, Set.of(Capability.EGRESS_POLICY))).isEmpty();
         try (SandboxConnection connection = provider.connect(denied)) {
@@ -101,12 +133,13 @@ class OpenSandboxEgressIT {
     @Test
     @DisplayName("§12.1: an allowed name is reachable, an address it did not resolve to is not")
     void anAllowedNameIsReachableAndNothingElse() throws Exception {
-        final OpenSandboxProvider provider = provider(OpenSandboxTestServer.dnsNft().config().build());
-        final ProviderSandboxRef open = create(provider, null, List.of());
+        final OpenSandboxTestServer server = OpenSandboxTestServer.dnsNft();
+        final OpenSandboxProvider provider = provider(server.config().build());
+        final ProviderSandboxRef open = create(server, provider, null, List.of());
         try (SandboxConnection control = provider.connect(open)) {
             assumeTrue(!"000".equals(http(control, "https://example.com")), "no internet access from sandboxes");
         }
-        final ProviderSandboxRef allowed = create(provider, List.of("example.com"), List.of());
+        final ProviderSandboxRef allowed = create(server, provider, List.of("example.com"), List.of());
         try (SandboxConnection connection = provider.connect(allowed)) {
             assertThat(http(connection, "https://example.com")).isNotEqualTo("000");
             assertThat(http(connection, "http://1.1.1.1")).isEqualTo("000");
@@ -116,8 +149,9 @@ class OpenSandboxEgressIT {
     @Test
     @DisplayName("§6.4: a server enforcing dns while the provider declares dns+nft fails verification (step egress)")
     void verifyNoticesAServerThatOnlyFiltersDns() {
-        final OpenSandboxProvider provider = provider(OpenSandboxTestServer.dnsOnly().config().build());
-        final ProviderSandboxRef ref = create(provider, List.of(), List.of());
+        final OpenSandboxTestServer server = OpenSandboxTestServer.dnsOnly();
+        final OpenSandboxProvider provider = provider(server.config().build());
+        final ProviderSandboxRef ref = create(server, provider, List.of(), List.of());
 
         assertThat(provider.verify(ref, Set.of(Capability.EGRESS_POLICY))).singleElement().satisfies(failure -> {
             assertThat(failure.step()).isEqualTo("egress");
@@ -129,7 +163,8 @@ class OpenSandboxEgressIT {
     @DisplayName("§12.1: the vault receives the profile's bindings; the secret never reaches the sandbox")
     void credentialBindingsReachTheVaultNotTheSandbox() throws Exception {
         final String secret = "s3cr3t-" + UUID.randomUUID();
-        final OpenSandboxProvider provider = provider(OpenSandboxTestServer.dnsNft().config()
+        final OpenSandboxTestServer server = OpenSandboxTestServer.dnsNft();
+        final OpenSandboxProvider provider = provider(server.config()
                 .credentials(Map.of("example-read",
                         CredentialDefinition.of(
                                 CredentialScope.builder().hosts(Set.of("example.com")).methods(Set.of("GET"))
@@ -138,7 +173,7 @@ class OpenSandboxEgressIT {
                         "unused", CredentialDefinition.of(CredentialScope.builder().hosts(Set.of("other.org")).build(),
                                 CredentialDefinition.Auth.bearer(), () -> "never-sent")))
                 .build());
-        final ProviderSandboxRef ref = create(provider, List.of("example.com"), List.of("example-read"));
+        final ProviderSandboxRef ref = create(server, provider, List.of("example.com"), List.of("example-read"));
 
         assertThat(provider.verify(ref, Set.of(Capability.EGRESS_POLICY, Capability.CREDENTIAL_INJECTION))).isEmpty();
         try (SandboxConnection connection = provider.connect(ref)) {

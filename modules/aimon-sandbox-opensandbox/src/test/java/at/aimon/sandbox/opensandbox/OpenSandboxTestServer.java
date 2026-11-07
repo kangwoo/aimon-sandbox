@@ -6,6 +6,7 @@ import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -135,6 +136,35 @@ final class OpenSandboxTestServer {
 
     URI endpoint() {
         return endpoint;
+    }
+
+    /** @return how far the server's log has grown, for {@link #logSince}; 0 for a server started elsewhere */
+    int logMark() {
+        return container == null ? 0 : container.getLogs().length();
+    }
+
+    /**
+     * @return what the server logged since {@code mark}. Within a test JVM classes run one at a time and every server
+     *         is the JVM's own, so that is the server's account of the calls made since — a failed create's Docker
+     *         error among them
+     */
+    String logSince(int mark) {
+        if (container == null) {
+            return "(a server started elsewhere: its log is not available here)";
+        }
+        final String logs = container.getLogs();
+        return logs.substring(Math.min(mark, logs.length()));
+    }
+
+    /**
+     * @return whether {@code log} shows Docker refusing a host port the server picked — the messages the server's own
+     *         port-conflict retry recognizes ({@code port_allocator.is_port_publish_error}), which its egress path
+     *         lacks
+     */
+    static boolean isPortConflict(String log) {
+        final String lower = log.toLowerCase(Locale.ROOT);
+        return lower.contains("port is already allocated") || lower.contains("ports are not available")
+                || lower.contains("address already in use");
     }
 
     /** @return a configuration for this server: Docker runtime, reached through the server proxy */

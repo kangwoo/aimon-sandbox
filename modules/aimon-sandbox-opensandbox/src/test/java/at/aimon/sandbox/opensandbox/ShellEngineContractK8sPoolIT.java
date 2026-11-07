@@ -1,6 +1,9 @@
 package at.aimon.sandbox.opensandbox;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
+
+import java.util.List;
 
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -36,8 +39,20 @@ class ShellEngineContractK8sPoolIT extends AbstractShellEngineK8sIT {
         return sandbox;
     }
 
-    /** Recorded only: what PID 1 is in pool mode is what this class measures. */
+    /**
+     * Something reaps the orphans: PID 1 is not task-executor — the shipped pool's {@code /bin/sh -c}, which Debian's
+     * sh does not exec away, stays PID 1 and waits — or execd runs as {@code execd --init}, a subreaper under
+     * task-executor, which the server's {@code execd_run_as_init = true} makes it. task-executor as PID 1 reaps
+     * nothing, so without the latter every run leaks its watchdog's zombie (docs/design/ptc-shell-provider.md §9,
+     * "K8s tier, measured"); this names that cause before the leftover checks show its effect.
+     */
     @Override
-    protected void checkPid1(String args) {
+    protected void checkPid1(String args, List<SandboxLeftovers.Proc> procs) {
+        final boolean taskExecutorIsPid1 = args.startsWith("/opt/opensandbox/task-executor");
+        final boolean execdIsSubreaper = procs.stream().anyMatch(proc -> proc.args().contains("execd --init"));
+        assertThat(!taskExecutorIsPid1 || execdIsSubreaper)
+                .as("PID 1 of a pool-mode sandbox is not task-executor, or execd runs as --init (execd_run_as_init): "
+                        + "PID 1 is %s", args)
+                .isTrue();
     }
 }

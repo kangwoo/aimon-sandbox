@@ -1,6 +1,6 @@
 # Upstream issue drafts — opensandbox-group/OpenSandbox
 
-Drafts of the issues listed in [`docs/design/opensandbox-spike.md`](../../docs/design/opensandbox-spike.md) §10.
+Drafts of the issues listed in [`docs/design/opensandbox-spike.md`](../../docs/design/opensandbox-spike.md) §10, and one found later (5).
 **Not filed yet.** A duplicate search (2026-09-30: "renew paused", "renew-expiration", "proxy api key",
 "create-namespace", "Namespace helm chart") found nothing matching. All four were observed on OpenSandbox `3738975`
 (2026-09-29 main); evidence paths are relative to this directory.
@@ -158,3 +158,33 @@ Two more notes from the same install, which may belong in the docs rather than a
   chart's default values could say so.
 
 Evidence: `reports/C-k8s.md` §1, `k8s/deploy/values.yaml`.
+
+---
+
+## 5. [Bug] Docker runtime: an egress sandbox fails with HTTP 500 on a host-port conflict, without the retry the plain path has
+
+**Server:** `opensandbox/server:release-1.1.0` (the docker test tier's pin), `services/docker/` at that image. Added
+2026-11-07; not part of the spike's duplicate search.
+
+`port_allocator.allocate_host_port` probes a random port in `[docker].port_range_min, port_range_max` by binding
+`0.0.0.0:<port>` — inside the server's own process. When the server runs in a container (upstream's reference compose,
+and our docker test tier), that is the container's network namespace, so the probe does not see ports the host already
+publishes for other sandboxes or other servers on the same Docker daemon, nor host processes. The in-process
+reservation set covers a port only until its sandbox has started.
+
+Without a network policy, `create_sandbox` retries a start that fails with a port-publish error
+(`is_port_publish_error`, `MAX_PORT_PUBLISH_ATTEMPTS`). With a network policy the sidecar holds the ports
+(`_start_egress_sidecar`), and that path has no retry: the Docker error becomes `500 DOCKER::SANDBOX_START_FAILED`,
+"Egress sidecar container failed to start."
+
+Reproduced on Docker 29.2.1 with the range narrowed to 20000–20100 and those host ports held by another container: the
+egress create answers that 500 at once, and the server logs `action=start egress sidecar | error=500 Server Error …
+Bind for 0.0.0.0:20009 failed: port is already allocated`; the same create without a policy logs "Retrying with fresh
+ports" twice. Seen in CI as an occasional 500 on egress creates (about 3 in 50 runs of the tier), with two servers
+sharing the runner's Docker daemon.
+
+**Suggested:** retry the sidecar on a port-publish error as the plain path does, and/or probe with the server's
+`host_ip` or let Docker pick the host port and read it back.
+
+Evidence: aimon-sandbox `OpenSandboxEgressIT` (attaches the server's log of a 500 and retries a port conflict once);
+kangwoo/aimon-sandbox Actions runs 42332226876 (attempt 2), 39340264790 and 39224202625.
