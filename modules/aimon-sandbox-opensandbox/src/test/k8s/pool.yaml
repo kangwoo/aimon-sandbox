@@ -1,0 +1,95 @@
+# The k8s tier's pool mode (ShellEngineContractK8sPoolIT; docs/design/ptc-shell-provider.md §9): a Pool the server
+# takes a sandbox from when the create body carries `extensions.poolRef` (the provider's test seam). Applied by
+# `scripts/k8s-tier.sh up` after the chart; the image is the tier's contract image, loaded into the node.
+#
+# The shape is upstream's (OpenSandbox docs/examples/code-interpreter.md at 3738975): task-executor is the warm pod's
+# foreground process, and the server's task execs /opt/opensandbox/bootstrap.sh <entrypoint> as its child. The
+# hardening is template-hardened-ctr.yaml's, at container level. `recycleStrategy: Delete` (the default, written out):
+# a pod is never handed to a second sandbox, so no run inherits another's processes or zombies.
+#
+# The `/bin/sh -c` form of the command is load-bearing: Debian's sh does not exec a lone command, so it stays PID 1 and
+# reaps orphans (core's watchdogs, the shell wrapper's helpers) while it waits for task-executor. task-executor as PID 1
+# reaps nothing; measured, and so is the alternative — the server's `execd_run_as_init = true`, which makes execd a
+# subreaper (docs/design/ptc-shell-provider.md §9, "K8s tier, measured").
+apiVersion: sandbox.opensandbox.io/v1alpha1
+kind: Pool
+metadata:
+  name: aimon-pool
+  namespace: opensandbox
+spec:
+  template:
+    metadata:
+      labels:
+        aimon.at/k8s-tier-pool: aimon-pool
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      volumes:
+        - name: sandbox-storage
+          emptyDir: {}
+        - name: opensandbox-bin
+          emptyDir: {}
+      initContainers:
+        - name: task-executor-installer
+          image: docker.io/opensandbox/task-executor:release-1.1.1-rc.1
+          command: ["/bin/sh", "-c"]
+          args:
+            - cp /workspace/server /opt/opensandbox/task-executor && chmod +x /opt/opensandbox/task-executor
+          volumeMounts:
+            - name: opensandbox-bin
+              mountPath: /opt/opensandbox
+        - name: execd-installer
+          image: docker.io/opensandbox/execd:release-1.1.1-rc.1
+          command: ["/bin/sh", "-c"]
+          args:
+            - >-
+              cp ./execd /opt/opensandbox/execd && cp ./bootstrap.sh /opt/opensandbox/bootstrap.sh &&
+              chmod +x /opt/opensandbox/execd /opt/opensandbox/bootstrap.sh
+          volumeMounts:
+            - name: opensandbox-bin
+              mountPath: /opt/opensandbox
+      containers:
+        - name: sandbox
+          image: aimon-sandbox-contract:k8s
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-c", "/opt/opensandbox/task-executor -listen-addr=0.0.0.0:5758 -log-dir=/tmp"]
+          env:
+            - name: EXECD_ENVS
+              value: /opt/opensandbox/.env
+            - name: EXECD
+              value: /opt/opensandbox/execd
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            - name: sandbox-storage
+              mountPath: /var/lib/sandbox
+            - name: opensandbox-bin
+              mountPath: /opt/opensandbox
+  capacitySpec:
+    poolMin: 0
+    poolMax: 3
+    bufferMin: 1
+    bufferMax: 2
+  recycleStrategy:
+    type: Delete
+---
+# sandbox-isolation admits only the server; a pool pod also takes its task from the controller, on task-executor's
+# port. NetworkPolicies add up, so this opens that one port to the controller and nothing else.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: aimon-pool-task-executor, namespace: opensandbox}
+spec:
+  podSelector: {matchLabels: {aimon.at/k8s-tier-pool: aimon-pool}}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: opensandbox-system}}
+          podSelector: {matchLabels: {control-plane: controller-manager}}
+      ports: [{protocol: TCP, port: 5758}]

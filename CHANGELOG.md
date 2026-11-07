@@ -48,8 +48,29 @@ and departures: [`docs/design/ptc-shell-provider.md`](docs/design/ptc-shell-prov
   (`aimon-code-engine-testkit`, test-only) runs on both tiers.
 - **A timed-out, cancelled or limit-stopped `ExecuteCode` run leaves nothing running in the sandbox** — with the
   `0.3.4-SNAPSHOT` that carries aimon-core#336 (Q-C4: core's runtime used to leave the exec's process group, so the
-  sandbox's kill missed it). No code change here; both tiers now run the whole engine contract suite, and the docker
-  tier checks that no runtime, child or zombie is left (`docs/design/ptc-shell-provider.md` §9 Q-C4).
+  sandbox's kill missed it). No behaviour change here: main source changed only in javadoc (`SandboxShell`,
+  `SandboxExecutionEnvironment`, `OpenSandboxRunningCommand`), the rest is tests. Both tiers now run the whole engine
+  contract suite, and the docker tier checks that no runtime, child or zombie is left (`docs/design/ptc-shell-provider.md`
+  §9 Q-C4).
+- **The shell engine's checks, verified on Kubernetes in template and pool mode** (design and departures:
+  [`docs/design/ptc-shell-verification.md`](docs/design/ptc-shell-verification.md); results:
+  [`docs/design/ptc-shell-provider.md`](docs/design/ptc-shell-provider.md) §9 "K8s tier, measured"). Tests and scripts
+  only; no behaviour change.
+  - Every engine test on a sandbox is followed by a leftover check against a snapshot taken before it, so a runtime,
+    child or zombie fails the test that left it, by name, and a zombie is shown with the parent that did not reap it.
+    The timed-out test also checks, from inside the run, that the runtime led its own group and had a watchdog.
+  - `LeftoverCheckNegativeControlIT` (docker tier) shows that check turns red for an escaped child and an unreaped
+    zombie. It does not show a pre-#336 core failing; that cannot be pinned.
+  - The k8s tier gains `ShellEngineContractK8sTemplateIT` and `ShellEngineContractK8sPoolIT`: core's engine suite, the
+    leftover check, PID 1 and orphaned-zombie reaping. Both passed on kind (15/15 each, `OpenSandboxK8sIT` 8/8). Pool
+    mode reaps only because its pod's PID 1 is a shell; task-executor as PID 1 reaps nothing, unless the server sets
+    `execd_run_as_init = true` (measured; WS §20).
+  - `scripts/k8s-tier.sh` uses its own kubeconfig (`AIMON_K8S_KUBECONFIG`) and never touches `~/.kube/config` or its
+    current context; refuses a cluster name that already exists; provisions the pool of pool mode
+    (`src/test/k8s/pool.yaml`); gains `status` and `reconfigure` (`AIMON_K8S_EXECD_INIT`); and no longer leaves its
+    port-forward running or exits 1 after a green run (its EXIT trap named an out-of-scope local under `set -u`).
+  - `OpenSandboxProviderConfig` has a package-private `extensions` seam that the pool class uses for
+    `extensions.poolRef`. It is not API. Pools stay out of the SPI (WS §6.4).
 
 ### Added: groundwork for core's programmatic tool calling (shell engine)
 

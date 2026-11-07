@@ -763,14 +763,59 @@ tests (above). What remains, checked here:
   pinned server: docker makes it the container's entrypoint, and Kubernetes (template mode) the sandbox container's
   command. Its `/bin/sh` starts execd and the entrypoint (`tail -f /dev/null`) in the background and blocks in `wait`
   on the latter; a POSIX shell's `wait` reaps any child that exits meanwhile, adopted orphans included. With
-  `runtime.execd_run_as_init = true` it execs `execd --init`, a reaper by design. The docker tier asserts it
-  (`ShellEngineContractIT.aTimedOutRunLeavesNothingInTheSandbox`: no `Z` process after the suite's runs); the K8s tier
-  was not run for it. Not covered: Kubernetes pool mode (`extensions.poolRef`, unused here) runs `bootstrap.sh` as a
-  task under the pool pod's task-executor, whose PID 1 the server does not choose. An image contract sentence is not
-  needed: the PID 1 is the provider's, not the image's.
+  `runtime.execd_run_as_init = true` it execs `execd --init`, a reaper by design. The docker tier asserts it after
+  every test of `ShellEngineContractIT` (no new `Z` process, runtime or child of the program), and the K8s tier now in
+  template and pool mode (*K8s tier, measured* below). Pool mode (`extensions.poolRef`) runs `bootstrap.sh` as a task
+  under the pool pod's task-executor, so its PID 1 is the `Pool`'s, not the server's: it reaps only if that pod's PID 1
+  does, or if `execd_run_as_init` makes execd a subreaper (measured below). An image contract sentence is not needed:
+  the PID 1 is the provider's (or the pool's), not the image's.
 - **`shell()` and `supports` provision nothing** (core's javadoc, item 10 of its design). `SandboxExecutionEnvironment
   .shell()` returns the shell built with the environment, and `SandboxShell.supports` / `getWorkingDirectory` are
   static; `ShellEngineAvailabilityTest.askingTheShellProvisionsNothing` pins it (no provider call of any kind).
+
+### K8s tier, measured (2026-11-07)
+
+Run on a throwaway kind cluster (`aimon-sandbox-verify`, deleted afterwards) provisioned by `scripts/k8s-tier.sh up`, with
+its own kubeconfig; design and departures: [`ptc-shell-verification.md`](ptc-shell-verification.md). kind v0.33.0,
+node `kindest/node:v1.37.0` (containerd 2.3.4, arm64), OpenSandbox chart at `3738975`, server, controller, execd, egress
+and task-executor `release-1.1.1-rc.1` (docker.io), the tier's contract image (`src/test/docker/Dockerfile`), the pool
+of `src/test/k8s/pool.yaml` (hardened at container level like the template, `recycleStrategy: Delete`).
+
+| Class | Mode | Tests | Passed | Failed | Skipped |
+|---|---|---|---|---|---|
+| `OpenSandboxK8sIT` | template | 8 | 8 | 0 | 0 (the two internet checks ran) |
+| `ShellEngineContractK8sTemplateIT` | template | 15 | 15 | 0 | 0 |
+| `ShellEngineContractK8sPoolIT` | pool | 15 | 15 | 0 | 0 |
+
+That is the final, unfiltered `scripts/k8s-tier.sh test` (54 s, exit 0). The 15 of each shell-engine class are core's 12
+engine tests, the timed-out run with its watchdog evidence, the PID 1 record and the orphaned-zombie test; each is
+followed by the leftover check against a snapshot taken before it.
+
+- **PID 1, template mode:** `/bin/sh /opt/opensandbox/bootstrap.sh tail -f /dev/null` (asserted).
+- **PID 1, pool mode:** `/bin/sh -c /opt/opensandbox/task-executor -listen-addr=0.0.0.0:5758 -log-dir=/tmp` — the pool
+  pod's command. Debian's `sh` does not exec a lone `-c` command, so it stays PID 1 and its `wait` reaps; task-executor
+  (Go) runs under it as PID 11. The sandbox's `bootstrap.sh` is task-executor's child.
+- **Zombies:** none left in either mode, by the inherited tests or the dedicated ones; the timed-out run's probe saw the
+  runtime lead its own group, the anchor in another, and a watchdog reparented outside the runtime's children.
+- **Diagnostic: task-executor as PID 1.** The same pool with `command: [task-executor, …]` (no shell): every test failed.
+  Core's 12 engine tests passed their bodies and failed only in the leftover check; the timed-out test and the
+  orphaned-zombie test failed in their bodies. Zombies piled up under PID 1 — core's watchdogs, and also `[sleep]` and
+  `[bash]` of this module's own shell wrapper. task-executor does not reap orphans.
+- **Diagnostic: the same, with the server's `execd_run_as_init = true`** (`AIMON_K8S_EXECD_INIT=1 scripts/k8s-tier.sh
+  reconfigure`): 15/15 green with task-executor still PID 1 — `execd --init`, not PID 1, makes itself a subreaper and
+  reaps the task's orphans. Template mode under that setting: 15/15, PID 1 `/opt/opensandbox/execd --init -- tail -f
+  /dev/null`, which the template assertion accepts.
+- **So a pool's pods need a reaping PID 1, or the server needs `execd_run_as_init = true`.** The tier's pool has the
+  former; WS §20 carries the question for real pools.
+- **Cold start:** the very first run of `OpenSandboxK8sIT` on the fresh node failed 2 of 8 with the server's own 504
+  ("Timeout waiting for sandbox … to be Running with IP. Elapsed: 60.0s") while the node pulled the egress image (2 min
+  27 s, 131 MB); rerun warm: 8/8. Not a product failure; the guide's kind section mentions it.
+- **Not run:** nothing that the tier has was skipped. Gaps that stay: one node, runc only (no gVisor or Kata), and
+  `OpenSandboxK8sIT` does not run in pool mode (the pool profile has no egress or credentials, which pool mode refuses).
+- **Negative control** (docker tier, `LeftoverCheckNegativeControlIT`): the leftover check fails on an escaped child of
+  a timed-out run (a `start_new_session` child, which is what the pre-#336 runtime was) and on an unreaped zombie,
+  naming the mark and the parent. That shows the detector turns red. It does not show a pre-#336 core failing: that
+  artefact cannot be pinned, and core is not modified here.
 
 ### Review 2's non-blocking items
 

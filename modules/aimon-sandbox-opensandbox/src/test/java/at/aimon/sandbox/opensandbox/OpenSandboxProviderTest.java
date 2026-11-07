@@ -117,8 +117,23 @@ class OpenSandboxProviderTest {
             assertThat(body.has("networkPolicy")).as("no egress requested: no policy").isFalse();
             assertThat(body.has("credentialProxy")).isFalse();
             assertThat(body.has("runtimeClass")).isFalse();
+            assertThat(body.has("extensions")).as("no test seam set: no extensions").isFalse();
             assertThat(server.requests("POST", "/v1/sandboxes").get(0).header("OPEN-SANDBOX-API-KEY"))
                     .isEqualTo(FakeOpenSandboxServer.API_KEY);
+        }
+
+        @Test
+        @DisplayName("the k8s tier's test seam sends extensions.poolRef, and nothing a pool refuses")
+        void theExtensionsSeamIsSentAsIs() {
+            try (OpenSandboxProvider pooled = new OpenSandboxProvider(
+                    server.config().extensions(Map.of("poolRef", "aimon-pool")).build())) {
+                pooled.create(spec("ws:a", 1).build());
+            }
+
+            final JsonNode body = server.requests("POST", "/v1/sandboxes").get(0).json();
+            assertThat(body.path("extensions").toString()).isEqualTo("{\"poolRef\":\"aimon-pool\"}");
+            assertThat(body.has("networkPolicy")).isFalse();
+            assertThat(body.has("volumes")).isFalse();
         }
 
         @Test

@@ -96,9 +96,18 @@ WorkspaceSandbox sandbox = WorkspaceSandbox.builder().settings(settings).provide
 (`.github/workflows/build.yml` 의 `integration` 잡)에서 돈다.
 
 **k8s 계층**은 클러스터를 만들지 않는다. `scripts/k8s-tier.sh up` 이 아래의 구성을 kind 위에 만들고, `scripts/k8s-tier.sh test`
-가 서버를 포트포워드해 모든 검사를 켠 채 돌리며, `scripts/k8s-tier.sh down` 이 지운다. 손으로 할 때는 스파이크의 절차([`C-k8s.md`](../../spike/opensandbox/reports/C-k8s.md) §1)와
+가 서버를 포트포워드해 모든 검사를 켠 채 돌리며, `scripts/k8s-tier.sh down` 이 지운다. 스크립트는 자기 kubeconfig
+(`AIMON_K8S_KUBECONFIG`, 기본 `$AIMON_K8S_WORK/kubeconfig`)만 읽고 쓰므로 `~/.kube/config` 와 그 현재 컨텍스트는 건드리지
+않고, 이미 있는 이름의 클러스터는 받아들이지 않는다(`AIMON_K8S_CLUSTER` 로 이름을 바꾼다). `scripts/k8s-tier.sh status` 는
+클러스터 · 파드 · 풀을 기록용으로 찍는다. 셸 엔진은 두 모드로 돈다 — `ShellEngineContractK8sTemplateIT`(서버가 템플릿으로
+파드를 만든다)와 `ShellEngineContractK8sPoolIT`(서버가 [`src/test/k8s/pool.yaml`](src/test/k8s/pool.yaml) 의 `Pool` 에서
+파드를 받는다, `extensions.poolRef` — 프로바이더의 테스트 전용 이음매다). 둘 다 코어의 엔진 계약 스위트, 남은 프로세스 검사,
+PID 1 기록, 고아 좀비 회수를 돈다. 측정 결과는
+[`ptc-shell-verification.md`](../../docs/design/ptc-shell-verification.md) 에 있다. 손으로 할 때는 스파이크의 절차([`C-k8s.md`](../../spike/opensandbox/reports/C-k8s.md) §1)와
 [`spike/opensandbox/k8s/deploy/`](../../spike/opensandbox/k8s/deploy/) 의 값 — kind, OpenSandbox 차트, 샌드박스 컨테이너 단위로
 강화한 템플릿, `netpol-sandbox-isolation.yaml` — 으로 준비한 뒤 `kubectl port-forward` 로 서버를 열고 다음을 준다:
 `OPENSANDBOX_K8S_ENDPOINT` · `OPENSANDBOX_K8S_API_KEY` · `OPENSANDBOX_K8S_IMAGE`(클러스터가 받을 수 있는 계약 이미지) ·
 `OPENSANDBOX_K8S_CONTROL_PLANE`(샌드박스가 보는 서버 주소, 기본 `opensandbox-server.opensandbox-system.svc:80`) ·
-`OPENSANDBOX_K8S_RUNTIME_CLASS`(있으면) · `OPENSANDBOX_K8S_INTERNET=1`(자격 증명 범위 검사). 없으면 모든 테스트를 건너뛴다.
+`OPENSANDBOX_K8S_RUNTIME_CLASS`(있으면) · `OPENSANDBOX_K8S_INTERNET=1`(자격 증명 범위 검사) · `OPENSANDBOX_K8S_POOL`(풀 모드의
+`Pool` 이름, 없으면 풀 모드 클래스를 건너뛴다). 없으면 모든 테스트를 건너뛴다. 런타임 클래스 검사는 `kubectl` 을 부르므로
+`KUBECONFIG` 를 스크립트와 같은 파일로 export 한다.

@@ -4,14 +4,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.IOException;
-import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.TimeUnit;
@@ -34,7 +32,6 @@ import at.aimon.sandbox.profile.SandboxProfile;
 import at.aimon.sandbox.provider.CreateSpec;
 import at.aimon.sandbox.provider.ExecOutcome;
 import at.aimon.sandbox.provider.ExecSpec;
-import at.aimon.sandbox.provider.HostPort;
 import at.aimon.sandbox.provider.OutputSink;
 import at.aimon.sandbox.provider.ProviderSandboxRef;
 import at.aimon.sandbox.provider.ResourceSpec;
@@ -66,36 +63,20 @@ class OpenSandboxK8sIT {
     private final String deployment = "k8s-" + UUID.randomUUID().toString().substring(0, 8);
 
     private static String env(String name) {
-        return Optional.ofNullable(System.getenv(name)).filter(v -> !v.isBlank()).orElse(null);
-    }
-
-    private static HostPort controlPlane() {
-        return HostPort.parse(Optional.ofNullable(env("OPENSANDBOX_K8S_CONTROL_PLANE"))
-                .orElse("opensandbox-server.opensandbox-system.svc:80"));
+        return K8sTier.env(name);
     }
 
     private static OpenSandboxProviderConfig.Builder config() {
-        final OpenSandboxProviderConfig.Builder config = OpenSandboxProviderConfig.builder()
-                .endpoint(URI.create(env("OPENSANDBOX_K8S_ENDPOINT")))
-                .apiKey(() -> Optional.ofNullable(env("OPENSANDBOX_K8S_API_KEY")).orElse(""))
-                .runtime(OpenSandboxProviderConfig.Runtime.KUBERNETES).maxExpiry(Duration.ofHours(1))
-                .useServerProxy(true).egressEnforcement(OpenSandboxProviderConfig.EgressEnforcement.DNS_NFT)
-                .networkIsolation(OpenSandboxProviderConfig.Declaration.DECLARED)
-                .hardenedSecurityContext(OpenSandboxProviderConfig.Declaration.DECLARED)
-                .controlPlaneProbes(List.of(controlPlane())).defaultResources("250m", "256Mi");
-        Optional.ofNullable(env("OPENSANDBOX_K8S_RUNTIME_CLASS")).ifPresent(name -> config.runtimeClass(
-                OpenSandboxProviderConfig.RuntimeClass.of(name, OpenSandboxProviderConfig.RuntimeKind.OTHER)));
-        return config;
+        return K8sTier.config();
     }
 
     private static String image() {
-        return Optional.ofNullable(env("OPENSANDBOX_K8S_IMAGE")).orElse("ghcr.io/kangwoo/aimon-sandbox-runtime:1");
+        return K8sTier.image();
     }
 
     @BeforeEach
     void requireCluster() {
-        assumeTrue(env("OPENSANDBOX_K8S_ENDPOINT") != null,
-                "OPENSANDBOX_K8S_ENDPOINT is not set: the k8s tier needs a provisioned cluster (see the README)");
+        assumeTrue(env(K8sTier.ENDPOINT) != null, K8sTier.NO_CLUSTER);
         provider = new OpenSandboxProvider(config().build());
     }
 
