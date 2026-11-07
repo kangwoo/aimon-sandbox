@@ -254,6 +254,10 @@ public final class OpenSandboxProvider implements SandboxProvider {
                         .put("createIfNotExists", true);
             }
         }
+        if (!config.extensions().isEmpty()) {
+            final ObjectNode extensions = body.putObject("extensions");
+            config.extensions().forEach(extensions::put);
+        }
         return body;
     }
 

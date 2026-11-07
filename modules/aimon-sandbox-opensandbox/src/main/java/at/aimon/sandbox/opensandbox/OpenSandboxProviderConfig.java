@@ -138,6 +138,7 @@ public final class OpenSandboxProviderConfig {
     private final List<String> entrypoint;
     private final String defaultCpu;
     private final String defaultMemory;
+    private final Map<String, String> extensions;
 
     private OpenSandboxProviderConfig(Builder builder) {
         this.endpoint = normalize(builder.endpoint);
@@ -162,6 +163,7 @@ public final class OpenSandboxProviderConfig {
         this.entrypoint = List.copyOf(builder.entrypoint);
         this.defaultCpu = builder.defaultCpu;
         this.defaultMemory = builder.defaultMemory;
+        this.extensions = Collections.unmodifiableMap(new LinkedHashMap<>(builder.extensions));
     }
 
     /** @return a new builder with the §13.2 defaults */
@@ -329,6 +331,14 @@ public final class OpenSandboxProviderConfig {
         return defaultMemory;
     }
 
+    /**
+     * @return the create body's {@code extensions}, empty by default. Package-private and set only by the k8s test
+     *         tier's pool mode ({@code poolRef}): pools are not part of the SPI (docs/design/workspace-sandbox.md §6.4)
+     */
+    Map<String, String> extensions() {
+        return extensions;
+    }
+
     @Override
     public String toString() {
         return "OpenSandboxProviderConfig{endpoint=" + endpoint + ", runtime=" + runtime + ", maxExpiry=" + maxExpiry
@@ -359,6 +369,7 @@ public final class OpenSandboxProviderConfig {
         private List<String> entrypoint = List.of("tail", "-f", "/dev/null");
         private String defaultCpu = "1";
         private String defaultMemory = "1Gi";
+        private Map<String, String> extensions = Map.of();
 
         private Builder() {
         }
@@ -454,6 +465,12 @@ public final class OpenSandboxProviderConfig {
         public Builder defaultResources(String cpu, String memory) {
             this.defaultCpu = cpu;
             this.defaultMemory = memory;
+            return this;
+        }
+
+        /** Test seam of the k8s tier's pool mode only; see {@link OpenSandboxProviderConfig#extensions()}. */
+        Builder extensions(Map<String, String> extensions) {
+            this.extensions = Objects.requireNonNull(extensions, "extensions must not be null");
             return this;
         }
 

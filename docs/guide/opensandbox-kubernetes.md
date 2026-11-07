@@ -367,12 +367,18 @@ OPENSANDBOX_K8S_INTERNET=1 \
 위 과정을 kind 위에서 한 번에 하는 스크립트가 있다. 처음이라면 여기서 동작을 보고 운영 클러스터로 옮긴다.
 
 ```bash
-scripts/k8s-tier.sh up     # kind 클러스터 + 차트 + 강화 템플릿 + NetworkPolicy + RuntimeClass + 계약 이미지
-scripts/k8s-tier.sh test   # 서버를 포트포워드하고 k8sTest 를 모든 검사를 켜고 돈다(인터넷 필요)
+scripts/k8s-tier.sh up     # kind 클러스터 + 차트 + 강화 템플릿 + NetworkPolicy + RuntimeClass + 계약 이미지 + 풀
+scripts/k8s-tier.sh test   # 서버를 포트포워드하고 k8sTest 를 모든 검사를 켜고 돈다(인터넷 필요), 템플릿 · 풀 모드
+scripts/k8s-tier.sh status # 클러스터 · 파드 · 풀을 찍는다
 scripts/k8s-tier.sh down   # 클러스터를 지운다
 ```
 
-kind, kubectl, helm, git, docker 가 필요하고 Docker 메모리가 3 GB 쯤 든다. 이 스크립트의 API 키(`spike-key`)와
+스크립트는 자기 kubeconfig(`AIMON_K8S_KUBECONFIG`, 기본 `$AIMON_K8S_WORK/kubeconfig`)만 쓴다. `~/.kube/config` 와 그 현재
+컨텍스트는 그대로이고, 같은 이름의 클러스터가 이미 있으면 `up` 이 멈춘다. 손으로 `k8sTest` 를 돌릴 때는 `KUBECONFIG` 를
+그 파일로 export 한다.
+
+kind, kubectl, helm, git, docker 가 필요하고 Docker 메모리가 3 GB 쯤 든다. 새 노드에서의 첫 `test` 는 egress 이미지를 받는 동안
+(측정 2분 27초) 서버가 샌드박스 생성을 60초에 끊어 504 로 몇 개가 실패할 수 있다. 한 번 더 돌리면 된다. 이 스크립트의 API 키(`spike-key`)와
 RuntimeClass(runc 로 만든 `spike-runc`)는 테스트용이다.
 
 ---

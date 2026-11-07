@@ -2059,6 +2059,9 @@ CI 워크플로가 없으므로 "4단계의 첫 CI" 는 아직 오지 않았다(
 없으면) 건너뛴다. 클러스터는 테스트가 만들지 않고 미리 준비한 것을 쓴다(모듈 README 의 절차).
 단계마다 그 단계의 기능만 통과 조건이 된다 — 4단계: 라벨 검증, runtimeClass·SecurityContext 적용, east-west·제어면 차단.
 5단계: RWX 볼륨과 샌드박스별 `ro` 마운트, PVC 삭제와 finalizer. 7단계: pause 시 파드 재생성 여부. 이후 릴리스마다 돈다.
+코어 셸 엔진의 계약 스위트와 남은 프로세스 · PID 1 · 좀비 회수 검사는 템플릿 모드(`ShellEngineContractK8sTemplateIT`)와 풀
+모드(`ShellEngineContractK8sPoolIT`, `OPENSANDBOX_K8S_POOL`)로 돈다 — 측정 결과는
+[`ptc-shell-provider.md`](ptc-shell-provider.md) §9 "K8s tier, measured".
 
 **멀티 노드 시나리오의 두 단계.** 4단계의 "두 노드" 시나리오는 한 JVM 안의 매니저 둘(각자 다른 `nodeId` · 연결 캐시 ·
 노드 로컬 락)이 한 `InMemory` 저장소를 공유하는 시뮬레이션이다 — 경합 논리를 영속 저장소보다 먼저 검증한다. 실제
@@ -2281,12 +2284,6 @@ docker 계층, K8s 에서만 드러나는 것은 k8s 계층 — 는 [`workspace-
 
 각 항목에 닫아야 하는 시점을 적는다. 시점이 없는 항목은 구현을 막지 않는다.
 
-- ~~**§6.4 의 확인 칸**~~ *(2단계에서 닫았다)* — [`opensandbox-spike.md`](opensandbox-spike.md) §1. 서버가 활동에 따라 만료를
-  스스로 미는 기능(OSEP-0009)은 heartbeat 의 `extendExpiry` 를 대신하지 못한다 — 샌드박스마다 켜야 하고, 서버 프록시나 K8s
-  ingress 를 거친 요청만 활동으로 센다(Docker 의 직접 엔드포인트는 세지 않는다)
-- ~~**OpenSandbox 의 출력 바이트**~~ *(4단계에서 닫았다)* — SPI 에 "출력은 줄로 정규화될 수 있다" 를 적고 계약 스위트의 검사를
-  줄바꿈으로 끝나는 출력으로 바꿨다. `SandboxShell` 의 프로바이더 쪽 상한은 U+FFFD 팽창을 감안해 `3 × max + 1 KiB` 다(§6.1,
-  단계 4 구현 설계 §5.3)
 - **워크스페이스 단위 seed 매개변수** *(6단계의 JDBC 스키마를 굳히기 전에 닫는다)* — `seed`(원격 · ref · 자격 증명
   이름)는 지금 프로파일에만 있다. 그래서 저장소나 브랜치가 티켓마다 다르면 프로파일을 저장소 수만큼 만들어야 하고,
   테넌트마다 다른 자격 증명을 쓸 방법이 없다. 병렬 해법 탐색(§18-8)도 모든 실험 슬롯이 같은 기준 커밋에서 출발해야
@@ -2297,21 +2294,6 @@ docker 계층, K8s 에서만 드러나는 것은 k8s 계층 — 는 [`workspace-
   경로. 워크플로 스크립트의 `agent({..., attributes: { sandbox: { slot: 'exp-a' } }})`(EE-42, 코어 0.3.1)는 이미 쓸 수 있지만
   — 등록된 정의가 슬롯을 정했으면 스크립트가 바꾸지 못한다 — `Task` 도구 인자로 여는
   것은 모델에게 슬롯 선택권을 주는 일이다. 허용 목록으로 좁혀 열지, 워크플로에만 둘지 정해야 한다
-- ~~**스킬 선언 훅을 샌드박스에서 돌리기**~~ *(코어 0.3.1 이 닫았다)* — 코어의 훅 실행기가 실행 환경을 받는다(코어 EE-12).
-  스킬이 선언한 셸 훅은 그 실행의 샌드박스 셸에서 돌고, 거부는 선택이 되었다(§12.1). 남은 것은 다음 항목이다
-- ~~**샌드박스에서 도는 스킬 셸 훅의 뒷일**~~ *(3·4단계 릴리스 전에 닫았다)* — (a) 거부용 헬퍼
-  `WorkspaceSandbox.skillHookSetParser()` · `markdownSkillParser()` 와 `SkillHookRejectionTest` 는 지웠다. 거부가 필요한 배치는
-  코어의 `NoOpShellActionExecutor` 로 파서를 만든다. (b) `OrcaRuntimeSandboxE2ETest` 가 코어 파서로 만든 `preTool` 셸 가드를
-  실제 `OrcaAgentExecutor` 로 돌려, 샌드박스에서 돌고 종료 코드 2 로 막고 샌드박스가 사용 불가일 때 막는(`failOpen` 이면
-  통과하는) 것을 확인한다. (c) 코어 0.3.2 가 훅 명령에 `ExecutionOptions.isHook()` 을 싣고(코어 PR #211), `SandboxShell` 이
-  그 명령을 락 없이 돌린다(이슈 #9, §9 · §12.1). 고치면서 드러난 것 — 0.1.0 의 문서는 훅의 `cd`/`export` 가 모델의 셸
-  상태에 남는다고 했지만 그런 적은 없었다. 훅에는 늘 `AIMON_*` 변수가 붙어 래퍼가 서브셸에서 돌렸다. 실제 문제는 락뿐이었다
-- ~~**백그라운드 명령을 끝내는 도구**~~ *(코어 0.3.1 과 이 모듈의 취소 지원으로 닫았다)* — 코어의 `KillShell` 이 취소 신호를
-  걸고 `SandboxShell` 이 그 신호로 원격 명령을 끝낸다(§7, §9). 끝내지 않은 명령은 `backgroundCommandTimeout` 에서 끝난다(§5.3).
-  남은 한계는 다음 두 항목이다
-- ~~**백그라운드 상한의 기본값**~~ *(3·4단계 릴리스 전에 닫았다)* — 24시간(`SandboxProfile.DEFAULT_BACKGROUND_COMMAND_TIMEOUT`).
-  코어 0.3.1 이전에 허용하던 길이를 그대로 두어 첫 릴리스가 관찰되는 동작을 조이지 않게 했고, `backgroundHeartbeatLimit` 과는
-  독립이다. 슬롯을 깨워 둘 자격을 잃는 시각에 끝내고 싶은 운영자는 두 값을 같게 잡는다(§5.3)
 - **프로세스 그룹 밖까지 닿는 kill** — 취소와 타임아웃의 kill 은 exec 의 프로세스 그룹까지 닿는다(§9). 명령이 `setsid` ·
   `set -m` 으로 그룹 밖에 둔 작업은 샌드박스가 사라질 때까지 남고, 코어 계약의 "명령이 띄운 모든 것" 을 그만큼 못 채운다
   (코어 `LocalShell` 의 EE-55 와는 모양이 다른 한계다 — 그룹째 죽이므로 나중에 태어난 손자 프로세스도 잡지만, 그룹을 떠난
@@ -2325,69 +2307,22 @@ docker 계층, K8s 에서만 드러나는 것은 k8s 계층 — 는 [`workspace-
   명령은 계속 돌지만 결과를 받을 쪽이 없다. 프로바이더 쪽 명령 id 를 레코드에 남겨 다른 노드가 다시 붙게
   할지는 6단계(영속 저장소) 이후에 판단한다. 그때까지는 heartbeat 가 노드와 함께 멈추므로, 결과를 받을 쪽이
   없는 명령은 idle 정책에 따라 샌드박스와 함께 정리된다
-- ~~**principal 없는 포크의 대체 경로**~~ *(첫 릴리스 전에 닫았다)* — 대체 경로를 없앴다. principal 없는 포크 요청은
-  부모의 `caller` 를 물려받지 않고 루트 요청과 같은 주체 검사를 받는다(§8.2). 근거는 코어 0.3.1 의 포크 경로 전수 조사다.
-  포크 환경을 해석하는 곳은 `DefaultSubagentExecutor.resolveExecutionEnvironment` 한 곳이고, 그 principal 은
-  `SubagentExecutionEnvironment` 의 principal 이다. 그 환경을 만드는 곳 — `TaskTool` · `WorkflowTool` ·
-  `GraalJsWorkflowTool`(도구 호출) · `SubagentBackedSkillForkExecutor`(`Skill` 도구, 슬래시 명령) — 은 모두 도구 문맥의
-  `PRINCIPAL` 을 싣고, 그 값은 루트 환경을 해석한 실행 요청(루틴은 작업의 owner)의 principal 과 같은 출처다. principal 이
-  빠지는 곳은 에이전트 단위 `WorkflowRunner`(백그라운드 Workflow · WorkflowJs 실행)뿐인데, 그 포크는 부모 환경도 없어
-  어차피 사용 불가다(격리 단계의 부모도 principal 없이 해석된다). 조사 결과는
-  [코어 0.3.1 이행 설계](workspace-sandbox-core-031.md) §9 Q6 에 있다
 - **스트리밍 도구 출력** — SPI 는 `OutputSink` 로 준비되어 있지만 코어 `BashTool` 이 부분 출력을 이벤트로
   내보내는 경로가 없다
 - **`sharedAccess: none` 슬롯의 git 직접 clone** *(5단계에서 닫는다)* — §18 은 git seed 를 5단계에 두었고 직접 clone 은
   어느 단계인지 말하지 않는다. 3단계는 `seed` 를 가진 프로파일을 기동 시 거부한다(§11.3, §13.2). 구현되지 않은 경로가
   조용히 아무것도 하지 않는 것보다 낫다. 넣을 때는 bare 저장소 seed 와 함께 `SandboxSeeder` 에 넣는다(단계 3 구현 설계
   §10 Q2)
-- ~~**자격 증명 바인딩의 겹침 검사**~~ *(4단계에서 닫았다)* — 프로바이더가 범위를 데이터로 내놓고
-  (`ProviderCapabilities.credentialScopes()`), 기동 시 검사가 이름 · 겹침 · egress 덮음을 본다. 검증 훅은 두지 않았다(§12.1,
-  §13.2, 단계 4 구현 설계 §6.6)
-- ~~**seed 의 네트워크 격리 점검**~~ *(4단계에서 닫았다)* — 프로바이더가 `controlPlaneEndpoints()` 를 알려 주고 seed 스크립트가
-  bash `/dev/tcp` 로 탐침한다. egress 모드와 vault 바인딩은 seed 단계의 `SandboxProvider.verify` 가 대조한다(§11.3, 단계 4 구현
-  설계 §6.4)
-- ~~**샌드박스가 egress 프록시의 CA 를 신뢰하는가**~~ *(K8s 계층을 처음 돌리며 닫았다)* — execd 의 bootstrap 이 사이드카의 CA
-  를 기다렸다가 시스템 신뢰 저장소에 넣고(권한이 있을 때 — 강화 템플릿의 uid 1000 에서는 못 한다), CA 를 합친 번들을
-  `SSL_CERT_FILE` · `REQUESTS_CA_BUNDLE` 로, CA 자체를 `NODE_EXTRA_CA_CERTS` 로 내보낸다. curl · Python · Node 는 그것으로
-  검증을 켠 채 주입을 받는다. **git 은 받지 못했다** — Debian 의 git 은 GnuTLS 판 libcurl 이라 `SSL_CERT_FILE` 을 읽지 않고
-  `server certificate verification failed` 로 끝났다. 그래서 셸 래퍼가 `SSL_CERT_FILE` 이 있고 `GIT_SSL_CAINFO` 가 없으면
-  `GIT_SSL_CAINFO` 를 그 번들로 둔다(§9). k8s 계층의 `credentialsAreInjectedOnlyWithinTheirScope` 와
-  `gitOverHttpsWorksUnderInjection` 이 검증을 켠 채 확인한다. 같은 실행이 드러낸 것이 하나 더 있다 — egress 가 있으면 bootstrap
-  이 CA 를 기다린 뒤에 execd 를 띄우므로 `Running` 직후의 첫 명령이 502 를 받았다(다섯 번에 한 번). `create` 가 execd 의
-  `/ping` 까지 기다린다(단계 4 구현 설계 §12 Q4)
-- ~~**러너에서의 docker 계층**~~ *(3·4단계 릴리스 전에 닫았다)* — `.github/workflows/build.yml` 의 `integration` 잡이 PR 마다
-  Linux(ubuntu, amd64) 러너에서 `integrationTest` 를 돌린다. 서버 컨테이너 도달(`host.docker.internal` + host-gateway), amd64
-  execd 이미지, 러너 커널의 `dns+nft` 가 모두 통과했다. 첫 실행이 드러낸 것 하나는 고쳤다 — Linux 의 `Instant.now()` 는
-  나노초까지 주는데 서버는 마이크로초만 저장해 `extendExpiry` 가 요청보다 1µs 미만 이른 만료를 남겼으므로, 프로바이더가 목표를
-  마이크로초로 올림해 보낸다(§16, 단계 4 구현 설계 §12 Q10)
 - **내장 `VolumeReclaimer`** *(5단계에서 닫는다)* — 4단계는 `VolumeReclaimer` 인터페이스만 두고 주입된 인스턴스를 받는다.
   §13.2 의 `volume-reclaimer: kubernetes | docker` 처럼 속성으로 고르는 내장 구현(K8s PVC · Docker 볼륨 API)과 볼륨 조정은
   공유 볼륨과 함께 5단계에 들어간다(단계 4 구현 설계 §12 Q3)
 - **프로바이더 설정의 속성 바인딩** — `OpenSandboxProviderConfig` 는 빌더다. `api-key` 와 자격 증명 비밀은 `Supplier` 로,
   `volume-reclaimer` 는 인스턴스로 받는다. Spring 스타터가 생기면 §13.2 의 속성을 이리로 옮기는 방법(비밀의 출처, 빈 이름)을
   그때 정한다
-- ~~**§14 의 span 과 메트릭을 어느 단계가 가지는가**~~ *(3·4단계 릴리스 전에 닫았다)* — 어느 단계에도 두지 않는다. 첫
-  릴리스는 `SandboxEventListener` 의 수명 이벤트(§14 의 감사 쪽)만 낸다. span 과 메트릭은 Micrometer 의존성과 라벨 설계가
-  따라오므로, 그것을 읽을 소비처가 생길 때 그 소비처의 요구로 설계한다(단계 3 구현 설계 §10 Q6)
-- ~~**aimon-core SNAPSHOT 고정**~~ *(닫았다)* — aimon-core 0.3.1 이 Central 에 나왔고, 고정을 그 릴리스로 올리고
-  `mavenLocal()` 을 지웠다(PR #7, 단계 3 구현 설계 §10 Q8)
-- ~~**aimon-core 0.3.2-SNAPSHOT 고정**~~ *(닫았다)* — 훅 표시(`ExecutionOptions.isHook()`, 이슈 #9) 때문에 Central 의
-  스냅샷 저장소에서 받던 `0.3.2-SNAPSHOT` 을 릴리스된 0.3.2 로 올리고 `build.gradle.kts` 의 저장소 블록을 지웠다
-- ~~**aimon-core 0.3.3-SNAPSHOT 고정**~~ *(닫았다)* — 요청 속성 · 세션 소유자와 삭제 이벤트 · `drainNotices()`(코어
-  #252 · #253 · #254) 때문에 Central 의 스냅샷 저장소에서 받던 `0.3.3-SNAPSHOT` 을 릴리스된 0.3.3 으로 올리고
-  `build.gradle.kts` 의 저장소 블록과 SNAPSHOT 재확인(`cacheChangingModulesFor(0)`)을 지웠다
-- ~~**요청 단위 실행 옵션**~~ *(코어 0.3.3 으로 닫았다)* — 코어가 `environment.*` 실행 속성을 `EnvironmentRequest.requestAttributes()`
-  로 넘기고(kangwoo/aimon-core#252), 메인 턴과 루틴이 `environment.sandbox.workspace` · `environment.sandbox.unattached` 로 실행
-  하나를 옮긴다. 세션 옵션은 세션 단위 기본값으로 남는다(§8.1, [관리 설계](workspace-sandbox-management.md) §12 Q1,
-  [코어 0.3.3 이행 설계](workspace-sandbox-core-033.md) §2.3)
 - **세션을 지울 때 `ws:{sessionId}` 도 닫는가** — 지금은 닫는다(§10.5). "대화 지우기" 를 같은 id 로 지우고 다시 만드는 호스트는
   그때마다 샌드박스를 잃고, 다시 만든 세션의 첫 턴은 옛 샌드박스가 사라질 때까지(보통 최대 `close-wait`, 배경 닫기가 버려지면 janitor 가 이어받는 `close-resume-after` 와 순회 한 번 더) "being removed" 로 도구가
   실패한다. 옵션만 지우고 닫기는 선택으로 둘지(`sessionLifecycleListener(boolean closeDerived)`) 정해야 한다
   ([코어 0.3.3 이행 설계](workspace-sandbox-core-033.md) §12 Q1, §14)
-- ~~**세션 소유자 읽기의 비용**~~ — 해결(2026-10-18). `sessionRecords(...)` 의 소유자 확인은 이제 코어의
-  `SessionRecordStore.loadOwner` 로 소유자만 읽는다(kangwoo/aimon-core#262, 코어 SO-5 · SO-8). 레코드 전체(대화 기록 포함)를
-  읽던 비용은 사라졌다. 노드 로컬 캐시는 여전히 두지 않는다 — 같은 id 의 재생성(다른 노드는 삭제를 듣지 못한다)에서 옛 owner 를
-  새 `ws:{sid}` 에 굳혀 버리기 때문이다([코어 0.3.3 이행 설계](workspace-sandbox-core-033.md) §12 Q3)
 - **소유자 없는 세션과 `require-principal`** — 어느 출처도 소유자를 모르는 세션은 샌드박스를 받지 못한다. `SubmitRequest.owner`
   를 싣기 전에 만든 세션이 남은 호스트는 그 세션이 사라질 때까지 `SessionOwnerLookup` 을 대체 경로로 둔다. 이 엄격함을 유지할지
   확인이 필요하다. 같은 이유로 `sessionRecords(...)` 만 준 배포는 첫 submit 전에 세션 옵션을 정할 수 없다 — 첫 턴을 요청 속성으로
@@ -2396,14 +2331,6 @@ docker 계층, K8s 에서만 드러나는 것은 k8s 계층 — 는 [`workspace-
 - **지운 세션의 옵션을 쓸어 내는 유예** — janitor 는 코어의 세션 저장소에 없는 세션의 옵션을 `closedRetention`(기본 7일)이 지난
   뒤에 지운다. 첫 submit 전에 쓴 옵션을 지키려는 유예인데, 따로 설정을 둘지 정하지 않았다
   ([코어 0.3.3 이행 설계](workspace-sandbox-core-033.md) §12 Q5)
-- ~~**코어가 꺼내지 않는 경로의 초기화 notice**~~ *(#28 로 닫았다)* — 훅(`onStop` 등) · 워크플로 스크립트의 도구 호출 · 마지막
-  도구 뒤의 스테이징이 idle reopen 이나 재생성을 일으키면 그 notice 는 꺼내지지 않은 채 환경 인스턴스와 함께 사라졌고, 다음 턴은
-  RUNNING 슬롯을 만나 아무것도 알리지 못했다. 이제 세션의 루트 환경이 초기화를 세션 옵션 레코드의 `unannouncedReset` 으로 남기고,
-  그것을 꺼낸 drain 이 지우며, 남아 있으면 다음 루트 실행이 한 번 다시 알린다(§7, [미전달 초기화 설계](workspace-sandbox-unannounced-reset.md)). 대가로 확인 쓰기가 늦거나 잃어버리면
-  (배경 실행기가 거부 · 포화, 저장소 장애) 이미 들은 초기화를 다음 턴에 한 번 더 듣는다 — 그 사이 모델이 만든 파일까지 사라졌다고
-  읽지 않도록 다시 알릴 때는 초기화 시각을 붙인다([미전달 초기화 설계](workspace-sandbox-unannounced-reset.md) §12). 워크스페이스 전환을
-  꺼낸 뒤 같은 환경이 초기화를 남기면 그 쓰기에 `lastWorkspaceId` 도 함께 적는다 — 그러지 않으면 초기화 쓰기가 레코드 버전을 먼저 올려
-  늦게 도는 전환 기록이 CAS 에 지고, 다음 턴이 같은 전환을 다시 듣는다(같은 설계 §12)
 - **턴 사이의 재생성 알림** — 실행 안의 재생성(포크가 만든 것 포함)은 generation 비교로 알린다(§7). 세션 **자신의** 루트 실행이 일으키고
   전달하지 못한 초기화는 #28 로 닫았다(위). 남은 것은 다른 주체가 일으킨 재생성이다 — 다른 세션(공유 `wsm:` 워크스페이스), 부모가 그
   턴에 다시 접속하지 않은 포크(포크는 `unannouncedReset` 을 남기지 않는다. 부모가 자기 뒤의 파일과 포크의 초기화를 가릴 수 없어
@@ -2444,14 +2371,6 @@ docker 계층, K8s 에서만 드러나는 것은 k8s 계층 — 는 [`workspace-
   ([실행 디렉터리 설계](workspace-sandbox-run-directory.md) §1)
 - **`aimon-sandbox-testkit` 의 발행** *(3·4단계 릴리스에서 닫는다)* — 계약 스위트를 이 저장소 밖의 구현도 통과해야 하므로
   발행하기로 했다(`aimon.publishable`). 첫 릴리스 전까지는 되돌릴 수 있다(단계 3 구현 설계 §10 Q5)
-- ~~**셸 엔진의 런타임이 셸의 kill 을 벗어난다**~~ *(코어 aimon-core#336 으로 닫았다)* — 코어의 `aimon_ptc.py` 가 자기
-  프로세스 그룹을 만들어 이 모듈의 kill(타임아웃 · 취소 · 줄 상한, exec 의 프로세스 그룹까지만 닿는다, §9)을 벗어났었다.
-  이제 셸이 띄운 프로세스(앵커)가 exec 의 그룹에 남고, 런타임 그룹의 워치독이 앵커가 죽으면 그 그룹을 죽인다. 이 저장소는
-  시험만 바꿨다 — 두 계층 모두 엔진 계약 스위트를 빠짐없이 돌리고(`wallClock`, `bridgeLimitStopsAtOnce` 포함), testkit
-  계층은 테스트마다 호스트에 `aimon_ptc.py` 가 남지 않았는지, docker 계층은 타임아웃 뒤 샌드박스에 런타임 · 프로그램의 자식 ·
-  좀비가 남지 않았는지 본다. 이중 fork 된 워치독은 샌드박스의 PID 1 이 거둔다 — OpenSandbox 의 PID 1 은 docker · K8s(템플릿
-  모드) 모두 `bootstrap.sh` 의 `sh` 이고, 진입점을 기다리는 `wait` 가 입양된 자식도 거둔다([PTC 셸 엔진의 제공자 쪽 설계](ptc-shell-provider.md)
-  §9 Q-C4)
 - **`.aimon-ptc/` 가 모델의 작업 트리 안에 있다** *(코어)* — 코어는 셸 엔진의 실행 디렉터리를 서술자의 작업 디렉터리 아래에 두고,
   이 환경의 작업 디렉터리는 바인딩 루트(`/workspace/repo`)다. 실행 디렉터리는 실행 끝에 지워지지만, 실행 중에 모델이 돌린 `git
   status` · `git add -A` 는 응답 파일을 본다. 서술자가 런타임 디렉터리를 따로 선언하거나 작업 디렉터리의 부모를 쓰면 풀린다. seed 의
@@ -2479,6 +2398,105 @@ docker 계층, K8s 에서만 드러나는 것은 k8s 계층 — 는 [`workspace-
 - **seed 가 `TMPDIR` 쓰기를 확인하지 않는다** — 셸 엔진의 런타임은 캡처 파일을 `tempfile.mkdtemp()` 로 만든다. 이미지 계약(§13.3)은
   쓰기 가능을 요구하지만 seed 는 확인하지 않는다(`/tmp` 쓰기는 다른 무엇에도 확인하지 않는다). 지금은 문서로만 둔다
   ([PTC 셸 엔진의 제공자 쪽 설계](ptc-shell-provider.md) Q6)
+- **풀 파드의 PID 1** *(공개 풀 지원(§6.4, §18-7)을 만들기 전에 닫는다)* — 풀 모드(`extensions.poolRef`)의 샌드박스는 풀
+  파드의 task-executor 아래 task 로 돌고, 그 파드의 PID 1 은 서버가 아니라 `Pool` 이 정한다. task-executor 는 고아를 거두지
+  않으므로, 그것이 PID 1 이면 코어 워치독과 이 모듈의 셸 래퍼가 남긴 좀비가 쌓인다(측정: 모든 테스트가 남은 좀비로 실패).
+  거두는 PID 1(k8s 계층의 풀은 `/bin/sh -c` 형태라 `sh` 가 PID 1 로 남는다)이나 서버의 `execd_run_as_init = true`(execd 가
+  subreaper 가 된다)로 풀린다 — 둘 다 측정했다. 공개 풀 지원이 이를 운영자 요구 사항으로 둘지, seed 로 확인할지 정해야 한다
+  ([검증 설계](ptc-shell-verification.md) §9 · [PTC 셸 엔진의 제공자 쪽 설계](ptc-shell-provider.md) §9 "K8s tier, measured")
+- **K8s 경로와 docker 계층의 서버 버전** — k8s 계층은 차트 커밋 `3738975` 와 `release-1.1.1-rc.1` 이미지를, docker 계층은
+  digest 로 고정한 `release-1.1.0` · execd `v1.1.0` 을 쓴다. 두 계층이 다른 서버를 검증하는 셈이다. 다음에 서버를 올릴 때
+  하나로 맞출지 정한다([검증 설계](ptc-shell-verification.md) O5)
+
+### 닫은 항목
+
+닫은 순서가 아니라 열렸던 자리의 순서다. 다른 문서가 이름으로 가리키므로 지우지 않는다.
+
+- **§6.4 의 확인 칸** *(2단계에서 닫았다)* — [`opensandbox-spike.md`](opensandbox-spike.md) §1. 서버가 활동에 따라 만료를
+  스스로 미는 기능(OSEP-0009)은 heartbeat 의 `extendExpiry` 를 대신하지 못한다 — 샌드박스마다 켜야 하고, 서버 프록시나 K8s
+  ingress 를 거친 요청만 활동으로 센다(Docker 의 직접 엔드포인트는 세지 않는다)
+- **OpenSandbox 의 출력 바이트** *(4단계에서 닫았다)* — SPI 에 "출력은 줄로 정규화될 수 있다" 를 적고 계약 스위트의 검사를
+  줄바꿈으로 끝나는 출력으로 바꿨다. `SandboxShell` 의 프로바이더 쪽 상한은 U+FFFD 팽창을 감안해 `3 × max + 1 KiB` 다(§6.1,
+  단계 4 구현 설계 §5.3)
+- **스킬 선언 훅을 샌드박스에서 돌리기** *(코어 0.3.1 이 닫았다)* — 코어의 훅 실행기가 실행 환경을 받는다(코어 EE-12).
+  스킬이 선언한 셸 훅은 그 실행의 샌드박스 셸에서 돌고, 거부는 선택이 되었다(§12.1). 남은 것은 다음 항목이다
+- **샌드박스에서 도는 스킬 셸 훅의 뒷일** *(3·4단계 릴리스 전에 닫았다)* — (a) 거부용 헬퍼
+  `WorkspaceSandbox.skillHookSetParser()` · `markdownSkillParser()` 와 `SkillHookRejectionTest` 는 지웠다. 거부가 필요한 배치는
+  코어의 `NoOpShellActionExecutor` 로 파서를 만든다. (b) `OrcaRuntimeSandboxE2ETest` 가 코어 파서로 만든 `preTool` 셸 가드를
+  실제 `OrcaAgentExecutor` 로 돌려, 샌드박스에서 돌고 종료 코드 2 로 막고 샌드박스가 사용 불가일 때 막는(`failOpen` 이면
+  통과하는) 것을 확인한다. (c) 코어 0.3.2 가 훅 명령에 `ExecutionOptions.isHook()` 을 싣고(코어 PR #211), `SandboxShell` 이
+  그 명령을 락 없이 돌린다(이슈 #9, §9 · §12.1). 고치면서 드러난 것 — 0.1.0 의 문서는 훅의 `cd`/`export` 가 모델의 셸
+  상태에 남는다고 했지만 그런 적은 없었다. 훅에는 늘 `AIMON_*` 변수가 붙어 래퍼가 서브셸에서 돌렸다. 실제 문제는 락뿐이었다
+- **백그라운드 명령을 끝내는 도구** *(코어 0.3.1 과 이 모듈의 취소 지원으로 닫았다)* — 코어의 `KillShell` 이 취소 신호를
+  걸고 `SandboxShell` 이 그 신호로 원격 명령을 끝낸다(§7, §9). 끝내지 않은 명령은 `backgroundCommandTimeout` 에서 끝난다(§5.3).
+  남은 한계는 다음 두 항목이다
+- **백그라운드 상한의 기본값** *(3·4단계 릴리스 전에 닫았다)* — 24시간(`SandboxProfile.DEFAULT_BACKGROUND_COMMAND_TIMEOUT`).
+  코어 0.3.1 이전에 허용하던 길이를 그대로 두어 첫 릴리스가 관찰되는 동작을 조이지 않게 했고, `backgroundHeartbeatLimit` 과는
+  독립이다. 슬롯을 깨워 둘 자격을 잃는 시각에 끝내고 싶은 운영자는 두 값을 같게 잡는다(§5.3)
+- **principal 없는 포크의 대체 경로** *(첫 릴리스 전에 닫았다)* — 대체 경로를 없앴다. principal 없는 포크 요청은
+  부모의 `caller` 를 물려받지 않고 루트 요청과 같은 주체 검사를 받는다(§8.2). 근거는 코어 0.3.1 의 포크 경로 전수 조사다.
+  포크 환경을 해석하는 곳은 `DefaultSubagentExecutor.resolveExecutionEnvironment` 한 곳이고, 그 principal 은
+  `SubagentExecutionEnvironment` 의 principal 이다. 그 환경을 만드는 곳 — `TaskTool` · `WorkflowTool` ·
+  `GraalJsWorkflowTool`(도구 호출) · `SubagentBackedSkillForkExecutor`(`Skill` 도구, 슬래시 명령) — 은 모두 도구 문맥의
+  `PRINCIPAL` 을 싣고, 그 값은 루트 환경을 해석한 실행 요청(루틴은 작업의 owner)의 principal 과 같은 출처다. principal 이
+  빠지는 곳은 에이전트 단위 `WorkflowRunner`(백그라운드 Workflow · WorkflowJs 실행)뿐인데, 그 포크는 부모 환경도 없어
+  어차피 사용 불가다(격리 단계의 부모도 principal 없이 해석된다). 조사 결과는
+  [코어 0.3.1 이행 설계](workspace-sandbox-core-031.md) §9 Q6 에 있다
+- **자격 증명 바인딩의 겹침 검사** *(4단계에서 닫았다)* — 프로바이더가 범위를 데이터로 내놓고
+  (`ProviderCapabilities.credentialScopes()`), 기동 시 검사가 이름 · 겹침 · egress 덮음을 본다. 검증 훅은 두지 않았다(§12.1,
+  §13.2, 단계 4 구현 설계 §6.6)
+- **seed 의 네트워크 격리 점검** *(4단계에서 닫았다)* — 프로바이더가 `controlPlaneEndpoints()` 를 알려 주고 seed 스크립트가
+  bash `/dev/tcp` 로 탐침한다. egress 모드와 vault 바인딩은 seed 단계의 `SandboxProvider.verify` 가 대조한다(§11.3, 단계 4 구현
+  설계 §6.4)
+- **샌드박스가 egress 프록시의 CA 를 신뢰하는가** *(K8s 계층을 처음 돌리며 닫았다)* — execd 의 bootstrap 이 사이드카의 CA
+  를 기다렸다가 시스템 신뢰 저장소에 넣고(권한이 있을 때 — 강화 템플릿의 uid 1000 에서는 못 한다), CA 를 합친 번들을
+  `SSL_CERT_FILE` · `REQUESTS_CA_BUNDLE` 로, CA 자체를 `NODE_EXTRA_CA_CERTS` 로 내보낸다. curl · Python · Node 는 그것으로
+  검증을 켠 채 주입을 받는다. **git 은 받지 못했다** — Debian 의 git 은 GnuTLS 판 libcurl 이라 `SSL_CERT_FILE` 을 읽지 않고
+  `server certificate verification failed` 로 끝났다. 그래서 셸 래퍼가 `SSL_CERT_FILE` 이 있고 `GIT_SSL_CAINFO` 가 없으면
+  `GIT_SSL_CAINFO` 를 그 번들로 둔다(§9). k8s 계층의 `credentialsAreInjectedOnlyWithinTheirScope` 와
+  `gitOverHttpsWorksUnderInjection` 이 검증을 켠 채 확인한다. 같은 실행이 드러낸 것이 하나 더 있다 — egress 가 있으면 bootstrap
+  이 CA 를 기다린 뒤에 execd 를 띄우므로 `Running` 직후의 첫 명령이 502 를 받았다(다섯 번에 한 번). `create` 가 execd 의
+  `/ping` 까지 기다린다(단계 4 구현 설계 §12 Q4)
+- **러너에서의 docker 계층** *(3·4단계 릴리스 전에 닫았다)* — `.github/workflows/build.yml` 의 `integration` 잡이 PR 마다
+  Linux(ubuntu, amd64) 러너에서 `integrationTest` 를 돌린다. 서버 컨테이너 도달(`host.docker.internal` + host-gateway), amd64
+  execd 이미지, 러너 커널의 `dns+nft` 가 모두 통과했다. 첫 실행이 드러낸 것 하나는 고쳤다 — Linux 의 `Instant.now()` 는
+  나노초까지 주는데 서버는 마이크로초만 저장해 `extendExpiry` 가 요청보다 1µs 미만 이른 만료를 남겼으므로, 프로바이더가 목표를
+  마이크로초로 올림해 보낸다(§16, 단계 4 구현 설계 §12 Q10)
+- **§14 의 span 과 메트릭을 어느 단계가 가지는가** *(3·4단계 릴리스 전에 닫았다)* — 어느 단계에도 두지 않는다. 첫
+  릴리스는 `SandboxEventListener` 의 수명 이벤트(§14 의 감사 쪽)만 낸다. span 과 메트릭은 Micrometer 의존성과 라벨 설계가
+  따라오므로, 그것을 읽을 소비처가 생길 때 그 소비처의 요구로 설계한다(단계 3 구현 설계 §10 Q6)
+- **aimon-core SNAPSHOT 고정** *(닫았다)* — aimon-core 0.3.1 이 Central 에 나왔고, 고정을 그 릴리스로 올리고
+  `mavenLocal()` 을 지웠다(PR #7, 단계 3 구현 설계 §10 Q8)
+- **aimon-core 0.3.2-SNAPSHOT 고정** *(닫았다)* — 훅 표시(`ExecutionOptions.isHook()`, 이슈 #9) 때문에 Central 의
+  스냅샷 저장소에서 받던 `0.3.2-SNAPSHOT` 을 릴리스된 0.3.2 로 올리고 `build.gradle.kts` 의 저장소 블록을 지웠다
+- **aimon-core 0.3.3-SNAPSHOT 고정** *(닫았다)* — 요청 속성 · 세션 소유자와 삭제 이벤트 · `drainNotices()`(코어
+  #252 · #253 · #254) 때문에 Central 의 스냅샷 저장소에서 받던 `0.3.3-SNAPSHOT` 을 릴리스된 0.3.3 으로 올리고
+  `build.gradle.kts` 의 저장소 블록과 SNAPSHOT 재확인(`cacheChangingModulesFor(0)`)을 지웠다
+- **요청 단위 실행 옵션** *(코어 0.3.3 으로 닫았다)* — 코어가 `environment.*` 실행 속성을 `EnvironmentRequest.requestAttributes()`
+  로 넘기고(kangwoo/aimon-core#252), 메인 턴과 루틴이 `environment.sandbox.workspace` · `environment.sandbox.unattached` 로 실행
+  하나를 옮긴다. 세션 옵션은 세션 단위 기본값으로 남는다(§8.1, [관리 설계](workspace-sandbox-management.md) §12 Q1,
+  [코어 0.3.3 이행 설계](workspace-sandbox-core-033.md) §2.3)
+- **세션 소유자 읽기의 비용** — 해결(2026-10-18). `sessionRecords(...)` 의 소유자 확인은 이제 코어의
+  `SessionRecordStore.loadOwner` 로 소유자만 읽는다(kangwoo/aimon-core#262, 코어 SO-5 · SO-8). 레코드 전체(대화 기록 포함)를
+  읽던 비용은 사라졌다. 노드 로컬 캐시는 여전히 두지 않는다 — 같은 id 의 재생성(다른 노드는 삭제를 듣지 못한다)에서 옛 owner 를
+  새 `ws:{sid}` 에 굳혀 버리기 때문이다([코어 0.3.3 이행 설계](workspace-sandbox-core-033.md) §12 Q3)
+- **코어가 꺼내지 않는 경로의 초기화 notice** *(#28 로 닫았다)* — 훅(`onStop` 등) · 워크플로 스크립트의 도구 호출 · 마지막
+  도구 뒤의 스테이징이 idle reopen 이나 재생성을 일으키면 그 notice 는 꺼내지지 않은 채 환경 인스턴스와 함께 사라졌고, 다음 턴은
+  RUNNING 슬롯을 만나 아무것도 알리지 못했다. 이제 세션의 루트 환경이 초기화를 세션 옵션 레코드의 `unannouncedReset` 으로 남기고,
+  그것을 꺼낸 drain 이 지우며, 남아 있으면 다음 루트 실행이 한 번 다시 알린다(§7, [미전달 초기화 설계](workspace-sandbox-unannounced-reset.md)). 대가로 확인 쓰기가 늦거나 잃어버리면
+  (배경 실행기가 거부 · 포화, 저장소 장애) 이미 들은 초기화를 다음 턴에 한 번 더 듣는다 — 그 사이 모델이 만든 파일까지 사라졌다고
+  읽지 않도록 다시 알릴 때는 초기화 시각을 붙인다([미전달 초기화 설계](workspace-sandbox-unannounced-reset.md) §12). 워크스페이스 전환을
+  꺼낸 뒤 같은 환경이 초기화를 남기면 그 쓰기에 `lastWorkspaceId` 도 함께 적는다 — 그러지 않으면 초기화 쓰기가 레코드 버전을 먼저 올려
+  늦게 도는 전환 기록이 CAS 에 지고, 다음 턴이 같은 전환을 다시 듣는다(같은 설계 §12)
+- **셸 엔진의 런타임이 셸의 kill 을 벗어난다** *(코어 aimon-core#336 으로 닫았다)* — 코어의 `aimon_ptc.py` 가 자기
+  프로세스 그룹을 만들어 이 모듈의 kill(타임아웃 · 취소 · 줄 상한, exec 의 프로세스 그룹까지만 닿는다, §9)을 벗어났었다.
+  이제 셸이 띄운 프로세스(앵커)가 exec 의 그룹에 남고, 런타임 그룹의 워치독이 앵커가 죽으면 그 그룹을 죽인다. 이 저장소는
+  시험만 바꿨다 — 두 계층 모두 엔진 계약 스위트를 빠짐없이 돌리고(`wallClock`, `bridgeLimitStopsAtOnce` 포함), testkit
+  계층은 테스트마다 호스트에 `aimon_ptc.py` 가 남지 않았는지, docker 계층은 타임아웃 뒤 샌드박스에 런타임 · 프로그램의 자식 ·
+  좀비가 남지 않았는지 본다. K8s 계층도 템플릿 · 풀 모드에서 같은 검사를 돌아 통과했다(2026-11-07 측정). 이중 fork 된 워치독은
+  샌드박스의 PID 1 이 거둔다 — OpenSandbox 의 PID 1 은 docker · K8s(템플릿 모드) 모두 `bootstrap.sh` 의 `sh` 이고, 진입점을
+  기다리는 `wait` 가 입양된 자식도 거둔다. 풀 모드의 PID 1 은 풀 파드의 것이다(열린 항목 "풀 파드의 PID 1") ([PTC 셸 엔진의 제공자
+  쪽 설계](ptc-shell-provider.md) §9 Q-C4 · "K8s tier, measured")
 
 ---
 
@@ -2560,6 +2578,7 @@ docker 계층, K8s 에서만 드러나는 것은 k8s 계층 — 는 [`workspace-
 - [`workspace-sandbox-run-directory.md`](workspace-sandbox-run-directory.md) — 코어의 `RUN_DIRECTORY` 를 구현하고 훅 · 격리 실행의 run 파일을 에이전트의 손에서 치운 변경(#33)의 설계, 열린 질문(§11)과 구현이 벗어난 점(§12)
 - [`ptc-shell-prerequisites.md`](ptc-shell-prerequisites.md) — 코어 PTC 셸 엔진을 위한 선행 작업 S1–S9 의 기록(스풀 삭제 · SSE 줄 상한 · `python3` · 비밀 파일 · 런타임 FS · 서술자 · kill 원인 · `.aimon-ptc` 거부), 열린 질문(§10)
 - [`ptc-shell-provider.md`](ptc-shell-provider.md) — 코어 PTC 셸 엔진의 제공자 쪽 절반(S3–S6, S8)을 구현한 변경의 설계, 열린 질문(§8)과 구현이 벗어난 점(§9)
+- [`ptc-shell-verification.md`](ptc-shell-verification.md) — 셸 엔진 검사의 보강(남은 프로세스의 귀속 · 워치독 증거 · 음성 대조)과 k8s 계층을 템플릿 · 풀 모드로 kind 에서 돌린 검증의 설계, 열린 질문(§8)과 구현이 벗어난 점(§9)
 - [`workspace-sandbox-hook-identity.md`](workspace-sandbox-hook-identity.md) — 정책 훅을 에이전트와 다른 uid 로 돌리는 일(#34, 코어 EE-113)의 기록: OpenSandbox 가 준 것, 막힌 것(execd API 의 도달성), 이미지 계약과 seed 검사 초안 — 구현 전
 - [`opensandbox-spike.md`](opensandbox-spike.md) — 2단계(OpenSandbox 스파이크)의 결과와 근거
 - [`sandbox.md` @ `704013c`](https://github.com/kangwoo/aimon-sandbox/blob/704013c02cb14f16ec37ebf8c07f90d7e107db73/docs/design/sandbox.md) — 이 설계가 대체한 identifier 기반 설계(삭제됨)
