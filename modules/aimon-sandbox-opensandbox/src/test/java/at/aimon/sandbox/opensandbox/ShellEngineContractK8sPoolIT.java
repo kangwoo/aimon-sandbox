@@ -48,11 +48,22 @@ class ShellEngineContractK8sPoolIT extends AbstractShellEngineK8sIT {
      */
     @Override
     protected void checkPid1(String args, List<SandboxLeftovers.Proc> procs) {
-        final boolean taskExecutorIsPid1 = args.startsWith("/opt/opensandbox/task-executor");
+        final boolean taskExecutorIsPid1 = isTaskExecutor(args);
         final boolean execdIsSubreaper = procs.stream().anyMatch(proc -> proc.args().contains("execd --init"));
         assertThat(!taskExecutorIsPid1 || execdIsSubreaper)
                 .as("PID 1 of a pool-mode sandbox is not task-executor, or execd runs as --init (execd_run_as_init): "
                         + "PID 1 is %s", args)
                 .isTrue();
+    }
+
+    /**
+     * @param args
+     *            a command line, its arguments separated by spaces
+     * @return whether its program is task-executor, wherever it was installed and however the command line names it
+     *         (absolute, relative, bare); a shell whose script starts task-executor is the shell, not task-executor
+     */
+    static boolean isTaskExecutor(String args) {
+        final String program = args.strip().split("\\s+", 2)[0];
+        return program.substring(program.lastIndexOf('/') + 1).equals("task-executor");
     }
 }

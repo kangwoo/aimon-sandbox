@@ -3,6 +3,7 @@ package at.aimon.sandbox.opensandbox;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -22,11 +23,22 @@ import at.aimon.core.shell.ShellCommandResult;
  */
 final class SandboxLeftovers {
 
+    /** The prefix of {@link #PS}'s {@code /proc/<pid>/stat} lines: the pid, then the fields after the command name. */
+    static final String STAT = "@stat";
+
     /**
      * Four fields, the start time ({@code lstart}: five words in the C locale, to the second) and the args, so the
-     * command's own line ({@code ps -eo …}) is parsed like any other and filtered by args.
+     * command's own line ({@code ps -eo …}) is parsed like any other and filtered by args. Then, where {@code /proc}
+     * has them, one {@link #STAT} line per process with its kernel start time ({@code starttime}, field 22 of
+     * {@code /proc/<pid>/stat}, in clock ticks since boot): finer than {@code lstart}, so a pid reused within the same
+     * second is still a new process. Its exit status is {@code ps}'s: a process that exits before its {@code stat} is
+     * read is left out, not a failure.
      */
-    static final String PS = "LC_ALL=C ps -eo pid=,ppid=,pgid=,stat=,lstart=,args=";
+    static final String PS = "LC_ALL=C ps -eo pid=,ppid=,pgid=,stat=,lstart=,args= && for s in /proc/[0-9]*/stat; do "
+            + "if { read -r l < \"$s\"; } 2>/dev/null; then echo \"" + STAT + " ${l%% *} ${l##*) }\"; fi; done";
+
+    /** Where {@code starttime} is among the fields after the command name: field 22, the first of them being 3. */
+    private static final int STARTTIME = 22 - 3;
 
     /** How long a check waits for the watchdog's kill and the reaper's {@code wait} to finish: 50 × 200 ms. */
     private static final int ATTEMPTS = 50;
@@ -41,7 +53,10 @@ final class SandboxLeftovers {
         ShellCommandResult bash(String command) throws Exception;
     }
 
-    /** One line of {@link #PS}; {@code started} is its {@code lstart}, empty where nothing recorded it. */
+    /**
+     * One process of {@link #PS}; {@code started} is its {@code /proc} start time ({@code ticks:<starttime>}) where
+     * {@code PS} read one, its {@code lstart} otherwise, and empty where nothing recorded it.
+     */
     record Proc(int pid, int ppid, int pgid, String stat, String started, String args) {
 
         boolean zombie() {
@@ -71,25 +86,36 @@ final class SandboxLeftovers {
     /**
      * @param ps
      *            the output of {@link #PS}
-     * @return its processes; a line that does not have the four fields, the five words of the start time and the args
-     *         is skipped
+     * @return its processes, each started at its {@code /proc} start time where a {@link #STAT} line gave one. A line
+     *         with neither the four fields, the start time's five words and the args, nor a start time is skipped
      */
     static List<Proc> parse(String ps) {
         final List<Proc> procs = new ArrayList<>();
+        final Map<Integer, String> ticks = new HashMap<>();
         for (String line : ps.lines().map(String::strip).toList()) {
-            final String[] fields = line.split("\\s+", 10);
-            if (fields.length < 10) {
-                continue;
-            }
             try {
-                procs.add(
-                        new Proc(Integer.parseInt(fields[0]), Integer.parseInt(fields[1]), Integer.parseInt(fields[2]),
-                                fields[3], String.join(" ", List.of(fields).subList(4, 9)), fields[9]));
+                if (line.startsWith(STAT + " ")) {
+                    final String[] fields = line.split("\\s+");
+                    if (fields.length > STARTTIME + 2) {
+                        ticks.put(Integer.parseInt(fields[1]), "ticks:" + Long.parseLong(fields[STARTTIME + 2]));
+                    }
+                    continue;
+                }
+                final String[] fields = line.split("\\s+", 10);
+                if (fields.length == 10) {
+                    procs.add(new Proc(Integer.parseInt(fields[0]), Integer.parseInt(fields[1]),
+                            Integer.parseInt(fields[2]), fields[3], String.join(" ", List.of(fields).subList(4, 9)),
+                            fields[9]));
+                }
             } catch (NumberFormatException e) {
                 // a header or a wrapped line: not a process
             }
         }
-        return procs;
+        return procs.stream()
+                .map(p -> ticks.containsKey(p.pid())
+                        ? new Proc(p.pid(), p.ppid(), p.pgid(), p.stat(), ticks.get(p.pid()), p.args())
+                        : p)
+                .toList();
     }
 
     /**
@@ -103,8 +129,7 @@ final class SandboxLeftovers {
     }
 
     /**
-     * @return every process of the sandbox. A {@code ps} that fails or does not list PID 1 fails the test instead of
-     *         passing it
+     * @return every process of the sandbox; a {@code ps} that fails or does not list PID 1 fails the test
      */
     static List<Proc> snapshot(Shell shell) throws Exception {
         final ShellCommandResult ps = shell.bash(PS);
@@ -115,8 +140,7 @@ final class SandboxLeftovers {
     }
 
     /**
-     * @return the processes of {@code procs} that count as left over, by pid and start time: the baseline a later check
-     *         subtracts
+     * @return the processes of {@code procs} that count as left over, by pid and start time: a later check's baseline
      */
     static Set<Key> baseline(List<Proc> procs, Predicate<Proc> leftOver) {
         return procs.stream().filter(leftOver).map(Proc::key).collect(Collectors.toUnmodifiableSet());
@@ -189,8 +213,7 @@ final class SandboxLeftovers {
 
         /**
          * @return the candidates that are the runtime's watchdog: a fork of the runtime, so its command line names
-         *         {@code aimon_ptc}, whose parent is neither the runtime nor the anchor — an unrelated grandchild in
-         *         the
+         *         {@code aimon_ptc}, whose parent is neither the runtime nor the anchor. An unrelated grandchild in the
          *         group, or a child of the anchor, does not count
          */
         List<Proc> watchdogs() {

@@ -12,8 +12,8 @@ import org.junit.jupiter.api.Tag;
 /**
  * Core's engine contract suite and the leftover checks on the k8s tier in template mode: the server renders the
  * sandbox's pod from its BatchSandbox template, and the profile has no waivers (deny-all egress, the declared runtime
- * class, the hardened template). Skips without {@code OPENSANDBOX_K8S_ENDPOINT}; {@code scripts/k8s-tier.sh test} runs
- * it.
+ * class, the hardened template). Skips without {@code OPENSANDBOX_K8S_ENDPOINT}; {@code scripts/k8s-tier.sh test}
+ * runs it.
  */
 @Tag("k8s")
 class ShellEngineContractK8sTemplateIT extends AbstractShellEngineK8sIT {
