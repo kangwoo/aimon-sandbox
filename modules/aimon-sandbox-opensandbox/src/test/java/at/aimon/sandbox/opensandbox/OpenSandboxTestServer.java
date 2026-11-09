@@ -10,6 +10,8 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Consumer;
+import java.util.function.Supplier;
 
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.wait.strategy.Wait;
@@ -18,6 +20,7 @@ import org.testcontainers.images.builder.Transferable;
 
 import at.aimon.sandbox.provider.ProviderSandbox;
 import at.aimon.sandbox.provider.SandboxLabels;
+import at.aimon.sandbox.provider.SandboxProviderException;
 
 /**
  * The OpenSandbox server of the {@code docker} tier (docs/design/workspace-sandbox.md §16): one container per egress
@@ -144,9 +147,11 @@ final class OpenSandboxTestServer {
     }
 
     /**
-     * @return what the server logged since {@code mark}. Within a test JVM classes run one at a time and every server
-     *         is the JVM's own, so that is the server's account of the calls made since — a failed create's Docker
-     *         error among them
+     * @return what the server logged since {@code mark}: the server's account of the calls made since, a failed
+     *         create's Docker error among them, provided nothing else called the server meanwhile. Every server is its
+     *         test JVM's own (another fork starts its own), and a class that reads it this way runs
+     *         {@link org.junit.jupiter.api.parallel.Isolated @Isolated}, so no other class of its JVM runs alongside
+     *         it even where JUnit's parallel execution is turned on
      */
     String logSince(int mark) {
         if (container == null) {
@@ -156,10 +161,62 @@ final class OpenSandboxTestServer {
         return logs.substring(Math.min(mark, logs.length()));
     }
 
+    /** What a create's retry reads of a server's log: {@link #logMark} and {@link #logSince}. */
+    interface Log {
+        int mark();
+
+        String since(int mark);
+    }
+
+    /** @return {@link #retryOnPortConflict(Log, Supplier, Consumer)} on this server's log, the retry said on stderr */
+    <T> T retryOnPortConflict(Supplier<T> create) {
+        return retryOnPortConflict(new Log() {
+            @Override
+            public int mark() {
+                return logMark();
+            }
+
+            @Override
+            public String since(int mark) {
+                return logSince(mark);
+            }
+        }, create, System.err::println);
+    }
+
     /**
-     * @return whether {@code log} shows Docker refusing a host port the server picked — the messages the server's own
-     *         port-conflict retry recognizes ({@code port_allocator.is_port_publish_error}), which its egress path
-     *         lacks
+     * Runs {@code create}, a create on the server whose log is {@code log}. The server answers a sidecar that failed
+     * to start with a bare HTTP 500 and logs the Docker error, so a 500 fails with the server's log of this create
+     * attached. One cause is the server's, not the tier's: it picks the sidecar's host ports by probing them inside its
+     * own container, which does not see what the host already publishes (another sandbox, the other fork's server),
+     * and on the egress path it does not retry a port conflict as it does without a policy. A 500 whose log shows that
+     * conflict is retried once, said to {@code retrying}; any other 500, or a second conflict, fails.
+     *
+     * @return what {@code create} returned
+     */
+    static <T> T retryOnPortConflict(Log log, Supplier<T> create, Consumer<String> retrying) {
+        for (int attempt = 1;; attempt++) {
+            final int mark = log.mark();
+            try {
+                return create.get();
+            } catch (SandboxProviderException e) {
+                if (e.getMessage() == null || !e.getMessage().contains("HTTP 500")) {
+                    throw e;
+                }
+                final String since = log.since(mark);
+                if (attempt > 1 || !isPortConflict(since)) {
+                    e.addSuppressed(
+                            new AssertionError("the server's log of this create (attempt " + attempt + "):\n" + since));
+                    throw e;
+                }
+                retrying.accept("[OpenSandboxTestServer] create answered HTTP 500 on a host-port conflict of the "
+                        + "server's own allocation; retrying once. The server's log of it:\n" + since);
+            }
+        }
+    }
+
+    /**
+     * @return whether {@code log} shows Docker refusing a host port the server picked: the messages that the server's
+     *         own port-conflict retry, missing on its egress path, recognizes ({@code is_port_publish_error})
      */
     static boolean isPortConflict(String log) {
         final String lower = log.toLowerCase(Locale.ROOT);

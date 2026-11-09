@@ -85,6 +85,11 @@ and departures: [`docs/design/ptc-shell-provider.md`](docs/design/ptc-shell-prov
       already allocated` → "Egress sidecar container failed to start."). The out-of-memory test records the sandbox's
       `memory.*` accounting (swap is allowed up to the limit), asserts the cgroup's `oom_kill` count rose, and gives
       the command 180 s.
+    - Second follow-up: the leftover baseline's start time is the kernel's (`/proc/<pid>/stat` field 22, clock ticks)
+      where `/proc` has it, `lstart` (to the second) otherwise; the pool's PID 1 check recognizes task-executor by its
+      program's name wherever it is installed; the `oom_kill` count is read on cgroup v1 too (`memory.oom_control`),
+      and a cgroup with no count skips that one check, saying so; the egress retry is unit-tested on a simulated
+      server log, and the egress IT runs `@Isolated`, so the log it reads since a mark is its own calls' alone.
 
 ### Added: groundwork for core's programmatic tool calling (shell engine)
 

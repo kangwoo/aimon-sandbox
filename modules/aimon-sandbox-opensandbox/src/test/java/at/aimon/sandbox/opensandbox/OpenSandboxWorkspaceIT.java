@@ -2,6 +2,7 @@ package at.aimon.sandbox.opensandbox;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
@@ -74,8 +75,13 @@ class OpenSandboxWorkspaceIT {
 
     /** The out-of-memory command's timeout: the kill may wait for the cgroup's swap (see the test). */
     private static final Duration OOM_COMMAND = Duration.ofSeconds(180);
+    /** The cgroup v2 memory files the out-of-memory test records, in {@code /sys/fs/cgroup}. */
     private static final String MEMORY_FILES = "memory.max memory.swap.max memory.current memory.swap.current "
             + "memory.peak memory.events memory.swap.events";
+    /** Their cgroup v1 counterparts, in {@code /sys/fs/cgroup/memory}; {@code memory.oom_control} has the count. */
+    private static final String MEMORY_FILES_V1 = "memory.limit_in_bytes memory.memsw.limit_in_bytes "
+            + "memory.usage_in_bytes memory.memsw.usage_in_bytes memory.max_usage_in_bytes memory.failcnt "
+            + "memory.oom_control";
 
     private final ManualClock clock = new ManualClock(Instant.now());
     private final ManualScheduler scheduler = new ManualScheduler(clock);
@@ -221,10 +227,11 @@ class OpenSandboxWorkspaceIT {
      * {@code tail} grows until the cgroup's OOM killer ends it. The server sets only Docker's memory limit, so Docker's
      * default memory-swap (twice the limit) lets the cgroup swap up to 256 Mi before that kill: on a slow or contended
      * runner disk that took past 60 s once (CI, PR #52) where it takes 3–12 s otherwise. The command therefore has
-     * {@link #OOM_COMMAND}, and the sandbox's memory accounting — limits, swap, {@code memory.events} — before and
-     * after
-     * goes to stdout, and into the failure when the command times out, so a slow kill can be told apart from one that
-     * never came. The kill itself is checked twice: exit 137, and the cgroup's {@code oom_kill} count went up.
+     * {@link #OOM_COMMAND}, and the sandbox's memory accounting (limits, swap, the OOM events) before and after goes
+     * to stdout, and into the failure when the command times out, so a slow kill can be told apart from one that never
+     * came. The kill itself is checked twice: exit 137, and the cgroup's {@code oom_kill} count went up. That count is
+     * in {@code memory.events} on cgroup v2 and in {@code memory.oom_control} on v1 (Linux 4.13 and later); a cgroup
+     * that has neither skips the second check, saying so, once everything else has passed.
      */
     @Test
     @DisplayName("§12.2: an out-of-memory command dies inside its sandbox; the sandbox and its neighbours answer")
@@ -251,30 +258,40 @@ class OpenSandboxWorkspaceIT {
 
         assertThat(pids.stdout().strip()).as("the server's pids_limit").isEqualTo("4096");
         assertThat(oom.stdout()).isEqualTo("rc=137\n");
-        assertThat(oomKills(after)).as("the cgroup's oom_kill count, before:%n%safter:%n%s", before, after)
-                .isGreaterThan(oomKills(before));
         assertThat(bash(env, "echo alive").stdout()).isEqualTo("alive\n");
         assertThat(bash(neighbour, "echo neighbour").stdout()).isEqualTo("neighbour\n");
+        assumeTrue(oomKills(before) >= 0 && oomKills(after) >= 0, () -> String.format("the exit 137 and the rest "
+                + "passed, but this cgroup has no oom_kill count to compare (memory.events on v2, memory.oom_control "
+                + "on v1 from Linux 4.13); before:%n%safter:%n%s", before, after));
+        assertThat(oomKills(after)).as("the cgroup's oom_kill count, before:%n%safter:%n%s", before, after)
+                .isGreaterThan(oomKills(before));
     }
 
     /**
-     * @return the sandbox's cgroup memory files, one {@code name: content} line each (an unreadable one says so), or
-     *         why
-     *         they could not be read at all — a sandbox whose execd stopped answering must not hide the failure that
-     *         asked
+     * @return the sandbox's cgroup version, then its memory files, one {@code name: content} line each (an unreadable
+     *         one says so), or why they could not be read at all: a sandbox whose execd stopped answering must not
+     *         hide the failure that asked
      */
     private static String memory(ExecutionEnvironment env) {
         try {
-            return bash(env, "cd /sys/fs/cgroup && for f in " + MEMORY_FILES
-                    + "; do printf '%s: %s\\n' \"$f\" \"$(tr '\\n' ' ' 2>&1 < \"$f\")\"; done").stdout();
+            return bash(env,
+                    "if [ -f /sys/fs/cgroup/cgroup.controllers ]; then echo 'cgroup: v2'; "
+                            + "cd /sys/fs/cgroup && files='" + MEMORY_FILES + "'; else echo 'cgroup: v1'; "
+                            + "cd /sys/fs/cgroup/memory && files='" + MEMORY_FILES_V1 + "'; fi && for f in $files; "
+                            + "do printf '%s: %s\\n' \"$f\" \"$(tr '\\n' ' ' 2>&1 < \"$f\")\"; done")
+                    .stdout();
         } catch (Exception e) {
             return "(unreadable: " + e + ")\n";
         }
     }
 
-    /** @return the {@code oom_kill} count of {@link #memory}'s {@code memory.events} line, -1 when it has none */
+    /**
+     * @return the {@code oom_kill} count of {@link #memory}'s {@code memory.events} line (cgroup v2) or
+     *         {@code memory.oom_control} line (v1), -1 when it has neither
+     */
     static long oomKills(String memory) {
-        final Matcher matcher = Pattern.compile("(?m)^memory\\.events: .*\\boom_kill (\\d+)").matcher(memory);
+        final Matcher matcher = Pattern.compile("(?m)^memory\\.(?:events|oom_control): .*\\boom_kill (\\d+)")
+                .matcher(memory);
         return matcher.find() ? Long.parseLong(matcher.group(1)) : -1;
     }
 

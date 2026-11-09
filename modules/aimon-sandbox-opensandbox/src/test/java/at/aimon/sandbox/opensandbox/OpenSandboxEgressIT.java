@@ -16,6 +16,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.parallel.Isolated;
 
 import at.aimon.sandbox.provider.Capability;
 import at.aimon.sandbox.provider.CreateSpec;
@@ -26,7 +27,6 @@ import at.aimon.sandbox.provider.OutputSink;
 import at.aimon.sandbox.provider.ProviderSandboxRef;
 import at.aimon.sandbox.provider.SandboxConnection;
 import at.aimon.sandbox.provider.SandboxLabels;
-import at.aimon.sandbox.provider.SandboxProviderException;
 
 /**
  * Egress on the real server (docs/design/workspace-sandbox.md §12.1, §16): {@code dns+nft} with a deny default blocks
@@ -36,6 +36,7 @@ import at.aimon.sandbox.provider.SandboxProviderException;
  * unrestricted sandbox reaching it first — without that control, "blocked" would prove nothing.
  */
 @Tag("docker")
+@Isolated("a failed create reads the shared server's log since a mark: no other class may call that server meanwhile")
 class OpenSandboxEgressIT {
 
     private static final Duration COMMAND = Duration.ofSeconds(30);
@@ -55,34 +56,10 @@ class OpenSandboxEgressIT {
         return provider;
     }
 
-    /**
-     * Creates a sandbox on {@code server}. The server answers a sidecar that failed to start with a bare HTTP 500 and
-     * logs the Docker error, so a 500 fails with the server's log of this create attached. One cause is the server's,
-     * not the tier's: it picks the sidecar's host ports by probing them inside its own container, which does not see
-     * what the host already publishes (another sandbox, the other fork's server), and on the egress path it does not
-     * retry a port conflict as it does without a policy. A 500 whose log shows that conflict is retried once, said on
-     * stderr; any other 500, or a second conflict, fails.
-     */
+    /** Creates a sandbox on {@code server}, retried once on the server's own host-port conflict (§16). */
     private ProviderSandboxRef create(OpenSandboxTestServer server, OpenSandboxProvider provider, List<String> egress,
             List<String> credentials) {
-        for (int attempt = 1;; attempt++) {
-            final int mark = server.logMark();
-            try {
-                return createOnce(provider, egress, credentials);
-            } catch (SandboxProviderException e) {
-                if (e.getMessage() == null || !e.getMessage().contains("HTTP 500")) {
-                    throw e;
-                }
-                final String log = server.logSince(mark);
-                if (attempt > 1 || !OpenSandboxTestServer.isPortConflict(log)) {
-                    e.addSuppressed(
-                            new AssertionError("the server's log of this create (attempt " + attempt + "):\n" + log));
-                    throw e;
-                }
-                System.err.println("[OpenSandboxEgressIT] create answered HTTP 500 on a host-port conflict of the "
-                        + "server's own allocation; retrying once. The server's log of it:\n" + log);
-            }
-        }
+        return server.retryOnPortConflict(() -> createOnce(provider, egress, credentials));
     }
 
     private ProviderSandboxRef createOnce(OpenSandboxProvider provider, List<String> egress, List<String> credentials) {

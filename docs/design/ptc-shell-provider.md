@@ -796,9 +796,12 @@ the run; only documentation changed after it), and the configuration is the ship
 | `ShellEngineContractK8sPoolIT` | pool | 15 | 15 | 0 | 0 |
 
 That is the final, unfiltered `scripts/k8s-tier.sh test` (2 min 26 s, exit 0). An earlier run on the same cluster,
-before the diagnostics below and before the PID 1 record also listed the execd processes, had the same counts. The 15 of each shell-engine class are core's 12 engine tests, the timed-out
-run with its watchdog evidence, the PID 1 record and the orphaned-zombie test; each is followed by the leftover check
-against a snapshot taken before it, keyed on pid and start time.
+before the diagnostics below and before the PID 1 record also listed the execd processes, had the same counts. The 15
+of each shell-engine class are core's 12 engine tests, the timed-out run with its watchdog evidence, the PID 1 record
+and the orphaned-zombie test; each is followed by the leftover check against a snapshot taken before it, keyed on pid
+and start time. A re-run on a fresh cluster after the start time became the kernel's (`/proc/<pid>/stat` starttime,
+in clock ticks, instead of `ps`'s `lstart` to the second) and the pool's PID 1 check began matching task-executor by
+its program's name had the same counts: 42 passed, 4 skipped, 0 failed.
 
 - **PID 1, template mode:** `/opt/opensandbox/execd --init -- tail -f /dev/null` (asserted: `bootstrap.sh` or
   `execd --init`). Without `execd_run_as_init` (the first run) it was `/bin/sh /opt/opensandbox/bootstrap.sh tail -f
