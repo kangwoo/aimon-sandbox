@@ -80,7 +80,7 @@ and departures: [`docs/design/ptc-shell-provider.md`](docs/design/ptc-shell-prov
 - **`RuntimeFileSystemContract`** in `aimon-sandbox-testkit`: the runtime file system's contract suite, which core does
   not publish. The local provider and the docker tier run it, and core's engine contract suite
   (`aimon-code-engine-testkit`, test-only) runs on both tiers.
-- **A timed-out, cancelled or limit-stopped `ExecuteCode` run leaves nothing running in the sandbox** — with the
+- **A timed-out, cancelled or limit-stopped `ExecuteCode` run leaves nothing running in the sandbox** — with
   core 0.3.4, which carries aimon-core#336 (Q-C4: core's runtime used to leave the exec's process group, so the
   sandbox's kill missed it). No behaviour change here: main source changed only in javadoc (`SandboxShell`,
   `SandboxExecutionEnvironment`, `OpenSandboxRunningCommand`), the rest is tests. Both tiers now run the whole engine
@@ -191,9 +191,8 @@ See [`docs/design/ptc-shell-prerequisites.md`](docs/design/ptc-shell-prerequisit
   provider delivers it. A streamed command takes a hook command's stream path — no shell lock, no state save, the
   session's cwd and exports, the watchdog for its timeout. This is what core's background `Monitor` command form needs
   in a sandbox (`docs/design/workspace-sandbox.md` §9.x).
-- **Pinned to `aimon-core 0.3.4`** (released 2026-11-10); the `0.3.4-SNAPSHOT` pin and the filtered Central snapshot
-  repository in `build.gradle.kts` that served it are gone. The snapshot of 2026-11-06 (core PTC pieces A–D1) made the hook-context builders require `origin(...)`; the one test that built one without it is
-  fixed.
+- **Requires aimon-core 0.3.4.** Core's PTC pieces made the hook-context builders require `origin(...)`; the one test
+  that built one without it is fixed.
 
 ### Added: workspace files for a file explorer
 
