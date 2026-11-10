@@ -4,6 +4,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.tuple;
 
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -72,20 +75,29 @@ class SandboxLeftoversTest {
     }
 
     @Test
-    void theProcStartTimeReplacesLstartWhereProcHasIt() {
-        final List<SandboxLeftovers.Proc> procs = SandboxLeftovers
-                .parse(String.join("\n", PS, stat(1, 9088130), stat(61, 9090511), "@stat 60 S 1 60", "@stat x S"));
+    void procLinesAreParsedWithTheirStartTimeInTicks() {
+        final List<SandboxLeftovers.Proc> procs = SandboxLeftovers.parse(String.join("\n",
+                proc(1, 0, 1, "S", 9088130, "/bin/sh /opt/opensandbox/bootstrap.sh tail -f /dev/null"),
+                proc(41, 40, 40, "Z", 9090511, "[python3] <defunct>"),
+                proc(61, 1, 61, "S", 9090511, "python3 -I x.py "), "@proc 62 1 62 S", "@proc x 1 62 S 9090511 sleep 1",
+                "@proc 63 1 63 S soon sleep 1"));
 
-        assertThat(procs).hasSize(7);
-        assertThat(procs).extracting(SandboxLeftovers.Proc::pid, SandboxLeftovers.Proc::started)
-                .contains(tuple(1, "ticks:9088130"), tuple(61, "ticks:9090511"), tuple(60, "Sat Nov 7 05:25:21 2026"));
+        assertThat(procs).containsExactly(
+                new SandboxLeftovers.Proc(1, 0, 1, "S", "ticks:9088130",
+                        "/bin/sh /opt/opensandbox/bootstrap.sh tail -f /dev/null"),
+                new SandboxLeftovers.Proc(41, 40, 40, "Z", "ticks:9090511", "[python3] <defunct>"),
+                new SandboxLeftovers.Proc(61, 1, 61, "S", "ticks:9090511", "python3 -I x.py"));
+        assertThat(procs.stream().filter(SandboxLeftovers.leftOver(null)).map(SandboxLeftovers.Proc::pid))
+                .containsExactly(41);
     }
 
     @Test
     void aPidReusedWithinTheSameSecondIsANewProcess() {
-        final List<SandboxLeftovers.Proc> before = SandboxLeftovers.parse(String.join("\n", PS, stat(61, 9090511)));
+        final List<SandboxLeftovers.Proc> before = SandboxLeftovers
+                .parse(proc(61, 1, 61, "S", 9090511, "python3 -I /workspace/repo/.aimon-ptc/r/aimon_ptc.py"));
         // 61 exited and a new leftover took its pid in the same second: lstart is the same, starttime is not
-        final List<SandboxLeftovers.Proc> after = SandboxLeftovers.parse(String.join("\n", PS, stat(61, 9090540)));
+        final List<SandboxLeftovers.Proc> after = SandboxLeftovers
+                .parse(proc(61, 1, 61, "S", 9090540, "python3 -I /workspace/repo/.aimon-ptc/r/aimon_ptc.py"));
 
         assertThat(SandboxLeftovers.describeNew(after,
                 SandboxLeftovers.baseline(before, SandboxLeftovers.leftOver(null)), SandboxLeftovers.leftOver(null)))
@@ -93,6 +105,20 @@ class SandboxLeftoversTest {
         assertThat(SandboxLeftovers.describeNew(before,
                 SandboxLeftovers.baseline(before, SandboxLeftovers.leftOver(null)), SandboxLeftovers.leftOver(null)))
                 .as("the same process").isEmpty();
+    }
+
+    @Test
+    void theCommandListsThisJvmFromProcOrPs() throws Exception {
+        final Process bash = new ProcessBuilder("bash", "-c", SandboxLeftovers.PS).redirectErrorStream(true).start();
+        final String out = new String(bash.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+        assertThat(bash.waitFor()).as(out).isZero();
+
+        final boolean proc = Files.isReadable(Path.of("/proc/1/stat"));
+        assertThat(SandboxLeftovers.parse(out)).as(out).filteredOn(p -> p.pid() == ProcessHandle.current().pid())
+                .singleElement().satisfies(p -> {
+                    assertThat(p.args()).contains("java");
+                    assertThat(p.started()).as("/proc read: %s", proc).matches(proc ? "ticks:\\d+" : "\\D.*");
+                });
     }
 
     @Test
@@ -137,9 +163,8 @@ class SandboxLeftoversTest {
                 .collect(Collectors.toUnmodifiableSet());
     }
 
-    /** A {@link SandboxLeftovers#PS} {@code /proc} line: pid, then {@code /proc/<pid>/stat} after the command name. */
-    private static String stat(int pid, long starttime) {
-        return "@stat " + pid + " S 1 " + pid + " " + pid + " 0 -1 4194560 927 0 0 0 0 0 0 0 20 0 1 0 " + starttime
-                + " 2387968 326";
+    /** A {@link SandboxLeftovers#PS} {@code /proc} line. */
+    private static String proc(int pid, int ppid, int pgid, String state, long starttime, String args) {
+        return SandboxLeftovers.PROC + " " + pid + " " + ppid + " " + pgid + " " + state + " " + starttime + " " + args;
     }
 }

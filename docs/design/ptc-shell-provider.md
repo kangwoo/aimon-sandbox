@@ -803,6 +803,21 @@ and start time. A re-run on a fresh cluster after the start time became the kern
 in clock ticks, instead of `ps`'s `lstart` to the second) and the pool's PID 1 check began matching task-executor by
 its program's name had the same counts: 42 passed, 4 skipped, 0 failed.
 
+**Re-run on one node and on three (2026-11-10).** The leftover snapshot now reads `/proc` alone (`cmdline` bracketed by
+two `stat` reads), and the PID 1 check reads the NUL-separated `/proc/1/cmdline`. With those changes the tier ran
+twice, each time on a fresh `aimon-sandbox-verify`, which was deleted afterwards. First on one node, then with
+`AIMON_K8S_NODES=3`: a control plane, which kept its NoSchedule taint, and two workers. Both runs had the same counts:
+42 passed, 4 skipped, 0 failed (`OpenSandboxK8sIT` 8/8, `OpenSandboxK8sPoolIT` 4 + 4 skipped, template 15/15, pool
+15/15). On three nodes the server and the controller ran on `worker2`. The run's 16 pods in the sandbox namespace landed
+as follows:
+
+| Pods | `worker` | `worker2` |
+|---|---|---|
+| Template sandboxes | 5 | 5 |
+| Pool pods | 4 | 2 |
+
+So 9 sandboxes ran on a node other than the server's. PID 1's argv was the same as on one node in both modes.
+
 - **PID 1, template mode:** `/opt/opensandbox/execd --init -- tail -f /dev/null` (asserted: `bootstrap.sh` or
   `execd --init`). Without `execd_run_as_init` (the first run) it was `/bin/sh /opt/opensandbox/bootstrap.sh tail -f
   /dev/null`, which reaps too.
@@ -830,8 +845,8 @@ its program's name had the same counts: 42 passed, 4 skipped, 0 failed.
 - **Cold start:** on the first run's fresh node, `OpenSandboxK8sIT` failed 2 of 8 with the server's own 504 ("Timeout
   waiting for sandbox … to be Running with IP. Elapsed: 60.0s") while the node pulled the egress image (2 min 27 s,
   131 MB); rerun warm: 8/8. Not a product failure; the guide's kind section mentions it. The re-run did not hit it.
-- **Not run:** nothing that the tier has was skipped except the four pool-mode assumptions above. Gaps that stay: one
-  node, runc only (no gVisor or Kata).
+- **Not run:** nothing that the tier has was skipped except the four pool-mode assumptions above. Gaps that stay: runc
+  only (no gVisor or Kata). Multi-node is kind's: every node is a container on the same Docker host.
 - **Negative control** (docker tier, `LeftoverCheckNegativeControlIT`): the leftover check fails on an escaped child of
   a timed-out run (a `start_new_session` child, which is what the pre-#336 runtime was) and on an unreaped zombie,
   naming the mark and the parent. That shows the detector turns red. It does not show a pre-#336 core failing: that

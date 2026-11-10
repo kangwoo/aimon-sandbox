@@ -77,8 +77,8 @@ class DockerTierDiagnosticsTest {
         assertThat(OpenSandboxTestServer.retryOnPortConflict(log, log.creates(calls, CONFLICT, null), said::add))
                 .isEqualTo("ref-1");
         assertThat(calls).hasSize(2);
-        assertThat(said).singleElement().asString().contains("retrying once").endsWith(CONFLICT)
-                .doesNotContain("server started");
+        assertThat(said).singleElement().asString().startsWith("create answered HTTP 500").contains("retrying once")
+                .endsWith(CONFLICT).doesNotContain("server started");
     }
 
     @Test
@@ -140,5 +140,23 @@ class DockerTierDiagnosticsTest {
         assertThat(OpenSandboxWorkspaceIT.oomKills(memory)).isEqualTo(3);
         assertThat(OpenSandboxWorkspaceIT.oomKills("cgroup: v1\nmemory.oom_control: oom_kill_disable 0 under_oom 0 \n"))
                 .as("a kernel before 4.13 has no count").isEqualTo(-1);
+    }
+
+    @Test
+    void onlyACgroupV1WithoutTheCountSkipsTheOomKillCheck() {
+        final String v1Without = "cgroup: v1\nmemory.oom_control: oom_kill_disable 0 under_oom 0 \n";
+        final String v1With = "cgroup: v1\nmemory.oom_control: oom_kill_disable 0 under_oom 0 oom_kill 1 \n";
+        final String v2With = "cgroup: v2\nmemory.events: low 0 high 0 max 812 oom 3 oom_kill 2 \n";
+        final String v2Without = "cgroup: v2\nmemory.events: tr: /sys/fs/cgroup/memory.events: Permission denied \n";
+        final String unreadable = "(unreadable: java.io.IOException)\n";
+
+        assertThat(OpenSandboxWorkspaceIT.lacksOomKillCount(v1Without, v1Without)).isTrue();
+        assertThat(OpenSandboxWorkspaceIT.lacksOomKillCount(v1With, v1Without)).as("v1, the count lost after").isTrue();
+        assertThat(OpenSandboxWorkspaceIT.lacksOomKillCount(v1With, v1With)).as("v1 with the count: checked").isFalse();
+        assertThat(OpenSandboxWorkspaceIT.lacksOomKillCount(v2With, v2With)).isFalse();
+        assertThat(OpenSandboxWorkspaceIT.lacksOomKillCount(v2Without, v2Without)).as("v2 stays strict").isFalse();
+        assertThat(OpenSandboxWorkspaceIT.lacksOomKillCount(v2With, v2Without)).as("v2 stays strict").isFalse();
+        assertThat(OpenSandboxWorkspaceIT.lacksOomKillCount(v1Without, unreadable)).as("no version read: strict")
+                .isFalse();
     }
 }

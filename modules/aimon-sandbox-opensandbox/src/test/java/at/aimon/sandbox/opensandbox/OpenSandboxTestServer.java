@@ -168,8 +168,13 @@ final class OpenSandboxTestServer {
         String since(int mark);
     }
 
-    /** @return {@link #retryOnPortConflict(Log, Supplier, Consumer)} on this server's log, the retry said on stderr */
-    <T> T retryOnPortConflict(Supplier<T> create) {
+    /**
+     * @param caller
+     *            the test class that creates, whose simple name prefixes the retry's stderr line as its other lines
+     *            ({@code [OpenSandboxEgressIT] …}), so a log search for that prefix finds it
+     * @return {@link #retryOnPortConflict(Log, Supplier, Consumer)} on this server's log, the retry said on stderr
+     */
+    <T> T retryOnPortConflict(Class<?> caller, Supplier<T> create) {
         return retryOnPortConflict(new Log() {
             @Override
             public int mark() {
@@ -180,7 +185,7 @@ final class OpenSandboxTestServer {
             public String since(int mark) {
                 return logSince(mark);
             }
-        }, create, System.err::println);
+        }, create, message -> System.err.println("[" + caller.getSimpleName() + "] " + message));
     }
 
     /**
@@ -189,7 +194,8 @@ final class OpenSandboxTestServer {
      * attached. One cause is the server's, not the tier's: it picks the sidecar's host ports by probing them inside its
      * own container, which does not see what the host already publishes (another sandbox, the other fork's server),
      * and on the egress path it does not retry a port conflict as it does without a policy. A 500 whose log shows that
-     * conflict is retried once, said to {@code retrying}; any other 500, or a second conflict, fails.
+     * conflict is retried once, said to {@code retrying} (unprefixed: the caller names itself); any other 500, or a
+     * second conflict, fails.
      *
      * @return what {@code create} returned
      */
@@ -208,8 +214,8 @@ final class OpenSandboxTestServer {
                             new AssertionError("the server's log of this create (attempt " + attempt + "):\n" + since));
                     throw e;
                 }
-                retrying.accept("[OpenSandboxTestServer] create answered HTTP 500 on a host-port conflict of the "
-                        + "server's own allocation; retrying once. The server's log of it:\n" + since);
+                retrying.accept("create answered HTTP 500 on a host-port conflict of the server's own allocation; "
+                        + "retrying once. The server's log of it:\n" + since);
             }
         }
     }

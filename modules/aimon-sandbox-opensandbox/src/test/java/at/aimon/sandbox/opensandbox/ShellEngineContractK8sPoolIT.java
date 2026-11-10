@@ -47,23 +47,27 @@ class ShellEngineContractK8sPoolIT extends AbstractShellEngineK8sIT {
      * "K8s tier, measured"); this names that cause before the leftover checks show its effect.
      */
     @Override
-    protected void checkPid1(String args, List<SandboxLeftovers.Proc> procs) {
-        final boolean taskExecutorIsPid1 = isTaskExecutor(args);
+    protected void checkPid1(List<String> argv, List<SandboxLeftovers.Proc> procs) {
+        final boolean taskExecutorIsPid1 = isTaskExecutor(argv);
         final boolean execdIsSubreaper = procs.stream().anyMatch(proc -> proc.args().contains("execd --init"));
         assertThat(!taskExecutorIsPid1 || execdIsSubreaper)
                 .as("PID 1 of a pool-mode sandbox is not task-executor, or execd runs as --init (execd_run_as_init): "
-                        + "PID 1 is %s", args)
+                        + "PID 1 is %s", argv)
                 .isTrue();
     }
 
     /**
-     * @param args
-     *            a command line, its arguments separated by spaces
-     * @return whether its program is task-executor, wherever it was installed and however the command line names it
-     *         (absolute, relative, bare); a shell whose script starts task-executor is the shell, not task-executor
+     * @param argv
+     *            a process's arguments, as its {@code /proc/<pid>/cmdline} separates them
+     * @return whether its program, {@code argv[0]}, is task-executor, wherever it was installed (a directory whose name
+     *         has a space included) and however it is named (absolute, relative, bare); a shell whose script starts
+     *         task-executor is the shell, not task-executor
      */
-    static boolean isTaskExecutor(String args) {
-        final String program = args.strip().split("\\s+", 2)[0];
+    static boolean isTaskExecutor(List<String> argv) {
+        if (argv.isEmpty()) {
+            return false;
+        }
+        final String program = argv.get(0);
         return program.substring(program.lastIndexOf('/') + 1).equals("task-executor");
     }
 }

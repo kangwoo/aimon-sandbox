@@ -43,7 +43,8 @@ class ShellEngineContractK8sTemplateIT extends AbstractShellEngineK8sIT {
      * §9); with the server's {@code execd_run_as_init} it is {@code execd --init} instead, which reaps too.
      */
     @Override
-    protected void checkPid1(String args, List<SandboxLeftovers.Proc> procs) {
-        assertThat(args).as("PID 1 of a template-mode sandbox").containsAnyOf("bootstrap.sh", "execd --init");
+    protected void checkPid1(List<String> argv, List<SandboxLeftovers.Proc> procs) {
+        assertThat(String.join(" ", argv)).as("PID 1 of a template-mode sandbox").containsAnyOf("bootstrap.sh",
+                "execd --init");
     }
 }

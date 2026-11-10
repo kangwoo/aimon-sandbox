@@ -230,8 +230,10 @@ class OpenSandboxWorkspaceIT {
      * {@link #OOM_COMMAND}, and the sandbox's memory accounting (limits, swap, the OOM events) before and after goes
      * to stdout, and into the failure when the command times out, so a slow kill can be told apart from one that never
      * came. The kill itself is checked twice: exit 137, and the cgroup's {@code oom_kill} count went up. That count is
-     * in {@code memory.events} on cgroup v2 and in {@code memory.oom_control} on v1 (Linux 4.13 and later); a cgroup
-     * that has neither skips the second check, saying so, once everything else has passed.
+     * in {@code memory.events} on cgroup v2 and in {@code memory.oom_control} on v1, both from Linux 4.13, which every
+     * host this tier runs on (Docker with cgroup v2) exceeds. Only a v1 cgroup without it skips the second check,
+     * saying so, once everything else has passed (see
+     * {@link #lacksOomKillCount}); on v2, or where the version could not be read, a missing count fails.
      */
     @Test
     @DisplayName("§12.2: an out-of-memory command dies inside its sandbox; the sandbox and its neighbours answer")
@@ -260,9 +262,13 @@ class OpenSandboxWorkspaceIT {
         assertThat(oom.stdout()).isEqualTo("rc=137\n");
         assertThat(bash(env, "echo alive").stdout()).isEqualTo("alive\n");
         assertThat(bash(neighbour, "echo neighbour").stdout()).isEqualTo("neighbour\n");
-        assumeTrue(oomKills(before) >= 0 && oomKills(after) >= 0, () -> String.format("the exit 137 and the rest "
-                + "passed, but this cgroup has no oom_kill count to compare (memory.events on v2, memory.oom_control "
-                + "on v1 from Linux 4.13); before:%n%safter:%n%s", before, after));
+        assumeTrue(!lacksOomKillCount(before, after),
+                () -> String.format("the exit 137 and the rest passed, but this "
+                        + "cgroup v1 has no oom_kill count to compare (memory.oom_control has it from Linux 4.13); "
+                        + "before:%n%safter:%n%s", before, after));
+        assertThat(List.of(oomKills(before), oomKills(after)))
+                .as("the cgroup's oom_kill count is readable, before:%n%safter:%n%s", before, after)
+                .allMatch(count -> count >= 0);
         assertThat(oomKills(after)).as("the cgroup's oom_kill count, before:%n%safter:%n%s", before, after)
                 .isGreaterThan(oomKills(before));
     }
@@ -293,6 +299,20 @@ class OpenSandboxWorkspaceIT {
         final Matcher matcher = Pattern.compile("(?m)^memory\\.(?:events|oom_control): .*\\boom_kill (\\d+)")
                 .matcher(memory);
         return matcher.find() ? Long.parseLong(matcher.group(1)) : -1;
+    }
+
+    /**
+     * @param before
+     *            {@link #memory} before the out-of-memory command
+     * @param after
+     *            and after it
+     * @return whether the {@code oom_kill} check is skipped: one reading has no count and both are of a cgroup v1,
+     *         whose host may run a kernel before 4.13. On cgroup v2 a missing count is a failure to read it, and so is
+     *         a reading that does not say its version (execd did not answer)
+     */
+    static boolean lacksOomKillCount(String before, String after) {
+        final Pattern v1 = Pattern.compile("(?m)^cgroup: v1$");
+        return (oomKills(before) < 0 || oomKills(after) < 0) && v1.matcher(before).find() && v1.matcher(after).find();
     }
 
     @Test

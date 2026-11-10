@@ -16,6 +16,12 @@
 # refuses a cluster name that already exists, so it never adopts a cluster it did not create. AIMON_K8S_CLUSTER names
 # the cluster (default aimon-k8s-tier).
 #
+# AIMON_K8S_NODES (default 1) is the cluster's node count for `up`: more than 1 adds that many minus one kind workers,
+# and the control plane keeps its NoSchedule taint, so the server, the pools' pods and the sandboxes run on workers
+# and the tier's checks cross nodes (the server reaches a sandbox on another node; `kind load` puts the image on every
+# node). `test` records where each pod of the sandbox namespace was scheduled, in $AIMON_K8S_WORK/placement.txt
+# (pod, node, then the count per node), and prints it; `status` shows the nodes and the pods' nodes.
+#
 # The server runs with `execd_run_as_init = true` (execd as the sandbox's init, OSEP-0018): in template mode execd is
 # PID 1, in pool mode a subreaper under task-executor, and either way it reaps the orphans of a run (core's watchdogs).
 # Pool mode needs it — task-executor as a pool pod's PID 1 reaps nothing — so this is the configuration the tier
@@ -38,6 +44,7 @@ port=${AIMON_K8S_PORT:-8091}
 api_key=spike-key
 runtime_class=spike-runc
 pool=aimon-pool
+nodes=${AIMON_K8S_NODES:-1}
 export KUBECONFIG="${AIMON_K8S_KUBECONFIG:-$work/kubeconfig}"
 
 # The chart values, with `execd_run_as_init = true` under [runtime] unless AIMON_K8S_EXECD_INIT=0.
@@ -63,7 +70,14 @@ up() {
   fi
   git -C "$work/OpenSandbox" checkout -q "$opensandbox_commit"
 
+  case "$nodes" in
+    '' | *[!0-9]* | 0) echo "AIMON_K8S_NODES must be a positive number of nodes, not '$nodes'" >&2; exit 2 ;;
+  esac
   sed "s/^name: .*/name: $cluster/" "$repo/spike/opensandbox/k8s/kind-config.yaml" > "$work/kind.yaml"
+  # A counter, not `seq 2 "$nodes"`: BSD seq counts down, so on macOS one node would get two workers.
+  for ((n = 1; n < nodes; n++)); do
+    echo "- role: worker" >> "$work/kind.yaml"
+  done
   kind create cluster --config "$work/kind.yaml"
 
   # The chart renders its own Namespace, so `--create-namespace` conflicts with it: create it with Helm's ownership
@@ -115,13 +129,31 @@ status() {
   kubectl -n opensandbox get pool,batchsandboxes,pods -o wide
 }
 
+# $work/placement.txt from the pod watch: each pod of the sandbox namespace and the node it was scheduled on, then how
+# many landed on each node, then the server's and the controller's, from which every check reaches the sandboxes.
+placement() {
+  {
+    awk '$2 != "<none>" && !seen[$1]++ { print; count[$2]++ }
+         END { print "--- pods per node"; for (n in count) print n, count[n] }' "$work/placement.watch"
+    echo "--- the server and controller (namespace opensandbox-system)"
+    kubectl -n opensandbox-system get pods --no-headers \
+      -o custom-columns=POD:.metadata.name,NODE:.spec.nodeName 2>&1
+  } > "$work/placement.txt"
+  echo "pods of namespace opensandbox by node ($work/placement.txt):"
+  cat "$work/placement.txt"
+}
+
 run_tests() {
   kubectl config use-context "kind-$cluster" >/dev/null
   kubectl -n opensandbox-system port-forward svc/opensandbox-server "$port:80" >/dev/null 2>&1 &
   # Global, not local: the EXIT trap runs after this function has returned, and under `set -u` an out-of-scope name
   # would abort the trap — leaving the forward running and failing the script after a green run.
   forward=$!
-  trap 'kill "$forward" 2>/dev/null || true' EXIT
+  # Every pod the run creates in the sandbox namespace, as it is scheduled: the sandboxes are deleted by the end.
+  kubectl -n opensandbox get pods --watch --no-headers \
+    -o custom-columns=POD:.metadata.name,NODE:.spec.nodeName > "$work/placement.watch" 2>/dev/null &
+  watch=$!
+  trap 'kill "$forward" "$watch" 2>/dev/null || true' EXIT
   for _ in $(seq 1 30); do
     curl -s -o /dev/null -H "OPEN-SANDBOX-API-KEY: $api_key" "http://localhost:$port/v1/sandboxes" && break
     sleep 1
@@ -129,7 +161,10 @@ run_tests() {
   (cd "$repo" && OPENSANDBOX_K8S_ENDPOINT="http://localhost:$port" OPENSANDBOX_K8S_API_KEY="$api_key" \
     OPENSANDBOX_K8S_IMAGE="$image" OPENSANDBOX_K8S_RUNTIME_CLASS="$runtime_class" OPENSANDBOX_K8S_INTERNET=1 \
     OPENSANDBOX_K8S_POOL="$pool" \
-    ./gradlew --no-daemon :aimon-sandbox-opensandbox:k8sTest --rerun-tasks "$@")
+    ./gradlew --no-daemon :aimon-sandbox-opensandbox:k8sTest --rerun-tasks "$@") || local rc=$?
+  kill "$watch" 2>/dev/null || true
+  placement
+  return "${rc:-0}"
 }
 
 case "${1:-}" in

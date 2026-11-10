@@ -90,6 +90,14 @@ and departures: [`docs/design/ptc-shell-provider.md`](docs/design/ptc-shell-prov
       program's name wherever it is installed; the `oom_kill` count is read on cgroup v1 too (`memory.oom_control`),
       and a cgroup with no count skips that one check, saying so; the egress retry is unit-tested on a simulated
       server log, and the egress IT runs `@Isolated`, so the log it reads since a mark is its own calls' alone.
+    - Third follow-up: the leftover snapshot reads each process from `/proc` alone, its `cmdline` bracketed by two
+      `stat` reads whose start times must agree, so args and start time cannot come from two processes sharing a
+      reused pid (`ps` only where there is no `/proc`). The PID 1 check takes PID 1's arguments from its
+      NUL-separated `/proc/1/cmdline`, so a path with a space still matches. The `oom_kill` skip is narrowed to
+      cgroup v1; on v2 a missing count fails. The egress retry's stderr line has the `[OpenSandboxEgressIT]` prefix
+      again. `scripts/k8s-tier.sh` gains `AIMON_K8S_NODES` (multi-node kind, workloads on workers) and records each
+      pod's node in `$AIMON_K8S_WORK/placement.txt`. Re-verified on kind, single node and three nodes (control plane
+      plus two workers, sandboxes on both workers): 42 passed, 4 skipped, 0 failed each time.
 
 ### Added: groundwork for core's programmatic tool calling (shell engine)
 
