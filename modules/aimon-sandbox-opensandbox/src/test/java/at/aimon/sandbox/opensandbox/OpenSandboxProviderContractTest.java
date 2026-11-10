@@ -1,6 +1,7 @@
 package at.aimon.sandbox.opensandbox;
 
 import org.junit.jupiter.api.Tag;
+import org.junit.jupiter.api.parallel.Isolated;
 
 import at.aimon.sandbox.provider.CreateSpec;
 import at.aimon.sandbox.provider.ProviderSandboxRef;
@@ -9,9 +10,12 @@ import at.aimon.sandbox.testkit.SandboxProviderContract;
 
 /**
  * The provider contract suite against a real OpenSandbox server on the Docker runtime (docs/design/workspace-sandbox.md
- * §16): label acceptance by the real server, idempotent create by key, the files API, kill and truncation.
+ * §16): label acceptance by the real server, idempotent create by key, the files API, kill and truncation. It runs
+ * {@code @Isolated}, as {@link OpenSandboxEgressIT} does: a create's port-conflict retry reads the shared server's log
+ * since a mark ({@link OpenSandboxTestServer#logSince}), which must be this class's calls alone.
  */
 @Tag("docker")
+@Isolated("a failed create reads the shared server's log since a mark: no other class may call that server meanwhile")
 class OpenSandboxProviderContractTest extends SandboxProviderContract {
 
     @Override

@@ -143,6 +143,21 @@ placement() {
   cat "$work/placement.txt"
 }
 
+# Appends each pod of the sandbox namespace and its node to $work/placement.watch until it is killed. The API server
+# ends a watch after its timeout (minutes, randomized), so a watch that ends is started again; the new one lists the
+# pods that exist again, which placement() counts once. TERM stops the watch in progress, not just this loop.
+watch_pods() {
+  local pid=
+  trap 'kill "$pid" 2>/dev/null; exit 0' TERM
+  while :; do
+    kubectl -n opensandbox get pods --watch --no-headers \
+      -o custom-columns=POD:.metadata.name,NODE:.spec.nodeName >> "$work/placement.watch" 2>/dev/null &
+    pid=$!
+    wait "$pid" || true
+    sleep 1
+  done
+}
+
 run_tests() {
   kubectl config use-context "kind-$cluster" >/dev/null
   kubectl -n opensandbox-system port-forward svc/opensandbox-server "$port:80" >/dev/null 2>&1 &
@@ -150,8 +165,8 @@ run_tests() {
   # would abort the trap — leaving the forward running and failing the script after a green run.
   forward=$!
   # Every pod the run creates in the sandbox namespace, as it is scheduled: the sandboxes are deleted by the end.
-  kubectl -n opensandbox get pods --watch --no-headers \
-    -o custom-columns=POD:.metadata.name,NODE:.spec.nodeName > "$work/placement.watch" 2>/dev/null &
+  : > "$work/placement.watch"
+  watch_pods &
   watch=$!
   trap 'kill "$forward" "$watch" 2>/dev/null || true' EXIT
   for _ in $(seq 1 30); do
@@ -163,6 +178,7 @@ run_tests() {
     OPENSANDBOX_K8S_POOL="$pool" \
     ./gradlew --no-daemon :aimon-sandbox-opensandbox:k8sTest --rerun-tasks "$@") || local rc=$?
   kill "$watch" 2>/dev/null || true
+  wait "$watch" 2>/dev/null || true
   placement
   return "${rc:-0}"
 }

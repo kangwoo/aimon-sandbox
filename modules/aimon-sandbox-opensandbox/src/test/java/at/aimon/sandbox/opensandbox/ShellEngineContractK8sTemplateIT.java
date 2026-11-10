@@ -44,7 +44,35 @@ class ShellEngineContractK8sTemplateIT extends AbstractShellEngineK8sIT {
      */
     @Override
     protected void checkPid1(List<String> argv, List<SandboxLeftovers.Proc> procs) {
-        assertThat(String.join(" ", argv)).as("PID 1 of a template-mode sandbox").containsAnyOf("bootstrap.sh",
-                "execd --init");
+        assertThat(isReapingPid1(argv)).as("PID 1 of a template-mode sandbox is bootstrap.sh or execd --init: %s", argv)
+                .isTrue();
+    }
+
+    /**
+     * @param argv
+     *            PID 1's arguments, as its {@code /proc/1/cmdline} separates them
+     * @return whether it is execd's bootstrap — {@code bootstrap.sh} as the program or as the script a shell runs
+     *         ({@code /bin/sh /opt/opensandbox/bootstrap.sh …}) — or {@code execd --init}, wherever either was
+     *         installed (a directory whose name has a space included); an argument that merely contains the words, a
+     *         shell's {@code -c} script among them, does not count
+     */
+    static boolean isReapingPid1(List<String> argv) {
+        if (argv.isEmpty()) {
+            return false;
+        }
+        final String program = name(argv.get(0));
+        if (program.equals("bootstrap.sh")) {
+            return true;
+        }
+        if (argv.size() < 2) {
+            return false;
+        }
+        return program.equals("execd") && argv.get(1).equals("--init")
+                || program.matches("(ba|da)?sh") && name(argv.get(1)).equals("bootstrap.sh");
+    }
+
+    /** @return the last path component of {@code path}: a program's name, however it was given */
+    private static String name(String path) {
+        return path.substring(path.lastIndexOf('/') + 1);
     }
 }
