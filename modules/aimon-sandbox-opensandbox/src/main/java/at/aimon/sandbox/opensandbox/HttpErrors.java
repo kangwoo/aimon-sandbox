@@ -81,6 +81,13 @@ final class HttpErrors {
         return new SandboxProviderException(text, SandboxProviderException.Kind.TRANSIENT, null);
     }
 
+    /** @return whether {@code e} is a {@link #failure} of HTTP 401 or 403 */
+    static boolean unauthorized(SandboxProviderException e) {
+        final String message = e.getMessage();
+        return message != null
+                && (message.contains(" failed (HTTP 401): ") || message.contains(" failed (HTTP 403): "));
+    }
+
     /** Whether a transport failure means nothing answered at the address (the endpoint may have moved). */
     static boolean connectFailure(Throwable e) {
         for (Throwable t = e; t != null; t = t.getCause()) {

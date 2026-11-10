@@ -32,7 +32,7 @@ class DockerTierDiagnosticsTest {
             + "create failed: unable to apply sysctl\n";
 
     /** A server log that grows by one entry per create, as {@link #creates} says. */
-    private static final class FakeLog implements OpenSandboxTestServer.Log {
+    private static class FakeLog implements OpenSandboxTestServer.Log {
         private final StringBuilder log = new StringBuilder("INFO server started\n");
 
         @Override
@@ -128,6 +128,43 @@ class DockerTierDiagnosticsTest {
     }
 
     @Test
+    void anUnauthorizedCreateFailsAtOnceWithTheServersLogAndTheHostPortsPublished() {
+        final FakeLog log = new FakeLog() {
+            @Override
+            public String publishedPorts() {
+                return "51234 0.0.0.0 <- other-server (opensandbox/server) {} :8080\n";
+            }
+        };
+        final List<Integer> calls = new ArrayList<>();
+        final Supplier<String> create = () -> {
+            calls.add(calls.size());
+            throw HttpErrors.failure(401, "read network policy", "Authentication credentials are missing.");
+        };
+
+        assertThatThrownBy(() -> OpenSandboxTestServer.retryOnPortConflict(log, create, message -> {
+        })).isInstanceOf(SandboxProviderException.class).hasMessageContaining("HTTP 401")
+                .satisfies(e -> assertThat(e.getSuppressed()).singleElement().asString().contains("(attempt 1)")
+                        .contains("the host ports Docker publishes now:\n51234 0.0.0.0 <- other-server"));
+        assertThat(calls).hasSize(1);
+    }
+
+    @Test
+    void aHostPortPublishedTwiceIsMarked() {
+        final String listed = OpenSandboxTestServer
+                .publishedPorts(List.of(new OpenSandboxTestServer.PublishedPort(51234, "0.0.0.0", "sidecar-a :18080"),
+                        new OpenSandboxTestServer.PublishedPort(40000, "0.0.0.0", "server-a :8080"),
+                        new OpenSandboxTestServer.PublishedPort(51234, "::", "server-b :8080"),
+                        new OpenSandboxTestServer.PublishedPort(40000, "::", "server-a :8080")));
+
+        assertThat(listed).isEqualTo("""
+                40000 0.0.0.0 <- server-a :8080
+                40000 :: <- server-a :8080
+                51234 0.0.0.0 <- sidecar-a :18080  [published by more than one container]
+                51234 :: <- server-b :8080  [published by more than one container]
+                """);
+    }
+
+    @Test
     void dockersFailedToBindWordingIsAPortConflictInTheLogOrInTheErrorBodyAlone() {
         assertThat(OpenSandboxTestServer.isPortConflict("Failed to create or start container: ... (\"failed to set up "
                 + "container networking: driver failed programming external connectivity on endpoint sandbox-x (f4): "
@@ -171,18 +208,30 @@ class DockerTierDiagnosticsTest {
     }
 
     @Test
-    void withoutASingleLabelledContainerTheServersNameDecides() {
+    void withoutALabelledContainerTheServersNameDecides() {
         final ProviderSandboxRef ref = ProviderSandboxRef.of(OpenSandboxProvider.NAME, "20a7f041");
         final OpenSandboxTestServer.DockerContainer unlabelled = container("c1", "sandbox-20a7f041", Map.of());
+        final OpenSandboxTestServer.DockerContainer sidecar = container("c2", "sandbox-egress-20a7f041", Map.of(
+                OpenSandboxTestServer.SANDBOX_ID_LABEL, "20a7f041", OpenSandboxTestServer.SIDECAR_LABEL, "20a7f041"));
+
+        assertThat(OpenSandboxTestServer.sandboxContainer(ref, List.of(unlabelled))).as("an older server's labels")
+                .isEqualTo("c1");
+        assertThat(OpenSandboxTestServer.sandboxContainer(ref, List.of(sidecar, unlabelled)))
+                .as("beside a labelled sidecar").isEqualTo("c1");
+    }
+
+    @Test
+    void twoLabelledContainersFailInsteadOfTheNamePickingOne() {
+        final ProviderSandboxRef ref = ProviderSandboxRef.of(OpenSandboxProvider.NAME, "20a7f041");
         final OpenSandboxTestServer.DockerContainer twinA = container("c2", "sandbox-20a7f041",
                 Map.of(OpenSandboxTestServer.SANDBOX_ID_LABEL, "20a7f041"));
         final OpenSandboxTestServer.DockerContainer twinB = container("c3", "helper-20a7f041",
                 Map.of(OpenSandboxTestServer.SANDBOX_ID_LABEL, "20a7f041"));
 
-        assertThat(OpenSandboxTestServer.sandboxContainer(ref, List.of(unlabelled))).as("an older server's labels")
-                .isEqualTo("c1");
-        assertThat(OpenSandboxTestServer.sandboxContainer(ref, List.of(twinA, twinB))).as("two labelled")
-                .isEqualTo("c2");
+        assertThatThrownBy(() -> OpenSandboxTestServer.sandboxContainer(ref, List.of(twinA, twinB)))
+                .isInstanceOf(AssertionError.class).hasMessageContaining("2 Docker containers of sandbox 20a7f041")
+                .hasMessageContaining("labelled opensandbox.io/id=20a7f041 and none is an egress sidecar")
+                .hasMessageContaining("[sandbox-20a7f041]").hasMessageContaining("[helper-20a7f041]");
     }
 
     @Test
@@ -293,14 +342,49 @@ class DockerTierDiagnosticsTest {
     }
 
     @Test
+    void onlyAMissingSwapFileIsAHostWithoutSwapAccounting(@TempDir Path dir) throws Exception {
+        final Path missing = Files.createDirectories(dir.resolve("missing"));
+        Files.writeString(missing.resolve("cgroup.controllers"), "cpu memory pids\n");
+        Files.writeString(missing.resolve("memory.max"), "268435456\n");
+        final Path unreadable = Files.createDirectories(dir.resolve("unreadable"));
+        Files.writeString(unreadable.resolve("cgroup.controllers"), "cpu memory pids\n");
+        // a directory in the file's place: it exists, but reading it fails, for root too (unlike a mode of 000)
+        Files.createDirectories(unreadable.resolve("memory.swap.max"));
+        final Path v1Missing = Files.createDirectories(dir.resolve("v1/memory"));
+        Files.writeString(v1Missing.resolve("memory.limit_in_bytes"), "268435456\n");
+
+        final String missingMemory = run(OpenSandboxWorkspaceIT.memoryCommand(missing.toString()));
+        final String unreadableMemory = run(OpenSandboxWorkspaceIT.memoryCommand(unreadable.toString()));
+        final String v1Memory = run(OpenSandboxWorkspaceIT.memoryCommand(dir.resolve("v1").toString()));
+
+        assertThat(missingMemory).as(missingMemory).contains("memory.swap.max: (no such file)\n")
+                .contains("memory.max: 268435456 \n");
+        assertThat(OpenSandboxWorkspaceIT.lacksSwapAccounting(missingMemory)).as(missingMemory).isTrue();
+        assertThat(OpenSandboxWorkspaceIT.lacksSwapAccounting(v1Memory)).as(v1Memory).isTrue();
+        assertThat(unreadableMemory).as(unreadableMemory).doesNotContain("memory.swap.max: (no such file)")
+                .containsPattern("(?m)^memory\\.swap\\.max: .*[Ii]s a directory");
+        assertThat(OpenSandboxWorkspaceIT.lacksSwapAccounting(unreadableMemory)).as(unreadableMemory).isFalse();
+        assertThat(OpenSandboxWorkspaceIT.swapAllowance(unreadableMemory)).as("so the test's assertion fails on it")
+                .isEqualTo(-1);
+    }
+
+    @Test
     void aHostWithoutSwapAccountingIsToldApartFromAnUnreadableCgroup() {
-        final String v2Without = "cgroup: v2\nmemory.max: 268435456 \n"
-                + "memory.swap.max: tr: /sys/fs/cgroup/memory.swap.max: No such file or directory \n";
+        final String v2Without = "cgroup: v2\nmemory.max: 268435456 \nmemory.swap.max: (no such file)\n";
         final String v1Without = "cgroup: v1\nmemory.limit_in_bytes: 268435456 \n"
-                + "memory.memsw.limit_in_bytes: tr: memory.memsw.limit_in_bytes: No such file or directory \n";
+                + "memory.memsw.limit_in_bytes: (no such file)\n";
 
         assertThat(OpenSandboxWorkspaceIT.lacksSwapAccounting(v2Without)).isTrue();
         assertThat(OpenSandboxWorkspaceIT.lacksSwapAccounting(v1Without)).isTrue();
+        assertThat(OpenSandboxWorkspaceIT
+                .lacksSwapAccounting("cgroup: v2\nmemory.swap.max: bash: memory.swap.max: Permission denied\n"))
+                .as("there, but unreadable: the assertion fails on it").isFalse();
+        assertThat(
+                OpenSandboxWorkspaceIT.lacksSwapAccounting("cgroup: v2\nmemory.swap.max: tr: read error: I/O error\n"))
+                .as("there, but unreadable").isFalse();
+        assertThat(OpenSandboxWorkspaceIT.lacksSwapAccounting(
+                "cgroup: v1\nmemory.limit_in_bytes: 268435456 \nmemory.swap.max: (no such file)\n"))
+                .as("v1's swap file is memory.memsw.limit_in_bytes").isFalse();
         assertThat(OpenSandboxWorkspaceIT.lacksSwapAccounting("cgroup: v2\nmemory.swap.max: 0 \n")).isFalse();
         assertThat(OpenSandboxWorkspaceIT.lacksSwapAccounting("cgroup: v2\nmemory.swap.max: 268435456 \n"))
                 .as("accounted, and not taken away: the test's assertion fails on it").isFalse();

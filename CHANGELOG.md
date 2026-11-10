@@ -135,7 +135,7 @@ and departures: [`docs/design/ptc-shell-provider.md`](docs/design/ptc-shell-prov
     - Fourth follow-up: the out-of-memory test takes swap away from its sandbox before the command (the container's
       Docker memory-swap set to its 256 Mi limit, then `memory.swap.max` 0 is asserted). With Docker's default swap,
       a runner's slow swap disk kept the cgroup in reclaim past 180 s and left execd unreachable (CI, PR #55); without
-      swap the kill took 330–380 ms on a local Docker Desktop (the CI runner's time is not recorded: a green run
+      swap the kill took about 0.3–0.4 s on a local Docker Desktop (the CI runner's time is not recorded: a green run
       uploads no test output). A server started elsewhere keeps its swap and the 180 s margin. The
       contract suite's creates retry a host-port conflict once, as the egress IT's do, and the conflict is also
       recognized in the error body and in Docker 28's `failed to bind host port …` wording.
@@ -147,6 +147,14 @@ and departures: [`docs/design/ptc-shell-provider.md`](docs/design/ptc-shell-prov
       does. `OpenSandboxProviderContractTest` runs `@Isolated`, as its log-reading retry assumes. The leftover
       snapshot's retry on a pid reused between its two `stat` reads is unit-tested. `scripts/k8s-tier.sh test`
       restarts the pod watch when the API server ends it.
+    - Sixth follow-up: only a swap file that does not exist counts as a host without swap accounting; one that exists
+      but cannot be read fails the swap assertion with the reading. Two non-sidecar containers labelled with a
+      sandbox's id fail with both named instead of the name picking one. `scripts/k8s-tier.sh test` says each pod
+      watch restart on stderr and in `placement.txt` (which can miss a pod created and deleted in the 1 s before a
+      restart), and backs off up to 60 s when kubectl fails at once instead of retrying every second in silence. A
+      401/403 on the egress sidecar's network-policy read during `create` now says the server had just accepted the
+      api-key and that something else may answer on the sidecar's host port; the egress IT attaches the server's
+      log and Docker's published host ports to it (a one-off 401 there under concurrent runs had no evidence).
 
 ### Added: groundwork for core's programmatic tool calling (shell engine)
 

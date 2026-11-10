@@ -6,15 +6,19 @@ import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.TreeMap;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
+import java.util.stream.Collectors;
 
 import org.testcontainers.DockerClientFactory;
 import org.testcontainers.containers.GenericContainer;
@@ -24,6 +28,7 @@ import org.testcontainers.images.builder.Transferable;
 
 import com.github.dockerjava.api.DockerClient;
 import com.github.dockerjava.api.model.Container;
+import com.github.dockerjava.api.model.ContainerPort;
 
 import at.aimon.sandbox.provider.ProviderSandbox;
 import at.aimon.sandbox.provider.ProviderSandboxRef;
@@ -169,11 +174,55 @@ final class OpenSandboxTestServer {
         return logs.substring(Math.min(mark, logs.length()));
     }
 
+    /**
+     * @return every host port this Docker publishes, one line each, by port: the container (its name, image and the
+     *         server's sandbox labels) and its port, a port published more than once marked; empty for a server
+     *         started elsewhere. What a create refused as unauthorized attaches ({@link #retryOnPortConflict})
+     */
+    String publishedPorts() {
+        if (container == null) {
+            return "";
+        }
+        final List<PublishedPort> ports = new ArrayList<>();
+        for (Container c : DockerClientFactory.instance().client().listContainersCmd().exec()) {
+            final DockerContainer named = DockerContainer.of(c);
+            final Map<String, String> labels = new TreeMap<>(named.labels());
+            labels.keySet().retainAll(List.of(SANDBOX_ID_LABEL, SIDECAR_LABEL));
+            for (ContainerPort port : c.getPorts() == null ? new ContainerPort[0] : c.getPorts()) {
+                if (port.getPublicPort() != null) {
+                    ports.add(new PublishedPort(port.getPublicPort(), port.getIp(), String.join(",", named.names())
+                            + " (" + c.getImage() + ") " + labels + " :" + port.getPrivatePort()));
+                }
+            }
+        }
+        return publishedPorts(ports);
+    }
+
+    /** A host port {@link #publishedPorts()} lists: the port, the address it is bound on, and who publishes it. */
+    record PublishedPort(int port, String ip, String container) {
+    }
+
+    /** @return {@code ports} as {@link #publishedPorts()} lists them */
+    static String publishedPorts(List<PublishedPort> ports) {
+        final Map<Integer, Long> owners = ports.stream()
+                .collect(Collectors.groupingBy(PublishedPort::port, Collectors.mapping(PublishedPort::container,
+                        Collectors.collectingAndThen(Collectors.toSet(), set -> (long) set.size()))));
+        return ports.stream().sorted(Comparator.comparingInt(PublishedPort::port))
+                .map(p -> p.port() + " " + p.ip() + " <- " + p.container()
+                        + (owners.get(p.port()) > 1 ? "  [published by more than one container]" : "") + "\n")
+                .collect(Collectors.joining());
+    }
+
     /** What a create's retry reads of a server's log: {@link #logMark} and {@link #logSince}. */
     interface Log {
         int mark();
 
         String since(int mark);
+
+        /** @return {@link #publishedPorts()}, by default nothing */
+        default String publishedPorts() {
+            return "";
+        }
     }
 
     /**
@@ -193,6 +242,11 @@ final class OpenSandboxTestServer {
             public String since(int mark) {
                 return logSince(mark);
             }
+
+            @Override
+            public String publishedPorts() {
+                return OpenSandboxTestServer.this.publishedPorts();
+            }
         }, create, message -> System.err.println("[" + caller.getSimpleName() + "] " + message));
     }
 
@@ -204,7 +258,10 @@ final class OpenSandboxTestServer {
      * and on the egress path it does not retry a port conflict as it does without a policy. A 500 whose log shows that
      * conflict is retried once, said to {@code retrying} (unprefixed: the caller names itself); so is a 500 whose own
      * body shows it, as the main container's start failure does (its server retries a conflict itself, but that one
-     * reached CI on PR #55); any other 500, or a second conflict, fails.
+     * reached CI on PR #55); any other 500, or a second conflict, fails. A 401 or 403 fails at once, with the server's
+     * log and the host ports Docker publishes ({@link Log#publishedPorts}) attached: an egress create once met one
+     * while other runs shared the Docker host (the provider's {@code awaitEgressSidecar}), and the server's call to
+     * the sidecar's host port is the one call that carries no api-key, so whatever owns that port is the evidence.
      *
      * @return what {@code create} returned
      */
@@ -214,6 +271,12 @@ final class OpenSandboxTestServer {
             try {
                 return create.get();
             } catch (SandboxProviderException e) {
+                if (e.getMessage() != null
+                        && (e.getMessage().contains("HTTP 401") || e.getMessage().contains("HTTP 403"))) {
+                    e.addSuppressed(new AssertionError("the server's log of this create (attempt " + attempt + "):\n"
+                            + log.since(mark) + "the host ports Docker publishes now:\n" + log.publishedPorts()));
+                    throw e;
+                }
                 if (e.getMessage() == null || !e.getMessage().contains("HTTP 500")) {
                     throw e;
                 }
@@ -297,11 +360,12 @@ final class OpenSandboxTestServer {
      * @param candidates
      *            the containers of this Docker labelled with its id ({@link #SANDBOX_ID_LABEL}) or named after it
      * @return the id of the sandbox's own container: of the candidates that are not an egress sidecar
-     *         ({@link #SIDECAR_LABEL}), the one labelled with the sandbox's id, or else the one the server names
-     *         {@code sandbox-{id}} ({@link #containerName})
+     *         ({@link #SIDECAR_LABEL}), the one labelled with the sandbox's id, or else, where none is (an older
+     *         server's labels), the one the server names {@code sandbox-{id}} ({@link #containerName})
      * @throws AssertionError
      *             when neither picks out exactly one, naming the candidates: the server labels or names its containers
-     *             otherwise than this tier expects
+     *             otherwise than this tier expects. Two or more labelled ones fail too, whatever their names: the name
+     *             would pick one of them without saying why the other is there
      */
     static String sandboxContainer(ProviderSandboxRef ref, List<DockerContainer> candidates) {
         final List<DockerContainer> own = candidates.stream().filter(c -> !c.labels().containsKey(SIDECAR_LABEL))
@@ -310,6 +374,12 @@ final class OpenSandboxTestServer {
                 .filter(c -> ref.sandboxId().equals(c.labels().get(SANDBOX_ID_LABEL))).toList();
         if (labelled.size() == 1) {
             return labelled.get(0).id();
+        }
+        if (labelled.size() > 1) {
+            throw new AssertionError(labelled.size() + " Docker containers of sandbox " + ref.sandboxId()
+                    + " to take swap away from are labelled " + SANDBOX_ID_LABEL + "=" + ref.sandboxId()
+                    + " and none is an egress sidecar; the server labels its containers otherwise. Labelled: "
+                    + labelled.stream().map(c -> c.names() + " " + c.labels()).toList());
         }
         final List<DockerContainer> named = own.stream().filter(c -> c.names().contains(containerName(ref))).toList();
         if (named.size() == 1) {
