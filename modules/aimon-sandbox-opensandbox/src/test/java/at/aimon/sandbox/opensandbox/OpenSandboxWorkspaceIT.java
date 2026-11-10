@@ -154,7 +154,8 @@ class OpenSandboxWorkspaceIT {
         env.fileSystem().write("/workspace/hello.txt", "hello from the file tool");
         final ShellCommandResult cat = bash(env, "cat /workspace/hello.txt");
 
-        assertThat(cat.stdout()).isEqualTo("hello from the file tool\n");
+        // The file has no final newline, and neither has cat's output (execd 1.1.1+ sends it exact).
+        assertThat(cat.stdout()).isEqualTo("hello from the file tool");
         assertThat(events).extracting(SandboxEvent::type).contains(SandboxEvent.Type.PROVISIONED);
         final ProviderSandboxRef ref = assembly.store().find(SandboxWorkspaceId.of("ws:" + session.value()))
                 .orElseThrow().slot("primary").orElseThrow().providerRef().orElseThrow();
@@ -399,8 +400,8 @@ class OpenSandboxWorkspaceIT {
     }
 
     @Test
-    @DisplayName("§6.1: output arrives line-normalized — a lone CR becomes a line break, a final newline is added")
-    void outputIsLineNormalized() throws Exception {
+    @DisplayName("§6.1: output arrives exact (execd 1.1.1+) — CRs kept, no final newline added; invalid UTF-8 replaced")
+    void outputArrivesExact() throws Exception {
         final WorkspaceSandbox assembly = assembly(profile().build(), new InMemorySandboxWorkspaceStore());
         final SessionId session = SessionId.generate();
         bash(mainTurn(assembly, session), "true");
@@ -412,8 +413,9 @@ class OpenSandboxWorkspaceIT {
                     ExecSpec.builder().command("printf 'x\\ry'; printf 'A\\r\\nB\\n\\nC'; printf '\\377' >&2").build(),
                     OutputSink.DISCARD).await(Duration.ofSeconds(30));
 
-            assertThat(new String(outcome.stdout(), StandardCharsets.UTF_8)).isEqualTo("x\nyA\nB\n\nC\n");
-            assertThat(new String(outcome.stderr(), StandardCharsets.UTF_8)).isEqualTo("�\n");
+            assertThat(new String(outcome.stdout(), StandardCharsets.UTF_8)).isEqualTo("x\ryA\r\nB\n\nC");
+            // execd sends output as JSON text: a byte that is not UTF-8 arrives as U+FFFD.
+            assertThat(new String(outcome.stderr(), StandardCharsets.UTF_8)).isEqualTo("\uFFFD");
         }
     }
 
@@ -520,26 +522,21 @@ class OpenSandboxWorkspaceIT {
                 () -> env.shell().execute(() -> print + "; sleep 30", isolated.timeout(Duration.ofSeconds(1)).build()))
                 .isInstanceOf(ShellTimeoutException.class);
 
-        // Negative control: the same output from a run that is not transient does stay in a spool file this check
-        // finds — so finding none above means the provider removed them, not that execd spooled elsewhere. This holds
-        // for docker/execd/v1.1.0, which this tier pins; release-1.1.0+ removes every spool itself.
-        final ProviderSandboxRef ref = assembly.store().find(SandboxWorkspaceId.of("ws:" + session.value()))
-                .orElseThrow().slot("primary").orElseThrow().providerRef().orElseThrow();
-        try (SandboxConnection connection = provider.connect(ref)) {
-            assertThat(connection
-                    .run(ExecSpec.builder().command("echo KEPTMARK" + id + "; echo KEPTMARK" + id + " >&2")
-                            .timeout(Duration.ofSeconds(60)).build(), OutputSink.DISCARD)
-                    .await(Duration.ofSeconds(60)).exitCode()).isZero();
-        }
-
-        // execd release-1.1.0+ spools to $TMPDIR/opensandbox-execd and removes it itself; docker/execd/v1.1.0 spools
-        // to $TMPDIR and keeps it — what the provider removes.
+        // execd spools to $TMPDIR/opensandbox-execd. Since release-1.1.0 it also removes a finished command's spool
+        // itself, right after the terminal event, so a run that is not transient leaves none either and cannot be the
+        // negative control. The control is a file holding the marker where execd spools: finding it shows the check
+        // reaches that directory, so finding no run's output there means none was left. What this no longer shows is
+        // that the provider removed them, as execd would have anyway; that the provider asks (S1) is checked in the
+        // default tier (OpenSandboxProviderTest, "S1: …").
         // ${m}, not $m: the id goes right after it, and "$m<id>" names one unset variable — an empty pattern that
         // every non-empty file matches.
         assertThat(bash(env, "m=SPOOLMARK; grep -rlF -- \"${m}" + id + "\" \"${TMPDIR:-/tmp}\" 2>/dev/null | wc -l")
                 .stdout().strip()).as("spool files holding the runs' output").isEqualTo("0");
-        assertThat(bash(env, "m=KEPTMARK; grep -rlF -- \"${m}" + id + "\" \"${TMPDIR:-/tmp}\" 2>/dev/null | wc -l")
-                .stdout().strip()).as("spool files holding a non-transient run's output").isNotEqualTo("0");
+        assertThat(bash(env,
+                "d=\"${TMPDIR:-/tmp}/opensandbox-execd\"; m=KEPTMARK; mkdir -p \"$d\" && echo \"${m}" + id
+                        + "\" > \"$d/control.txt\" && grep -rlF -- \"${m}" + id
+                        + "\" \"${TMPDIR:-/tmp}\" 2>/dev/null | wc -l; " + "rm -f \"$d/control.txt\"")
+                .stdout().strip()).as("the negative control in execd's spool directory").isEqualTo("1");
 
         // One output line of ~300 KiB arrives as one SSE event line: the reader stops before holding it and kills.
         final long started = System.nanoTime();

@@ -18,6 +18,8 @@ import java.util.function.Supplier;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
+import at.aimon.sandbox.provider.SandboxProviderException;
+
 /**
  * The lifecycle server's {@code /v1/sandboxes} API, authenticated with {@code OPEN-SANDBOX-API-KEY}. Idempotent calls
  * go through {@link Retry}; {@code create} never does.
@@ -188,6 +190,52 @@ final class LifecycleClient {
         return retry.call(() -> transport.read(HttpErrors.check(
                 transport.send(request("/sandboxes/" + id + "/networkpolicy").GET(), "read network policy"),
                 "read network policy")));
+    }
+
+    /**
+     * One call on a sandbox's sub-resource ({@code /sandboxes/{id}/{path}}), its status left to the caller. GET and
+     * DELETE go through {@link Retry} on a transport failure and on 502/503/504 — the server proxy's answers while the
+     * component behind the route is not up yet — the last such response being returned; anything else is sent once.
+     *
+     * @param json
+     *            the JSON body, or null for none
+     */
+    HttpResponse<byte[]> sandboxCall(String id, String path, String method, byte[] json, String what) {
+        final Supplier<HttpResponse<byte[]>> call = () -> {
+            final HttpRequest.Builder request = request("/sandboxes/" + id + "/" + path);
+            if (json != null) {
+                request.header("Content-Type", "application/json");
+            }
+            return transport.send(request.method(method,
+                    json == null ? HttpRequest.BodyPublishers.noBody() : HttpRequest.BodyPublishers.ofByteArray(json)),
+                    what);
+        };
+        if (!"GET".equals(method) && !"DELETE".equals(method)) {
+            return call.get();
+        }
+        // The last gateway answer, and the exception that stood for it: when retries run out on one, it is returned.
+        final Object[] last = new Object[2];
+        try {
+            return retry.call(() -> {
+                final HttpResponse<byte[]> response = call.get();
+                final int status = response.statusCode();
+                if (status != 502 && status != 503 && status != 504) {
+                    return response;
+                }
+                final SandboxProviderException retryable = new SandboxProviderException(
+                        what + " answered HTTP " + status, SandboxProviderException.Kind.TRANSIENT, null);
+                last[0] = response;
+                last[1] = retryable;
+                throw retryable;
+            });
+        } catch (SandboxProviderException e) {
+            if (e == last[1]) {
+                @SuppressWarnings("unchecked")
+                final HttpResponse<byte[]> response = (HttpResponse<byte[]>) last[0];
+                return response;
+            }
+            throw e;
+        }
     }
 
     private static HttpResponse<byte[]> checkOrFail(HttpResponse<byte[]> response, String what) {

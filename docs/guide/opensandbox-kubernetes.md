@@ -6,8 +6,8 @@ aimon-sandbox 가 요구하는 격리(강화한 SecurityContext · 네트워크 
 
 - 여기 적은 값은 이 저장소가 kind 위에서 실측한 구성이다. 근거는 [`spike/opensandbox/reports/C-k8s.md`](../../spike/opensandbox/reports/C-k8s.md),
   배포 값은 [`spike/opensandbox/k8s/deploy/`](../../spike/opensandbox/k8s/deploy/), 자동화는 [`scripts/k8s-tier.sh`](../../scripts/k8s-tier.sh) 에 있다
-- 실측 버전: OpenSandbox `3738975`(2026-09-29 main), 차트 `1.1.1-rc.1`, 이미지 `release-1.1.1-rc.1`, Kubernetes
-  v1.37(kind, CNI kindnet). 다른 버전이면 [§9 확인](#9-설치-확인)의 k8s 테스트 계층을 돌려 확인한다
+- 실측 버전: OpenSandbox `release-1.2.0`(차트 · 이미지 모두), Kubernetes v1.37(kind, CNI kindnet). aimon-sandbox 의
+  OpenSandbox 프로바이더는 1.2.0 이상을 요구한다. 다른 버전이면 [§9 확인](#9-설치-확인)의 k8s 테스트 계층을 돌려 확인한다
 - AIMON 쪽 코드는 [aimon-core 와 연동하기](aimon-core-integration.md), 설정 전반은 [사용자 가이드](user-guide.md) 에 있다
 
 ---
@@ -19,7 +19,7 @@ aimon-sandbox 가 요구하는 격리(강화한 SecurityContext · 네트워크 
  │  AIMON 애플리케이션 파드      │  REST  │  opensandbox-server   (수명 API :80)    │
  │  (aimon-sandbox-opensandbox)  ├───────▶│  opensandbox-controller-manager         │
  └──────────────┬────────────────┘        └────────────┬────────────────────────────┘
-                │ execd :44772 / egress :18080         │ BatchSandbox CR 생성
+                │ execd :44772                         │ BatchSandbox CR 생성
                 │ (직접, 또는 서버 프록시 경유)        ▼
                 │                         ┌─ opensandbox (샌드박스 네임스페이스) ──┐
                 └────────────────────────▶│  샌드박스 파드                          │
@@ -72,7 +72,7 @@ OpenSandbox 차트는 소스 저장소의 `manifests/charts/opensandbox` 에 있
 ```bash
 git clone https://github.com/opensandbox-group/OpenSandbox
 cd OpenSandbox
-git checkout 3738975            # 실측한 커밋. 다른 커밋이면 §9 로 다시 확인한다
+git checkout release-1.2.0      # 실측한 릴리스. 다른 버전이면 §9 로 다시 확인한다
 cd manifests/charts
 helm dependency build opensandbox
 ```
@@ -109,17 +109,17 @@ opensandbox-controller:
   controller:
     image:
       repository: docker.io/opensandbox/controller
-      tag: release-1.1.1-rc.1
+      tag: release-1.2.0
     resources:
       requests: {cpu: 10m, memory: 64Mi}
     snapshot:
       # pause 용. aimon-sandbox 는 아직 쓰지 않지만 기본값이 Aliyun 레지스트리라 함께 바꿔 둔다
-      imageCommitterImage: docker.io/opensandbox/image-committer:release-1.1.1-rc.1
+      imageCommitterImage: docker.io/opensandbox/image-committer:release-1.2.0
 opensandbox-server:
   server:
     image:
       repository: docker.io/opensandbox/server
-      tag: release-1.1.1-rc.1
+      tag: release-1.2.0
     resources:
       requests: {cpu: 100m, memory: 256Mi}
       limits: {cpu: "2", memory: 2Gi}
@@ -141,7 +141,7 @@ opensandbox-server:
 
     [runtime]
     type = "kubernetes"
-    execd_image = "docker.io/opensandbox/execd:release-1.1.1-rc.1"
+    execd_image = "docker.io/opensandbox/execd:release-1.2.0"
     execd_run_as_init = true                   # 필수: execd 가 샌드박스의 init 으로 고아를 거둔다(아래)
 
     [kubernetes]
@@ -152,7 +152,7 @@ opensandbox-server:
     batchsandbox_template_file = "/etc/aimon/template.yaml"   # §5 의 강화 템플릿
 
     [egress]
-    image = "docker.io/opensandbox/egress:release-1.1.1-rc.1"
+    image = "docker.io/opensandbox/egress:release-1.2.0"
     mode = "dns+nft"                           # aimon-sandbox 의 EGRESS_POLICY 는 dns+nft 에서만 광고된다
 ```
 
@@ -265,12 +265,14 @@ kubectl apply -f netpol-sandbox-isolation.yaml
 
 ### 6.1 AIMON 이 샌드박스에 닿는 길
 
-프로바이더는 수명 API 말고도 각 샌드박스의 execd(44772)와 egress 사이드카(18080)를 부른다. 길은 둘이다.
+프로바이더는 수명 API 말고도 각 샌드박스의 execd(44772)를 부른다. 길은 둘이다. egress 사이드카(18080)의 credential
+vault 는 수명 API(`/v1/sandboxes/{id}/credential-vault`, OpenSandbox 1.2.0)로 서버를 거쳐 부르므로 AIMON 이 사이드카에
+직접 닿을 일은 없다.
 
 | 방식 | 프로바이더 설정 | NetworkPolicy |
 |---|---|---|
 | **서버 프록시 경유** | `useServerProxy(true)` | 위 정책 그대로. 서버만 샌드박스에 들어간다 |
-| **직접 연결** | `useServerProxy(false)`(기본) | AIMON 파드에서 들어오는 44772 · 18080 을 ingress 에 더해야 한다 |
+| **직접 연결** | `useServerProxy(false)`(기본) | AIMON 파드에서 들어오는 44772 를 ingress 에 더해야 한다 |
 
 직접 연결은 서버를 거치지 않아 명령 스트림의 홉이 하나 줄지만, AIMON 파드가 클러스터 안에 있어야 하고(파드 IP 로
 붙는다) 정책을 넓혀야 한다. 직접 연결이면 ingress 에 다음을 더한다.
@@ -279,7 +281,7 @@ kubectl apply -f netpol-sandbox-isolation.yaml
     - from:
         - namespaceSelector: {matchLabels: {kubernetes.io/metadata.name: <AIMON 네임스페이스>}}
           podSelector: {matchLabels: {app: <AIMON 앱 라벨>}}
-      ports: [{protocol: TCP, port: 44772}, {protocol: TCP, port: 18080}]
+      ports: [{protocol: TCP, port: 44772}]
 ```
 
 AIMON 이 클러스터 **밖**에 있으면 서버 프록시 경유만 가능하다.
@@ -470,4 +472,4 @@ OpenSandboxProvider provider = new OpenSandboxProvider(OpenSandboxProviderConfig
 | 첫 명령이 FAILED, step `root` | 템플릿이 적용되지 않았다. ConfigMap 을 고친 뒤 서버를 재시작했는지 본다 |
 | 첫 명령이 FAILED, step `network-isolation` | NetworkPolicy 가 없거나 CNI 가 집행하지 않거나 `except` 가 클러스터 CIDR 을 덮지 못한다 |
 | 첫 명령이 FAILED, step `egress` | 서버의 egress 모드가 `dns+nft` 가 아니다 |
-| execd 호출이 타임아웃 | `useServerProxy(false)` 인데 NetworkPolicy 가 AIMON → 샌드박스 44772 · 18080 을 막는다. [§6.1](#61-aimon-이-샌드박스에-닿는-길) |
+| execd 호출이 타임아웃 | `useServerProxy(false)` 인데 NetworkPolicy 가 AIMON → 샌드박스 44772 를 막는다. [§6.1](#61-aimon-이-샌드박스에-닿는-길) |

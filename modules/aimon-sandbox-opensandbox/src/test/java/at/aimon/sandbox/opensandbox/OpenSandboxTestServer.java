@@ -41,15 +41,15 @@ import at.aimon.sandbox.provider.SandboxProviderException;
  */
 final class OpenSandboxTestServer {
 
-    /** {@code opensandbox/server:release-1.1.0}, the newest release tag, by digest. */
+    /** {@code opensandbox/server:release-1.2.0}, the release the provider requires, by digest. */
     static final String SERVER_IMAGE = env("OPENSANDBOX_TEST_SERVER_IMAGE",
-            "opensandbox/server@sha256:68ca0212a2749b2c73096ce2ec0264455c64442c45f81007db442f52bf84c9d1");
-    /** The execd the docs pin, as the spike ran it (by digest). */
+            "opensandbox/server:release-1.2.0@sha256:25bebdcf1cf7724eb923faecbdbbf82d4038c6ab35c736151574726d14006f30");
+    /** The execd of the same release (by digest). */
     static final String EXECD_IMAGE = env("OPENSANDBOX_TEST_EXECD_IMAGE",
-            "opensandbox/execd:v1.1.0@sha256:6cf7dba2f21f0b536e100563d841ac58a9f31c2b0a081b7ac76796a24d6f47e2");
-    /** The egress sidecar the docs pin (by digest). */
+            "opensandbox/execd:release-1.2.0@sha256:c75836c46ef4302afccec182d5d7339eb2f905f51e3d73b7aa17bb76c832526c");
+    /** The egress sidecar of the same release (by digest). */
     static final String EGRESS_IMAGE = env("OPENSANDBOX_TEST_EGRESS_IMAGE",
-            "opensandbox/egress:v1.1.7@sha256:db7345d567b0970f384b8e3fa7a93a71b7f43d4b16bb2009de34096e9a87b3b5");
+            "opensandbox/egress:release-1.2.0@sha256:a3d30246e557525f3fa44d16226258268cea175532e652822bd1eb4e83e0f54d");
 
     /** This run's deployment label: sandboxes of other runs on a shared server are never touched. */
     static final String DEPLOYMENT = "ci-" + UUID.randomUUID().toString().substring(0, 8);

@@ -74,6 +74,10 @@ dependencies {
 | `0.1.0` | `0.3.1` |
 | `main`(다음 릴리스) | `0.3.3` — 세션 소유자 기록, 세션 삭제 리스너, 요청 속성, 모든 도구 결과의 notice, 훅 실행 디렉터리를 쓴다. 코어 0.3.3 은 0.3.2 와 호환되지 않으므로(자동 압축 buffer · ratio 멤버 제거 kangwoo/aimon-core#285, 세션 로그 기본 v2 — 버전이 섞인 클러스터는 `v1` 고정 kangwoo/aimon-core#286) 마이너 업그레이드처럼 올린다([코어 0.3.3 릴리스 노트](https://github.com/kangwoo/aimon-core/releases/tag/v0.3.3)) |
 
+`main` 의 `aimon-sandbox-opensandbox` 는 **OpenSandbox 1.2.0 이상**(서버 · execd · egress 모두)을 요구한다.
+credential vault 를 1.2.0 에 생긴 서버 API(`/v1/sandboxes/{id}/credential-vault`)로 부르기 때문이다. `0.1.0` 은 1.1.x
+에서 실측했다.
+
 이 가이드는 `main` 을 기준으로 쓴다. `0.1.0` 에는 `sessionRecords(...)` · `sessionLifecycleListener()` · 요청 속성이
 없다. 바뀐 점은 [`CHANGELOG.md`](../../CHANGELOG.md) 에 있다.
 
@@ -105,7 +109,7 @@ level = "INFO"
 
 [runtime]
 type = "docker"
-execd_image = "opensandbox/execd:v1.1.0"
+execd_image = "opensandbox/execd:release-1.2.0"
 
 [storage]
 allowed_host_paths = []
@@ -127,7 +131,7 @@ seccomp_profile = ""
 mode = "direct"
 
 [egress]
-image = "opensandbox/egress:v1.1.7"
+image = "opensandbox/egress:release-1.2.0"
 mode = "dns+nft"
 readiness_timeout_seconds = 30.0
 ```
@@ -137,7 +141,7 @@ docker run -d --name opensandbox -p 8090:8090 \
   -v /var/run/docker.sock:/var/run/docker.sock \
   --add-host host.docker.internal:host-gateway \
   -v ~/opensandbox/config.toml:/etc/opensandbox/config.toml:ro \
-  opensandbox/server:release-1.1.0
+  opensandbox/server:release-1.2.0
 
 curl -s localhost:8090/health
 ```

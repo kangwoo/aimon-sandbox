@@ -34,8 +34,9 @@ import com.sun.net.httpserver.HttpServer;
 
 /**
  * A scripted OpenSandbox for the default test tier, on the JDK's {@link HttpServer}: a small stateful lifecycle API
- * (sandboxes, paged listing with the metadata filter, renew, endpoints through the server proxy, network policy), an
- * in-memory execd file system, and a {@code /command} whose events each test scripts. Every request is recorded; any
+ * (sandboxes, paged listing with the metadata filter, renew, endpoints through the server proxy, network policy, the
+ * credential vault), an in-memory execd file system, and a {@code /command} whose events each test scripts. Every
+ * request is recorded; any
  * route can be overridden to inject a failure.
  */
 final class FakeOpenSandboxServer implements AutoCloseable {
@@ -224,6 +225,10 @@ final class FakeOpenSandboxServer implements AutoCloseable {
         return "{\"type\":\"init\",\"text\":\"" + id + "\"}";
     }
 
+    /**
+     * An output event. Its text is sent as given: {@code out("a")} is how execd before {@code release-1.1.1} sends a
+     * line (ending stripped), {@code out("a\n")} how later execd sends it.
+     */
     static String out(String text) {
         return event("stdout", text);
     }
@@ -236,8 +241,22 @@ final class FakeOpenSandboxServer implements AutoCloseable {
         return JSON.createObjectNode().put("type", type).put("text", text).toString();
     }
 
+    /** A terminal success as execd before {@code release-1.2.0} sends it: no {@code exit_code}. */
     static String complete() {
         return "{\"type\":\"execution_complete\",\"execution_time\":1}";
+    }
+
+    /** A terminal success as execd {@code release-1.2.0} sends it, with {@code exit_code}. */
+    static String completed() {
+        return "{\"type\":\"execution_complete\",\"execution_time\":1,\"exit_code\":0}";
+    }
+
+    /** A non-zero exit as execd {@code release-1.2.0} sends it: {@code error.exit_code} beside {@code evalue}. */
+    static String exited(int code, String evalue, String traceback) {
+        final ObjectNode event = JSON.createObjectNode().put("type", "error");
+        event.putObject("error").put("ename", "CommandExecError").put("evalue", evalue).put("exit_code", code)
+                .putArray("traceback").add(traceback);
+        return event.toString();
     }
 
     static String exit(String value, String traceback) {
@@ -339,7 +358,7 @@ final class FakeOpenSandboxServer implements AutoCloseable {
                 return Reply.error(404, "DOCKER::SANDBOX_NOT_FOUND", "Sandbox " + parts[1] + " not found.");
             }
             final String rest = "/" + String.join("/", java.util.Arrays.copyOfRange(parts, 4, parts.length));
-            return "18080".equals(parts[3]) ? egress(request, rest) : execd(request, rest);
+            return execd(request, rest);
         }
         if (!API_KEY.equals(request.header("OPEN-SANDBOX-API-KEY"))) {
             return Reply.error(401, "INVALID_API_KEY", "bad key");
@@ -371,13 +390,12 @@ final class FakeOpenSandboxServer implements AutoCloseable {
             case "endpoints" : {
                 final Map<String, Object> endpoint = new LinkedHashMap<>();
                 endpoint.put("endpoint", "server.internal:8090/v1/sandboxes/" + sandbox.id + "/proxy/" + parts[3]);
-                if ("18080".equals(parts[3])) {
-                    endpoint.put("headers", Map.of("OPENSANDBOX-EGRESS-AUTH", "egress-token"));
-                }
                 return Reply.json(200, endpoint);
             }
             case "networkpolicy" :
                 return Reply.json(200, networkPolicy);
+            case "credential-vault" :
+                return parts.length == 3 ? vault(request) : Reply.status(404);
             default :
                 return Reply.status(404);
         }
@@ -432,13 +450,8 @@ final class FakeOpenSandboxServer implements AutoCloseable {
         return node;
     }
 
-    private Reply egress(Request request, String rest) {
-        if (!"egress-token".equals(request.header("OPENSANDBOX-EGRESS-AUTH"))) {
-            return Reply.error(401, "UNAUTHORIZED", "unauthorized");
-        }
-        if (!"/credential-vault".equals(rest)) {
-            return Reply.status(404);
-        }
+    /** The server's {@code /credential-vault} route, which proxies the egress sidecar's (release-1.2.0). */
+    private Reply vault(Request request) {
         if ("POST".equals(request.method)) {
             if (vault != null) {
                 return Reply.error(409, "CONFLICT", "vault exists");

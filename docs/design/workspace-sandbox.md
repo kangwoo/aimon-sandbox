@@ -530,7 +530,7 @@ OpenSandbox 서버 하나를 여러 애플리케이션이나 여러 개발자 �
 | `EXPIRY` | 프로바이더 측 절대 만료 시각 + 연장 | `timeout`(상대 초, 최소 60 — 빼면 만료되지 않으므로 늘 보낸다) · `renew-expiration`(절대 시각. 서버는 줄이는 것도, 상한을 넘기는 것도 받아들이므로 앞으로만 · 상한은 프로바이더가 지킨다). 서버의 `max_sandbox_timeout_seconds` 가 상한이고 API 로 읽을 수 없어 `max-expiry` 로 선언한다. 만료 = 즉시 삭제. idle 타임아웃이 아니다 |
 | `SHARED_VOLUME` | 여러 샌드박스에 RWX 볼륨 마운트, 샌드박스별 읽기 전용 마운트, 볼륨 삭제 | 생성은 `volumes[].pvc.createIfNotExists`(기본 access mode 가 `ReadWriteOnce` 이므로 RWX 를 명시). 삭제 API 는 없다 — `OpenSandboxProvider` 에 `VolumeReclaimer`(K8s API 또는 Docker 볼륨 API)를 주입해야 광고한다. 4단계는 인터페이스만 두고 구현은 싣지 않는다(5단계) |
 | `EGRESS_POLICY` | 목적지 허용 목록, 명시하지 않은 목적지는 차단 | `networkPolicy` + `defaultAction: deny`. 서버 egress 모드가 `dns+nft` 여야 IP/CIDR 까지 막힌다(`dns` 모드는 IP 로 샌다 — 실측). 기동 시점에는 모드를 알 수 없으므로 운영자가 `egress-enforcement: dns+nft` 로 선언해야 광고하고, 샌드박스가 생긴 뒤에는 `GET /sandboxes/{id}/networkpolicy` 의 `enforcementMode` 를 seed 단계의 `verify` 가 대조한다(§11.3). gVisor 와는 같이 쓸 수 없다(서버가 거부) — `dns+nft` 와 gVisor `runtime-class` 를 함께 선언하면 프로바이더 설정이 기동을 거부한다. Docker 런타임은 서버의 `[docker] network_mode = "bridge"` 에서만 정책을 받는다(운영 계약, §13.3) |
-| `CREDENTIAL_INJECTION` | 샌드박스에 비밀을 노출하지 않고 egress 에서 주입. host · 경로 prefix · 메서드로 범위를 좁힘 | credential vault(`dns+nft` 필요). 범위는 scheme · host · method · path(glob)이다 — port 는 scheme 을 따르고 vault 에서도 deprecated 라 겹침 검사는 무시한다(요구를 채운다, K8s 실측). 바인딩은 생성 뒤 사이드카 API(포트 18080, endpoint 해석이 주는 `OPENSANDBOX-EGRESS-AUTH` 헤더 — 4단계 실측)에 **프로파일이 이름으로 부른 것만** 넣는다. 바인딩 host 는 egress 허용 목록이 명시적으로 덮어야 한다(§13.2) |
+| `CREDENTIAL_INJECTION` | 샌드박스에 비밀을 노출하지 않고 egress 에서 주입. host · 경로 prefix · 메서드로 범위를 좁힘 | credential vault(`dns+nft` 필요). 범위는 scheme · host · method · path(glob)이다 — port 는 scheme 을 따르고 vault 에서도 deprecated 라 겹침 검사는 무시한다(요구를 채운다, K8s 실측). 바인딩은 생성 뒤 서버의 `/v1/sandboxes/{id}/credential-vault`(OpenSandbox 1.2.0 — Docker · K8s 에서는 서버가 사이드카 API 포트 18080 을 egress 인증 토큰과 함께 프록시한다. 1.1.x 에서는 endpoint 해석이 주는 `OPENSANDBOX-EGRESS-AUTH` 헤더로 사이드카에 직접 붙었다 — 4단계 실측)로 **프로파일이 이름으로 부른 것만** 넣는다. 바인딩 host 는 egress 허용 목록이 명시적으로 덮어야 한다(§13.2) |
 | `NETWORK_ISOLATION` | 샌드박스 사이(east-west)와 샌드박스 → OpenSandbox 서버·K8s API·클러스터 내부 트래픽 차단 | OpenSandbox 가 강제하지 않으므로 운영자가 네트워크 정책을 걸고 `network-isolation: declared` 로 선언해야 광고한다. seed 가 프로바이더가 알려 준 제어면 엔드포인트(`controlPlaneEndpoints`)로의 TCP 연결이 실패하는지 자가 점검한다(§11.3). **Docker 런타임은 선언할 수 없다** — execd 가 토큰 없이 열려 있어 옆 샌드박스가 root 명령을 실행할 수 있고(실측), egress 정책은 들어오는 쪽을 막지 않는다. K8s 는 운영자 NetworkPolicy 로 막힌다(스파이크 §7) |
 | `RUNTIME_CLASS` | 요청한 runtimeClass(gVisor/Kata)로 실제 실행 | K8s 런타임의 `runtimeClassName` — 서버 설정으로만 정해진다. 프로바이더 설정 `runtime-class: {name, kind}` 가 선언하고(`kind` 는 gVisor 인지 알아야 해서 필수), 프로파일의 `runtimeClass` 는 그 이름과 같아야 한다. Docker 런타임에서는 선언할 수 없다 |
 | `HARDENED_SECURITY_CONTEXT` | 비루트 · 권한 상승 금지 · capability 제거 · 서비스 계정 토큰 미마운트 | 요청으로는 지정할 수 없다 — 서버의 BatchSandbox 템플릿이 **샌드박스 컨테이너의** securityContext 로 건다(파드 단위로 걸면 egress 의 init 컨테이너가 깨진다). 기본값은 root 이고 SA 토큰만 빠진다. 운영자가 선언해야 광고하고 seed 가 결과를 다시 검사한다(§11.3). Docker 런타임은 root 로만 돌아 광고하지 않는다 |
@@ -1072,8 +1072,10 @@ exec 가 끝나면 남은 꼬리를 넘긴다(그 뒤에 늦게 도착한 출력
   말없이 잃는 대신 거절한다. 모니터는 백그라운드로 부른다
 - **하트비트에 상한이 없다.** 타임아웃이 있는 스트리밍 실행은 워치독이 끝을 정하므로 `backgroundHeartbeatLimit` 을
   적용하지 않는다. 그렇지 않으면 한도보다 긴 모니터 밑에서 유휴 정책이 샌드박스를 거둔다
-- **provider 마다 줄 경계가 다를 수 있다.** OpenSandbox 는 출력을 줄 단위로 정규화한다(step-4 §5.3) — 개행 없는
-  진행 표시나 홀로 있는 `\r` 이 줄로 갈라질 수 있다
+- **provider 마다 줄 경계가 다를 수 있다.** OpenSandbox 는 출력을 줄 단위 이벤트로 보낸다(step-4 §5.3). execd 1.1.1
+  부터는 이벤트가 줄 끝(`\n` · `\r`)을 그대로 실어 출력이 바이트 그대로 복원되지만(진행 표시의 `\r` 도 남는다), 그
+  이전 execd 는 줄 끝을 떼어 보내므로 프로바이더가 `\n` 을 붙이고, 개행 없는 진행 표시나 홀로 있는 `\r` 은 줄로
+  갈라진다
 - **trailer 뒤 500ms.** trailer 를 본 뒤 `TRAILER_KILL_GRACE` 가 지나면 exec 를 죽이므로, stdout 과 stderr 를 따로
   넘기는 provider 에서 그보다 늦게 오는 마지막 줄은 잃을 수 있다
 

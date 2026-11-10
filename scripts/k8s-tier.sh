@@ -38,7 +38,7 @@ repo=$(cd "$(dirname "$0")/.." && pwd)
 deploy="$repo/spike/opensandbox/k8s/deploy"
 cluster=${AIMON_K8S_CLUSTER:-aimon-k8s-tier}
 work=${AIMON_K8S_WORK:-${TMPDIR:-/tmp}/aimon-k8s-tier}
-opensandbox_commit=3738975
+opensandbox_commit=release-1.2.0
 image=aimon-sandbox-contract:k8s
 port=${AIMON_K8S_PORT:-8091}
 api_key=spike-key
@@ -67,6 +67,9 @@ up() {
   fi
   if [ ! -d "$work/OpenSandbox" ]; then
     git clone -q https://github.com/opensandbox-group/OpenSandbox "$work/OpenSandbox"
+  else
+    # A clone left by an earlier pin may predate the tag.
+    git -C "$work/OpenSandbox" fetch -q --tags origin
   fi
   git -C "$work/OpenSandbox" checkout -q "$opensandbox_commit"
 
