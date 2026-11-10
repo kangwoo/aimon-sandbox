@@ -13,12 +13,14 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 
+import org.testcontainers.DockerClientFactory;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.wait.strategy.Wait;
 import org.testcontainers.images.builder.ImageFromDockerfile;
 import org.testcontainers.images.builder.Transferable;
 
 import at.aimon.sandbox.provider.ProviderSandbox;
+import at.aimon.sandbox.provider.ProviderSandboxRef;
 import at.aimon.sandbox.provider.SandboxLabels;
 import at.aimon.sandbox.provider.SandboxProviderException;
 
@@ -194,8 +196,9 @@ final class OpenSandboxTestServer {
      * attached. One cause is the server's, not the tier's: it picks the sidecar's host ports by probing them inside its
      * own container, which does not see what the host already publishes (another sandbox, the other fork's server),
      * and on the egress path it does not retry a port conflict as it does without a policy. A 500 whose log shows that
-     * conflict is retried once, said to {@code retrying} (unprefixed: the caller names itself); any other 500, or a
-     * second conflict, fails.
+     * conflict is retried once, said to {@code retrying} (unprefixed: the caller names itself); so is a 500 whose own
+     * body shows it, as the main container's start failure does (its server retries a conflict itself, but that one
+     * reached CI on PR #55); any other 500, or a second conflict, fails.
      *
      * @return what {@code create} returned
      */
@@ -209,7 +212,7 @@ final class OpenSandboxTestServer {
                     throw e;
                 }
                 final String since = log.since(mark);
-                if (attempt > 1 || !isPortConflict(since)) {
+                if (attempt > 1 || !isPortConflict(since) && !isPortConflict(e.getMessage())) {
                     e.addSuppressed(
                             new AssertionError("the server's log of this create (attempt " + attempt + "):\n" + since));
                     throw e;
@@ -222,12 +225,43 @@ final class OpenSandboxTestServer {
 
     /**
      * @return whether {@code log} shows Docker refusing a host port the server picked: the messages that the server's
-     *         own port-conflict retry, missing on its egress path, recognizes ({@code is_port_publish_error})
+     *         own port-conflict retry, missing on its egress path, recognizes ({@code is_port_publish_error}), and the
+     *         head of Docker 28's wording, {@code failed to bind host port …}, which is all a truncated error body
+     *         keeps of it
      */
     static boolean isPortConflict(String log) {
+        if (log == null) {
+            return false;
+        }
         final String lower = log.toLowerCase(Locale.ROOT);
         return lower.contains("port is already allocated") || lower.contains("ports are not available")
-                || lower.contains("address already in use");
+                || lower.contains("address already in use") || lower.contains("failed to bind host port");
+    }
+
+    /**
+     * Takes swap away from a sandbox: its container's Docker memory-swap is set to its memory limit, so the cgroup's
+     * {@code memory.swap.max} reads 0. The server sets only the memory limit, and Docker's default memory-swap then
+     * lets the cgroup swap as much again, which on a runner with a slow swap disk keeps an out-of-memory command in
+     * reclaim, with execd beside it, instead of reaching the OOM killer (CI, PR #55).
+     *
+     * @param ref
+     *            the sandbox, on this server's Docker runtime (its container is {@code sandbox-{id}})
+     * @param memoryBytes
+     *            its memory limit, which Docker's update needs alongside the memory-swap
+     * @return whether swap was taken away: false for a server started elsewhere, whose Docker need not be this JVM's
+     */
+    boolean takeSwapAway(ProviderSandboxRef ref, long memoryBytes) {
+        if (container == null) {
+            return false;
+        }
+        DockerClientFactory.instance().client().updateContainerCmd(containerName(ref)).withMemory(memoryBytes)
+                .withMemorySwap(memoryBytes).exec();
+        return true;
+    }
+
+    /** @return the Docker container the server runs {@code ref} in ({@code sandbox-{id}}, its {@code container_ops}) */
+    static String containerName(ProviderSandboxRef ref) {
+        return "sandbox-" + ref.sandboxId();
     }
 
     /** @return a configuration for this server: Docker runtime, reached through the server proxy */

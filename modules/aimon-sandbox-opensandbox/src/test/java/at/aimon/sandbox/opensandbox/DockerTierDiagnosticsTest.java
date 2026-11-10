@@ -9,12 +9,14 @@ import java.util.function.Supplier;
 
 import org.junit.jupiter.api.Test;
 
+import at.aimon.sandbox.provider.ProviderSandboxRef;
 import at.aimon.sandbox.provider.SandboxProviderException;
 
 /**
- * The pure parts of the docker tier's flake diagnostics: which server log makes {@link OpenSandboxEgressIT} retry a
- * create and how that retry runs, on a simulated server log, and the {@code oom_kill} count
- * {@link OpenSandboxWorkspaceIT}'s out-of-memory test compares.
+ * The pure parts of the docker tier's flake diagnostics: which server log or error body makes
+ * {@link OpenSandboxEgressIT} and {@link OpenSandboxProviderContractTest} retry a create and how that retry runs, on a
+ * simulated server log, and what {@link OpenSandboxWorkspaceIT}'s out-of-memory test reads of its cgroup: the swap it
+ * allows and the {@code oom_kill} count.
  */
 class DockerTierDiagnosticsTest {
 
@@ -118,6 +120,56 @@ class DockerTierDiagnosticsTest {
         assertThatThrownBy(() -> OpenSandboxTestServer.retryOnPortConflict(log, create, message -> {
         })).isInstanceOf(SandboxProviderException.class).hasMessageContaining("HTTP 422").hasNoSuppressedExceptions();
         assertThat(calls).hasSize(1);
+    }
+
+    @Test
+    void dockersFailedToBindWordingIsAPortConflictInTheLogOrInTheErrorBodyAlone() {
+        assertThat(OpenSandboxTestServer.isPortConflict("Failed to create or start container: ... (\"failed to set up "
+                + "container networking: driver failed programming external connectivity on endpoint sandbox-x (f4): "
+                + "failed to bind host port 0.0.0.0:53758/tcp…")).as("PR #55's truncated body").isTrue();
+        assertThat(OpenSandboxTestServer.isPortConflict(null)).isFalse();
+
+        final FakeLog log = new FakeLog();
+        final List<Integer> calls = new ArrayList<>();
+        final List<String> said = new ArrayList<>();
+        final Supplier<String> create = () -> {
+            calls.add(calls.size());
+            if (calls.size() > 1) {
+                return "ref-1";
+            }
+            throw HttpErrors.failure(500, "create sandbox", "{\"code\":\"DOCKER::SANDBOX_START_FAILED\",\"message\":"
+                    + "\"... failed to bind host port 0.0.0.0:53758/tcp: address already in use\"}");
+        };
+
+        assertThat(OpenSandboxTestServer.retryOnPortConflict(log, create, said::add)).as("nothing in the server's log")
+                .isEqualTo("ref-1");
+        assertThat(calls).hasSize(2);
+        assertThat(said).singleElement().asString().startsWith("create answered HTTP 500");
+    }
+
+    @Test
+    void aSandboxsContainerIsNamedAfterItsId() {
+        assertThat(OpenSandboxTestServer.containerName(ProviderSandboxRef.of(OpenSandboxProvider.NAME, "20a7f041")))
+                .isEqualTo("sandbox-20a7f041");
+    }
+
+    @Test
+    void theSwapACgroupAllowsIsReadFromItsMemoryFiles() {
+        final String v2Docker = String.join("\n", "cgroup: v2", "memory.max: 268435456 ", "memory.swap.max: 268435456 ",
+                "memory.current: 9129984 ", "");
+        final String v2None = "cgroup: v2\nmemory.max: 268435456 \nmemory.swap.max: 0 \n";
+        final String v2Unlimited = "cgroup: v2\nmemory.swap.max: max \n";
+        final String v1None = "cgroup: v1\nmemory.limit_in_bytes: 268435456 \nmemory.memsw.limit_in_bytes: 268435456 \n";
+        final String v1Docker = "cgroup: v1\nmemory.limit_in_bytes: 268435456 \nmemory.memsw.limit_in_bytes: 536870912 \n";
+
+        assertThat(OpenSandboxWorkspaceIT.swapAllowance(v2Docker)).as("Docker's default, PR #55").isEqualTo(268435456);
+        assertThat(OpenSandboxWorkspaceIT.swapAllowance(v2None)).isZero();
+        assertThat(OpenSandboxWorkspaceIT.swapAllowance(v2Unlimited)).isEqualTo(Long.MAX_VALUE);
+        assertThat(OpenSandboxWorkspaceIT.swapAllowance(v1None)).isZero();
+        assertThat(OpenSandboxWorkspaceIT.swapAllowance(v1Docker)).isEqualTo(268435456);
+        assertThat(OpenSandboxWorkspaceIT.swapAllowance("cgroup: v2\nmemory.swap.max: tr: No such file \n"))
+                .as("no swap accounting").isEqualTo(-1);
+        assertThat(OpenSandboxWorkspaceIT.swapAllowance("(unreadable: java.io.IOException)\n")).isEqualTo(-1);
     }
 
     @Test

@@ -73,7 +73,12 @@ class OpenSandboxWorkspaceIT {
     private static final AgentRuntimeId RUNTIME = AgentRuntimeId.fromName("opensandbox-it");
     private static final Principal ALICE = Principal.user("alice");
 
-    /** The out-of-memory command's timeout: the kill may wait for the cgroup's swap (see the test). */
+    /** The out-of-memory test's memory limit, 256 Mi. */
+    private static final long OOM_MEMORY = 256L * 1024 * 1024;
+    /**
+     * The out-of-memory command's timeout: far above the kill's well under a second without swap, so that a server
+     * whose Docker is not this JVM's, where swap stays (see the test), still has room, and a hang is still told apart.
+     */
     private static final Duration OOM_COMMAND = Duration.ofSeconds(180);
     /** The cgroup v2 memory files the out-of-memory test records, in {@code /sys/fs/cgroup}. */
     private static final String MEMORY_FILES = "memory.max memory.swap.max memory.current memory.swap.current "
@@ -224,15 +229,21 @@ class OpenSandboxWorkspaceIT {
     }
 
     /**
-     * {@code tail} grows until the cgroup's OOM killer ends it. The server sets only Docker's memory limit, so Docker's
-     * default memory-swap (twice the limit) lets the cgroup swap up to 256 Mi before that kill: on a slow or contended
-     * runner disk that took past 60 s once (CI, PR #52) where it takes 3–12 s otherwise. The command therefore has
-     * {@link #OOM_COMMAND}, and the sandbox's memory accounting (limits, swap, the OOM events) before and after goes
-     * to stdout, and into the failure when the command times out, so a slow kill can be told apart from one that never
-     * came. The kill itself is checked twice: exit 137, and the cgroup's {@code oom_kill} count went up. That count is
-     * in {@code memory.events} on cgroup v2 and in {@code memory.oom_control} on v1, both from Linux 4.13, which every
-     * host this tier runs on (Docker with cgroup v2) exceeds. Only a v1 cgroup without it skips the second check,
-     * saying so, once everything else has passed (see
+     * {@code tail} grows until the cgroup's OOM killer ends it. The server sets only Docker's memory limit, and
+     * Docker's
+     * default memory-swap (twice the limit) lets the cgroup swap up to 256 Mi more. Where the swap disk is slow, as on
+     * CI runners, reclaim then keeps making a little progress, the OOM killer waits on it, and execd, in the same
+     * cgroup, stalls with the command: past 60 s once (PR #52), past 180 s with the sandbox unreachable afterwards (PR
+     * #55, cgroup v2, {@code memory.swap.max} 268435456), where an attempt that passed took 8 s and a local Docker
+     * Desktop, with fast swap, 2–3 s. So the test takes swap away from its sandbox first
+     * ({@link OpenSandboxTestServer#takeSwapAway}) and checks that the cgroup now allows none
+     * ({@link #swapAllowance}); without swap the kill takes well under a second. A server started elsewhere keeps its
+     * swap, and only the {@link #OOM_COMMAND} margin is left there. The sandbox's memory accounting (limits, swap, the
+     * OOM events) before and after goes to stdout, and into the failure when the command times out, so a slow kill can
+     * be told apart from one that never came. The kill itself is checked twice: exit 137, and the cgroup's
+     * {@code oom_kill} count went up. That count is in {@code memory.events} on cgroup v2 and in
+     * {@code memory.oom_control} on v1, both from Linux 4.13, which every host this tier runs on (Docker with cgroup
+     * v2) exceeds. Only a v1 cgroup without it skips the second check, saying so, once everything else has passed (see
      * {@link #lacksOomKillCount}); on v2, or where the version could not be read, a missing count fails.
      */
     @Test
@@ -241,22 +252,34 @@ class OpenSandboxWorkspaceIT {
         final WorkspaceSandbox assembly = assembly(
                 profile().resources(ResourceSpec.of("1", "256Mi", null, null)).build(),
                 new InMemorySandboxWorkspaceStore());
-        final ExecutionEnvironment env = mainTurn(assembly, SessionId.generate());
+        final SessionId session = SessionId.generate();
+        final ExecutionEnvironment env = mainTurn(assembly, session);
         final ExecutionEnvironment neighbour = mainTurn(assembly, SessionId.generate());
 
         final ShellCommandResult pids = bash(env, "cat /sys/fs/cgroup/pids.max");
+        final ProviderSandboxRef ref = assembly.store().find(SandboxWorkspaceId.of("ws:" + session.value()))
+                .orElseThrow().slot("primary").orElseThrow().providerRef().orElseThrow();
+        final boolean swapTaken = OpenSandboxTestServer.dnsNft().takeSwapAway(ref, OOM_MEMORY);
         final String before = memory(env);
+        if (swapTaken) {
+            assertThat(swapAllowance(before))
+                    .as("the swap the cgroup allows once it was taken away, before:%n%s", before).isZero();
+        }
         final long started = System.nanoTime();
         final ShellCommandResult oom;
         try {
             oom = bash(env, "head -c 600000000 /dev/zero | tail -n 1 > /dev/null; echo rc=$?", OOM_COMMAND);
         } catch (ShellTimeoutException e) {
-            throw new AssertionError("the out-of-memory command was not killed within " + OOM_COMMAND
-                    + ". The sandbox's memory before it:\n" + before + "after it:\n" + memory(env), e);
+            throw new AssertionError(
+                    "the out-of-memory command was not killed within " + OOM_COMMAND + " (swap taken away: " + swapTaken
+                            + "). The sandbox's memory before it:\n" + before + "after it:\n" + memory(env),
+                    e);
         }
         final String after = memory(env);
-        System.out.printf("[§12.2] the out-of-memory command ended in %d ms; memory before:%n%safter:%n%s",
-                TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started), before, after);
+        System.out.printf(
+                "[§12.2] the out-of-memory command ended in %d ms (swap taken away: %s); memory before:%n%s"
+                        + "after:%n%s",
+                TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started), swapTaken, before, after);
 
         assertThat(pids.stdout().strip()).as("the server's pids_limit").isEqualTo("4096");
         assertThat(oom.stdout()).isEqualTo("rc=137\n");
@@ -299,6 +322,21 @@ class OpenSandboxWorkspaceIT {
         final Matcher matcher = Pattern.compile("(?m)^memory\\.(?:events|oom_control): .*\\boom_kill (\\d+)")
                 .matcher(memory);
         return matcher.find() ? Long.parseLong(matcher.group(1)) : -1;
+    }
+
+    /**
+     * @return the swap, in bytes, {@link #memory}'s cgroup allows beyond its memory: {@code memory.swap.max} on cgroup
+     *         v2 ({@link Long#MAX_VALUE} for {@code max}), {@code memory.memsw.limit_in_bytes} less
+     *         {@code memory.limit_in_bytes} on v1; -1 when the reading has neither
+     */
+    static long swapAllowance(String memory) {
+        final Matcher v2 = Pattern.compile("(?m)^memory\\.swap\\.max: (\\d+|max) *$").matcher(memory);
+        if (v2.find()) {
+            return "max".equals(v2.group(1)) ? Long.MAX_VALUE : Long.parseLong(v2.group(1));
+        }
+        final Matcher limit = Pattern.compile("(?m)^memory\\.limit_in_bytes: (\\d+) *$").matcher(memory);
+        final Matcher memsw = Pattern.compile("(?m)^memory\\.memsw\\.limit_in_bytes: (\\d+) *$").matcher(memory);
+        return limit.find() && memsw.find() ? Long.parseLong(memsw.group(1)) - Long.parseLong(limit.group(1)) : -1;
     }
 
     /**
