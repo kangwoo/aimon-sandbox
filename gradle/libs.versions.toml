@@ -25,14 +25,15 @@
 # `ShellFeature.ISOLATED_EXECUTION` (kangwoo/aimon-core#273) and `ShellFeature.RUN_DIRECTORY` (kangwoo/aimon-core#275). Until it was released the pin was `0.3.3-SNAPSHOT`,
 # resolved from Central's snapshot repository through a filtered block in build.gradle.kts; both left together.
 #
-# 0.3.4-SNAPSHOT: `ShellFeature.STREAMING` and `VirtualShell#execute(ShellCommand, ExecutionOptions,
+# 0.3.4 adds `ShellFeature.STREAMING` and `VirtualShell#execute(ShellCommand, ExecutionOptions,
 # ShellLineListener)` (kangwoo/aimon-core#303), which SandboxShell implements, and the sandbox SPI of the Python
 # `ExecuteCode` shell engine (kangwoo/aimon-core#330, #333, #334, #335): `RuntimeFileSystem`,
 # `EnvironmentDescriptor.isolation()`/`runtimes()`, the `RunDirectory` secret mark and `ShellKillCause`
 # (docs/design/ptc-shell-provider.md). `aimon-code-engine-testkit` is core's engine contract suite, test-only here.
-# Resolved the same way — the pin and the snapshot block in build.gradle.kts leave together when 0.3.4 is released.
+# Until it was released the pin was `0.3.4-SNAPSHOT`, resolved from Central's snapshot repository through a filtered
+# block in build.gradle.kts; both left together.
 [versions]
-aimon-core = "0.3.4-SNAPSHOT"
+aimon-core = "0.3.4"
 
 lombok = "1.18.48"
 
