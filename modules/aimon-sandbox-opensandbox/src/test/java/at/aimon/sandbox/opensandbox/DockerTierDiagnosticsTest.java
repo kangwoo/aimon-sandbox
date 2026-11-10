@@ -3,11 +3,16 @@ package at.aimon.sandbox.opensandbox;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.function.Supplier;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import at.aimon.sandbox.provider.ProviderSandboxRef;
 import at.aimon.sandbox.provider.SandboxProviderException;
@@ -15,8 +20,8 @@ import at.aimon.sandbox.provider.SandboxProviderException;
 /**
  * The pure parts of the docker tier's flake diagnostics: which server log or error body makes
  * {@link OpenSandboxEgressIT} and {@link OpenSandboxProviderContractTest} retry a create and how that retry runs, on a
- * simulated server log, and what {@link OpenSandboxWorkspaceIT}'s out-of-memory test reads of its cgroup: the swap it
- * allows and the {@code oom_kill} count.
+ * simulated server log, and what {@link OpenSandboxWorkspaceIT}'s out-of-memory test reads of its cgroup — its
+ * version, the swap it allows and the {@code oom_kill} count — and of Docker: which container is the sandbox's.
  */
 class DockerTierDiagnosticsTest {
 
@@ -154,6 +159,50 @@ class DockerTierDiagnosticsTest {
     }
 
     @Test
+    void aSandboxsContainerIsTheOneLabelledWithItsIdThatIsNoSidecar() {
+        final ProviderSandboxRef ref = ProviderSandboxRef.of(OpenSandboxProvider.NAME, "20a7f041");
+        final OpenSandboxTestServer.DockerContainer own = container("c1", "renamed-by-a-newer-server",
+                Map.of(OpenSandboxTestServer.SANDBOX_ID_LABEL, "20a7f041"));
+        final OpenSandboxTestServer.DockerContainer sidecar = container("c2", "sandbox-egress-20a7f041", Map.of(
+                OpenSandboxTestServer.SANDBOX_ID_LABEL, "20a7f041", OpenSandboxTestServer.SIDECAR_LABEL, "20a7f041"));
+
+        assertThat(OpenSandboxTestServer.sandboxContainer(ref, List.of(sidecar, own))).as("whatever its name")
+                .isEqualTo("c1");
+    }
+
+    @Test
+    void withoutASingleLabelledContainerTheServersNameDecides() {
+        final ProviderSandboxRef ref = ProviderSandboxRef.of(OpenSandboxProvider.NAME, "20a7f041");
+        final OpenSandboxTestServer.DockerContainer unlabelled = container("c1", "sandbox-20a7f041", Map.of());
+        final OpenSandboxTestServer.DockerContainer twinA = container("c2", "sandbox-20a7f041",
+                Map.of(OpenSandboxTestServer.SANDBOX_ID_LABEL, "20a7f041"));
+        final OpenSandboxTestServer.DockerContainer twinB = container("c3", "helper-20a7f041",
+                Map.of(OpenSandboxTestServer.SANDBOX_ID_LABEL, "20a7f041"));
+
+        assertThat(OpenSandboxTestServer.sandboxContainer(ref, List.of(unlabelled))).as("an older server's labels")
+                .isEqualTo("c1");
+        assertThat(OpenSandboxTestServer.sandboxContainer(ref, List.of(twinA, twinB))).as("two labelled")
+                .isEqualTo("c2");
+    }
+
+    @Test
+    void noSingleContainerFailsNamingWhatWasFound() {
+        final ProviderSandboxRef ref = ProviderSandboxRef.of(OpenSandboxProvider.NAME, "20a7f041");
+        final OpenSandboxTestServer.DockerContainer sidecar = container("c2", "sandbox-egress-20a7f041", Map.of(
+                OpenSandboxTestServer.SANDBOX_ID_LABEL, "20a7f041", OpenSandboxTestServer.SIDECAR_LABEL, "20a7f041"));
+        final OpenSandboxTestServer.DockerContainer other = container("c4", "sandbox-ffff0000",
+                Map.of(OpenSandboxTestServer.SANDBOX_ID_LABEL, "ffff0000"));
+
+        assertThatThrownBy(() -> OpenSandboxTestServer.sandboxContainer(ref, List.of()))
+                .isInstanceOf(AssertionError.class)
+                .hasMessageContaining("no single Docker container of sandbox 20a7f041")
+                .hasMessageContaining("0 labelled opensandbox.io/id=20a7f041 and 0 named sandbox-20a7f041");
+        assertThatThrownBy(() -> OpenSandboxTestServer.sandboxContainer(ref, List.of(sidecar, other)))
+                .as("only its sidecar and another sandbox's container").isInstanceOf(AssertionError.class)
+                .hasMessageContaining("[sandbox-egress-20a7f041]").hasMessageContaining("[sandbox-ffff0000]");
+    }
+
+    @Test
     void theSwapACgroupAllowsIsReadFromItsMemoryFiles() {
         final String v2Docker = String.join("\n", "cgroup: v2", "memory.max: 268435456 ", "memory.swap.max: 268435456 ",
                 "memory.current: 9129984 ", "");
@@ -210,5 +259,64 @@ class DockerTierDiagnosticsTest {
         assertThat(OpenSandboxWorkspaceIT.lacksOomKillCount(v2With, v2Without)).as("v2 stays strict").isFalse();
         assertThat(OpenSandboxWorkspaceIT.lacksOomKillCount(v1Without, unreadable)).as("no version read: strict")
                 .isFalse();
+        final String unknown = "cgroup: unknown (neither cgroup.controllers nor memory/memory.limit_in_bytes in "
+                + "'/sys/fs/cgroup': cpu cpuacct )\n";
+        assertThat(OpenSandboxWorkspaceIT.lacksOomKillCount(unknown, unknown)).as("an unknown version: strict")
+                .isFalse();
+    }
+
+    @Test
+    void theCgroupVersionIsReadFromWhatTheCgroupFileSystemHolds(@TempDir Path dir) throws Exception {
+        final Path v2 = Files.createDirectories(dir.resolve("v2"));
+        Files.writeString(v2.resolve("cgroup.controllers"), "cpu memory pids\n");
+        Files.writeString(v2.resolve("memory.swap.max"), "0\n");
+        final Path v1 = Files.createDirectories(dir.resolve("v1/memory"));
+        Files.writeString(v1.resolve("memory.limit_in_bytes"), "268435456\n");
+        Files.writeString(v1.resolve("memory.memsw.limit_in_bytes"), "268435456\n");
+        // a v1 hierarchy without the memory controller: v1 by its layout, but there is no memory file to read
+        Files.createDirectories(dir.resolve("unknown/cpu"));
+        Files.createDirectories(dir.resolve("unknown/memory"));
+
+        final String v2Memory = run(OpenSandboxWorkspaceIT.memoryCommand(v2.toString()));
+        final String v1Memory = run(OpenSandboxWorkspaceIT.memoryCommand(dir.resolve("v1").toString()));
+        final String unknown = run(OpenSandboxWorkspaceIT.memoryCommand(dir.resolve("unknown").toString()));
+
+        assertThat(OpenSandboxWorkspaceIT.cgroupVersion(v2Memory)).as(v2Memory).isEqualTo("v2");
+        assertThat(OpenSandboxWorkspaceIT.swapAllowance(v2Memory)).as(v2Memory).isZero();
+        assertThat(OpenSandboxWorkspaceIT.cgroupVersion(v1Memory)).as(v1Memory).isEqualTo("v1");
+        assertThat(OpenSandboxWorkspaceIT.swapAllowance(v1Memory)).as(v1Memory).isZero();
+        assertThat(OpenSandboxWorkspaceIT.cgroupVersion(unknown)).as(unknown).isNull();
+        assertThat(unknown).startsWith("cgroup: unknown (neither cgroup.controllers nor memory/memory.limit_in_bytes")
+                .contains("cpu memory");
+        assertThat(OpenSandboxWorkspaceIT.lacksSwapAccounting(unknown)).as("no version: not a host without it")
+                .isFalse();
+    }
+
+    @Test
+    void aHostWithoutSwapAccountingIsToldApartFromAnUnreadableCgroup() {
+        final String v2Without = "cgroup: v2\nmemory.max: 268435456 \n"
+                + "memory.swap.max: tr: /sys/fs/cgroup/memory.swap.max: No such file or directory \n";
+        final String v1Without = "cgroup: v1\nmemory.limit_in_bytes: 268435456 \n"
+                + "memory.memsw.limit_in_bytes: tr: memory.memsw.limit_in_bytes: No such file or directory \n";
+
+        assertThat(OpenSandboxWorkspaceIT.lacksSwapAccounting(v2Without)).isTrue();
+        assertThat(OpenSandboxWorkspaceIT.lacksSwapAccounting(v1Without)).isTrue();
+        assertThat(OpenSandboxWorkspaceIT.lacksSwapAccounting("cgroup: v2\nmemory.swap.max: 0 \n")).isFalse();
+        assertThat(OpenSandboxWorkspaceIT.lacksSwapAccounting("cgroup: v2\nmemory.swap.max: 268435456 \n"))
+                .as("accounted, and not taken away: the test's assertion fails on it").isFalse();
+        assertThat(OpenSandboxWorkspaceIT.lacksSwapAccounting("(unreadable: java.io.IOException)\n"))
+                .as("execd did not answer").isFalse();
+    }
+
+    private static OpenSandboxTestServer.DockerContainer container(String id, String name, Map<String, String> labels) {
+        return new OpenSandboxTestServer.DockerContainer(id, List.of(name), labels);
+    }
+
+    /** @return the stdout and stderr of {@code command} in this host's {@code bash}, which must exit 0 */
+    private static String run(String command) throws Exception {
+        final Process bash = new ProcessBuilder("bash", "-c", command).redirectErrorStream(true).start();
+        final String out = new String(bash.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+        assertThat(bash.waitFor()).as(out).isZero();
+        return out;
     }
 }

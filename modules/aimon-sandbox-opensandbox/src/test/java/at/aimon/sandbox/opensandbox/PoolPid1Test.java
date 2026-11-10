@@ -10,8 +10,8 @@ import org.junit.jupiter.api.Test;
 
 /**
  * The pure parts of the k8s tier's PID 1 check: PID 1's arguments from its NUL-separated {@code /proc/1/cmdline}
- * ({@link AbstractShellEngineK8sIT#argv}), and which of them are task-executor's
- * ({@link ShellEngineContractK8sPoolIT}).
+ * ({@link AbstractShellEngineK8sIT#argv}), which of them are task-executor's ({@link ShellEngineContractK8sPoolIT}),
+ * and which are a template-mode PID 1's ({@link ShellEngineContractK8sTemplateIT}).
  */
 class PoolPid1Test {
 
@@ -39,6 +39,38 @@ class PoolPid1Test {
                 .isFalse();
         assertThat(ShellEngineContractK8sPoolIT.isTaskExecutor(List.of("/opt/task-executor dir/sh"))).isFalse();
         assertThat(ShellEngineContractK8sPoolIT.isTaskExecutor(List.of())).isFalse();
+    }
+
+    @Test
+    void templateModesPid1IsRecognizedByItsArgvNotItsJoinedLine() {
+        assertThat(ShellEngineContractK8sTemplateIT
+                .isReapingPid1(List.of("/opt/opensandbox/execd", "--init", "--", "tail", "-f", "/dev/null"))).isTrue();
+        assertThat(ShellEngineContractK8sTemplateIT
+                .isReapingPid1(List.of("/bin/sh", "/opt/opensandbox/bootstrap.sh", "tail", "-f", "/dev/null")))
+                .isTrue();
+        assertThat(ShellEngineContractK8sTemplateIT.isReapingPid1(List.of("/opt/opensandbox/bootstrap.sh", "x")))
+                .isTrue();
+        assertThat(ShellEngineContractK8sTemplateIT.isReapingPid1(List.of("/opt/open sandbox/execd", "--init")))
+                .as("a directory with a space in its name").isTrue();
+        assertThat(
+                ShellEngineContractK8sTemplateIT.isReapingPid1(List.of("/bin/bash", "/opt/open sandbox/bootstrap.sh")))
+                .as("a directory with a space in its name").isTrue();
+    }
+
+    @Test
+    void wordsSpreadOverOrHiddenInArgumentsAreNotTemplateModesPid1() {
+        assertThat(ShellEngineContractK8sTemplateIT.isReapingPid1(List.of("/bin/sh", "-c", "execd --init")))
+                .as("a shell whose script names execd").isFalse();
+        assertThat(ShellEngineContractK8sTemplateIT.isReapingPid1(List.of("/bin/sh", "-c", "/opt/bootstrap.sh")))
+                .as("a shell whose -c script is bootstrap.sh").isFalse();
+        assertThat(ShellEngineContractK8sTemplateIT.isReapingPid1(List.of("/opt/execd --init")))
+                .as("one argument with a space, which the space-joined line could not tell apart").isFalse();
+        assertThat(ShellEngineContractK8sTemplateIT.isReapingPid1(List.of("/opt/opensandbox/execd", "--", "--init")))
+                .isFalse();
+        assertThat(ShellEngineContractK8sTemplateIT.isReapingPid1(List.of("/opt/opensandbox/task-executor"))).isFalse();
+        assertThat(ShellEngineContractK8sTemplateIT.isReapingPid1(List.of("tail", "-f", "/opt/bootstrap.sh.log")))
+                .isFalse();
+        assertThat(ShellEngineContractK8sTemplateIT.isReapingPid1(List.of())).isFalse();
     }
 
     @Test

@@ -76,7 +76,8 @@ class OpenSandboxWorkspaceIT {
     /** The out-of-memory test's memory limit, 256 Mi. */
     private static final long OOM_MEMORY = 256L * 1024 * 1024;
     /**
-     * The out-of-memory command's timeout: far above the kill's well under a second without swap, so that a server
+     * The out-of-memory command's timeout: far above the kill's 330–380 ms without swap (measured on a local Docker
+     * Desktop; a CI runner's time is in the test's stdout, which a green run does not upload), so that a server
      * whose Docker is not this JVM's, where swap stays (see the test), still has room, and a hang is still told apart.
      */
     private static final Duration OOM_COMMAND = Duration.ofSeconds(180);
@@ -230,21 +231,23 @@ class OpenSandboxWorkspaceIT {
 
     /**
      * {@code tail} grows until the cgroup's OOM killer ends it. The server sets only Docker's memory limit, and
-     * Docker's
-     * default memory-swap (twice the limit) lets the cgroup swap up to 256 Mi more. Where the swap disk is slow, as on
-     * CI runners, reclaim then keeps making a little progress, the OOM killer waits on it, and execd, in the same
-     * cgroup, stalls with the command: past 60 s once (PR #52), past 180 s with the sandbox unreachable afterwards (PR
-     * #55, cgroup v2, {@code memory.swap.max} 268435456), where an attempt that passed took 8 s and a local Docker
-     * Desktop, with fast swap, 2–3 s. So the test takes swap away from its sandbox first
+     * Docker's default memory-swap (twice the limit) lets the cgroup swap up to 256 Mi more. Where the swap disk is
+     * slow, as on CI runners, reclaim then keeps making a little progress, the OOM killer waits on it, and execd, in
+     * the same cgroup, stalls with the command: past 60 s once (PR #52), past 180 s with the sandbox unreachable
+     * afterwards (PR #55, cgroup v2, {@code memory.swap.max} 268435456), where an attempt that passed took 8 s and a
+     * local Docker Desktop, with fast swap, 2–3 s. So the test takes swap away from its sandbox first
      * ({@link OpenSandboxTestServer#takeSwapAway}) and checks that the cgroup now allows none
-     * ({@link #swapAllowance}); without swap the kill takes well under a second. A server started elsewhere keeps its
-     * swap, and only the {@link #OOM_COMMAND} margin is left there. The sandbox's memory accounting (limits, swap, the
-     * OOM events) before and after goes to stdout, and into the failure when the command times out, so a slow kill can
-     * be told apart from one that never came. The kill itself is checked twice: exit 137, and the cgroup's
-     * {@code oom_kill} count went up. That count is in {@code memory.events} on cgroup v2 and in
-     * {@code memory.oom_control} on v1, both from Linux 4.13, which every host this tier runs on (Docker with cgroup
-     * v2) exceeds. Only a v1 cgroup without it skips the second check, saying so, once everything else has passed (see
-     * {@link #lacksOomKillCount}); on v2, or where the version could not be read, a missing count fails.
+     * ({@link #swapAllowance}); without swap the kill took 330–380 ms on a local Docker Desktop. A server started
+     * elsewhere keeps its swap, and so does a host whose kernel accounts no cgroup's swap
+     * ({@link #lacksSwapAccounting},
+     * said on stdout); only the {@link #OOM_COMMAND} margin is left there. The cgroup's version must be readable: a
+     * sandbox with neither v2's {@code cgroup.controllers} nor v1's memory controller fails ({@link #memoryCommand}).
+     * The sandbox's memory accounting (limits, swap, the OOM events) before and after goes to stdout, and into the
+     * failure when the command times out, so a slow kill can be told apart from one that never came. The kill itself
+     * is checked twice: exit 137, and the cgroup's {@code oom_kill} count went up. That count is in
+     * {@code memory.events} on cgroup v2 and in {@code memory.oom_control} on v1, both from Linux 4.13, which every
+     * host this tier runs on (Docker with cgroup v2) exceeds. Only a v1 cgroup without it skips the second check,
+     * saying so, once everything else has passed (see {@link #lacksOomKillCount}); on v2 a missing count fails.
      */
     @Test
     @DisplayName("§12.2: an out-of-memory command dies inside its sandbox; the sandbox and its neighbours answer")
@@ -261,25 +264,32 @@ class OpenSandboxWorkspaceIT {
                 .orElseThrow().slot("primary").orElseThrow().providerRef().orElseThrow();
         final boolean swapTaken = OpenSandboxTestServer.dnsNft().takeSwapAway(ref, OOM_MEMORY);
         final String before = memory(env);
-        if (swapTaken) {
+        assertThat(cgroupVersion(before)).as("the sandbox's cgroup version, from its memory files:%n%s", before)
+                .isNotNull();
+        final String swap;
+        if (!swapTaken) {
+            swap = "kept: a server started elsewhere";
+        } else if (lacksSwapAccounting(before)) {
+            swap = "not accounted: this host's kernel limits no cgroup's swap, so Docker's memory-swap has no effect";
+            System.out.printf("[§12.2] swap was not taken away: %s; only the %s margin is left. Memory before:%n%s",
+                    swap, OOM_COMMAND, before);
+        } else {
             assertThat(swapAllowance(before))
                     .as("the swap the cgroup allows once it was taken away, before:%n%s", before).isZero();
+            swap = "taken away";
         }
         final long started = System.nanoTime();
         final ShellCommandResult oom;
         try {
             oom = bash(env, "head -c 600000000 /dev/zero | tail -n 1 > /dev/null; echo rc=$?", OOM_COMMAND);
         } catch (ShellTimeoutException e) {
-            throw new AssertionError(
-                    "the out-of-memory command was not killed within " + OOM_COMMAND + " (swap taken away: " + swapTaken
-                            + "). The sandbox's memory before it:\n" + before + "after it:\n" + memory(env),
-                    e);
+            throw new AssertionError("the out-of-memory command was not killed within " + OOM_COMMAND + " (swap " + swap
+                    + "). The sandbox's memory before it:\n" + before + "after it:\n" + memory(env), e);
         }
         final String after = memory(env);
         System.out.printf(
-                "[§12.2] the out-of-memory command ended in %d ms (swap taken away: %s); memory before:%n%s"
-                        + "after:%n%s",
-                TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started), swapTaken, before, after);
+                "[§12.2] the out-of-memory command ended in %d ms (swap %s); memory before:%n%s" + "after:%n%s",
+                TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started), swap, before, after);
 
         assertThat(pids.stdout().strip()).as("the server's pids_limit").isEqualTo("4096");
         assertThat(oom.stdout()).isEqualTo("rc=137\n");
@@ -303,15 +313,38 @@ class OpenSandboxWorkspaceIT {
      */
     private static String memory(ExecutionEnvironment env) {
         try {
-            return bash(env,
-                    "if [ -f /sys/fs/cgroup/cgroup.controllers ]; then echo 'cgroup: v2'; "
-                            + "cd /sys/fs/cgroup && files='" + MEMORY_FILES + "'; else echo 'cgroup: v1'; "
-                            + "cd /sys/fs/cgroup/memory && files='" + MEMORY_FILES_V1 + "'; fi && for f in $files; "
-                            + "do printf '%s: %s\\n' \"$f\" \"$(tr '\\n' ' ' 2>&1 < \"$f\")\"; done")
-                    .stdout();
+            return bash(env, memoryCommand("/sys/fs/cgroup")).stdout();
         } catch (Exception e) {
             return "(unreadable: " + e + ")\n";
         }
+    }
+
+    /**
+     * @param cgroup
+     *            where the cgroup file system is mounted: {@code /sys/fs/cgroup}, or a directory laid out like it, for
+     *            a test (a path without a single quote)
+     * @return the shell command of {@link #memory}: {@code cgroup: v2} where {@code cgroup.controllers} exists,
+     *         {@code cgroup: v1} where the v1 memory controller's {@code memory/memory.limit_in_bytes} does, each
+     *         followed by its memory files; otherwise {@code cgroup: unknown} and what the directory holds, which
+     *         {@link #cgroupVersion} reads as no version, so the test fails instead of reading it as v1
+     */
+    static String memoryCommand(String cgroup) {
+        final String root = "'" + cgroup + "'";
+        return "if [ -f " + root + "/cgroup.controllers ]; then echo 'cgroup: v2'; cd " + root + " && files='"
+                + MEMORY_FILES + "'; elif [ -f " + root + "/memory/memory.limit_in_bytes ]; then echo 'cgroup: v1'; cd "
+                + root + "/memory && files='" + MEMORY_FILES_V1 + "'; else echo \"cgroup: unknown (neither "
+                + "cgroup.controllers nor memory/memory.limit_in_bytes in " + root + ": $(ls " + root
+                + " 2>&1 | tr '\\n' ' '))\"; files=; fi && for f in $files; "
+                + "do printf '%s: %s\\n' \"$f\" \"$(tr '\\n' ' ' 2>&1 < \"$f\")\"; done";
+    }
+
+    /**
+     * @return {@code v1} or {@code v2}, as {@link #memory}'s first line says; {@code null} where it says neither: the
+     *         version is unknown, or execd did not answer
+     */
+    static String cgroupVersion(String memory) {
+        final Matcher matcher = Pattern.compile("(?m)^cgroup: (v1|v2)$").matcher(memory);
+        return matcher.find() ? matcher.group(1) : null;
     }
 
     /**
@@ -349,8 +382,20 @@ class OpenSandboxWorkspaceIT {
      *         a reading that does not say its version (execd did not answer)
      */
     static boolean lacksOomKillCount(String before, String after) {
-        final Pattern v1 = Pattern.compile("(?m)^cgroup: v1$");
-        return (oomKills(before) < 0 || oomKills(after) < 0) && v1.matcher(before).find() && v1.matcher(after).find();
+        return (oomKills(before) < 0 || oomKills(after) < 0) && "v1".equals(cgroupVersion(before))
+                && "v1".equals(cgroupVersion(after));
+    }
+
+    /**
+     * @param memory
+     *            {@link #memory} once swap was taken away
+     * @return whether the host accounts no cgroup's swap: the cgroup's version and memory files were read, but
+     *         neither {@code memory.swap.max} (v2) nor {@code memory.memsw.limit_in_bytes} (v1), a kernel's swap
+     *         accounting, is among them. Docker then ignores the memory-swap it was given, and nothing can be asserted
+     *         of it; a reading without a version (execd did not answer) is not this
+     */
+    static boolean lacksSwapAccounting(String memory) {
+        return cgroupVersion(memory) != null && swapAllowance(memory) < 0;
     }
 
     @Test

@@ -101,9 +101,18 @@ and departures: [`docs/design/ptc-shell-provider.md`](docs/design/ptc-shell-prov
     - Fourth follow-up: the out-of-memory test takes swap away from its sandbox before the command (the container's
       Docker memory-swap set to its 256 Mi limit, then `memory.swap.max` 0 is asserted). With Docker's default swap,
       a runner's slow swap disk kept the cgroup in reclaim past 180 s and left execd unreachable (CI, PR #55); without
-      swap the kill takes well under a second. A server started elsewhere keeps its swap and the 180 s margin. The
+      swap the kill took 330–380 ms on a local Docker Desktop (the CI runner's time is not recorded: a green run
+      uploads no test output). A server started elsewhere keeps its swap and the 180 s margin. The
       contract suite's creates retry a host-port conflict once, as the egress IT's do, and the conflict is also
       recognized in the error body and in Docker 28's `failed to bind host port …` wording.
+    - Fifth follow-up: the out-of-memory test finds its sandbox's container by the server's `opensandbox.io/id` label
+      (egress sidecars left out), then by the `sandbox-{id}` name, and fails naming the candidates when neither picks
+      out one; a host whose kernel accounts no cgroup's swap is said on stdout instead of failing the swap assertion;
+      a sandbox with neither cgroup v2's `cgroup.controllers` nor v1's memory controller fails as unknown instead of
+      being read as v1. The k8s template-mode PID 1 check matches PID 1's NUL-separated arguments, as the pool check
+      does. `OpenSandboxProviderContractTest` runs `@Isolated`, as its log-reading retry assumes. The leftover
+      snapshot's retry on a pid reused between its two `stat` reads is unit-tested. `scripts/k8s-tier.sh test`
+      restarts the pod watch when the API server ends it.
 
 ### Added: groundwork for core's programmatic tool calling (shell engine)
 

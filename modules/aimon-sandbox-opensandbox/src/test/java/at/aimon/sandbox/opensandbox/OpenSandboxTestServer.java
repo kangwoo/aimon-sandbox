@@ -6,6 +6,9 @@ import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.Arrays;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
@@ -18,6 +21,9 @@ import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.wait.strategy.Wait;
 import org.testcontainers.images.builder.ImageFromDockerfile;
 import org.testcontainers.images.builder.Transferable;
+
+import com.github.dockerjava.api.DockerClient;
+import com.github.dockerjava.api.model.Container;
 
 import at.aimon.sandbox.provider.ProviderSandbox;
 import at.aimon.sandbox.provider.ProviderSandboxRef;
@@ -238,28 +244,85 @@ final class OpenSandboxTestServer {
                 || lower.contains("address already in use") || lower.contains("failed to bind host port");
     }
 
+    /** The label the server puts on a sandbox's Docker containers, its own and the egress sidecar: the sandbox's id. */
+    static final String SANDBOX_ID_LABEL = "opensandbox.io/id";
+    /** The label the server puts on an egress sidecar alone: the id of the sandbox it serves. */
+    static final String SIDECAR_LABEL = "opensandbox.io/egress-sidecar-for";
+
     /**
      * Takes swap away from a sandbox: its container's Docker memory-swap is set to its memory limit, so the cgroup's
      * {@code memory.swap.max} reads 0. The server sets only the memory limit, and Docker's default memory-swap then
      * lets the cgroup swap as much again, which on a runner with a slow swap disk keeps an out-of-memory command in
-     * reclaim, with execd beside it, instead of reaching the OOM killer (CI, PR #55).
+     * reclaim, with execd beside it, instead of reaching the OOM killer (CI, PR #55). The container is looked up by the
+     * server's {@link #SANDBOX_ID_LABEL} and its name ({@link #sandboxContainer}), not assumed to be named
+     * {@code sandbox-{id}}.
      *
      * @param ref
-     *            the sandbox, on this server's Docker runtime (its container is {@code sandbox-{id}})
+     *            the sandbox, on this server's Docker runtime
      * @param memoryBytes
      *            its memory limit, which Docker's update needs alongside the memory-swap
      * @return whether swap was taken away: false for a server started elsewhere, whose Docker need not be this JVM's
+     * @throws AssertionError
+     *             when no single container of this Docker is the sandbox's, naming what was found
      */
     boolean takeSwapAway(ProviderSandboxRef ref, long memoryBytes) {
         if (container == null) {
             return false;
         }
-        DockerClientFactory.instance().client().updateContainerCmd(containerName(ref)).withMemory(memoryBytes)
+        final DockerClient docker = DockerClientFactory.instance().client();
+        final Map<String, DockerContainer> candidates = new LinkedHashMap<>();
+        docker.listContainersCmd().withShowAll(true).withLabelFilter(Map.of(SANDBOX_ID_LABEL, ref.sandboxId())).exec()
+                .forEach(c -> candidates.put(c.getId(), DockerContainer.of(c)));
+        docker.listContainersCmd().withShowAll(true).withNameFilter(List.of(containerName(ref))).exec()
+                .forEach(c -> candidates.putIfAbsent(c.getId(), DockerContainer.of(c)));
+        docker.updateContainerCmd(sandboxContainer(ref, List.copyOf(candidates.values()))).withMemory(memoryBytes)
                 .withMemorySwap(memoryBytes).exec();
         return true;
     }
 
-    /** @return the Docker container the server runs {@code ref} in ({@code sandbox-{id}}, its {@code container_ops}) */
+    /** A Docker container as {@link #sandboxContainer} weighs it: its id, its names (without the slash), its labels. */
+    record DockerContainer(String id, List<String> names, Map<String, String> labels) {
+
+        static DockerContainer of(Container container) {
+            return new DockerContainer(container.getId(), container.getNames() == null
+                    ? List.of()
+                    : Arrays.stream(container.getNames()).map(n -> n.startsWith("/") ? n.substring(1) : n).toList(),
+                    container.getLabels() == null ? Map.of() : container.getLabels());
+        }
+    }
+
+    /**
+     * @param ref
+     *            a sandbox of this server
+     * @param candidates
+     *            the containers of this Docker labelled with its id ({@link #SANDBOX_ID_LABEL}) or named after it
+     * @return the id of the sandbox's own container: of the candidates that are not an egress sidecar
+     *         ({@link #SIDECAR_LABEL}), the one labelled with the sandbox's id, or else the one the server names
+     *         {@code sandbox-{id}} ({@link #containerName})
+     * @throws AssertionError
+     *             when neither picks out exactly one, naming the candidates: the server labels or names its containers
+     *             otherwise than this tier expects
+     */
+    static String sandboxContainer(ProviderSandboxRef ref, List<DockerContainer> candidates) {
+        final List<DockerContainer> own = candidates.stream().filter(c -> !c.labels().containsKey(SIDECAR_LABEL))
+                .toList();
+        final List<DockerContainer> labelled = own.stream()
+                .filter(c -> ref.sandboxId().equals(c.labels().get(SANDBOX_ID_LABEL))).toList();
+        if (labelled.size() == 1) {
+            return labelled.get(0).id();
+        }
+        final List<DockerContainer> named = own.stream().filter(c -> c.names().contains(containerName(ref))).toList();
+        if (named.size() == 1) {
+            return named.get(0).id();
+        }
+        throw new AssertionError("no single Docker container of sandbox " + ref.sandboxId()
+                + " to take swap away from: " + labelled.size() + " labelled " + SANDBOX_ID_LABEL + "="
+                + ref.sandboxId() + " and " + named.size() + " named " + containerName(ref)
+                + ", egress sidecars left out; the server labels or names its containers otherwise. Candidates: "
+                + candidates.stream().map(c -> c.names() + " " + c.labels()).toList());
+    }
+
+    /** @return the name the server gives the Docker container of {@code ref} ({@code sandbox-{id}}) */
     static String containerName(ProviderSandboxRef ref) {
         return "sandbox-" + ref.sandboxId();
     }

@@ -12,6 +12,7 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 /** The pure parts of {@link SandboxLeftovers}: what the docker and k8s tiers' leftover checks read and report. */
 class SandboxLeftoversTest {
@@ -121,6 +122,40 @@ class SandboxLeftoversTest {
                 });
     }
 
+    /**
+     * The retry of {@link SandboxLeftovers#PS}: pid 7 exits while its {@code cmdline} is read and a new process takes
+     * the pid, so the {@code stat} read after the {@code cmdline} has another start time than the one before. The
+     * {@code cmdline} is read again, and the line has the new process's args and start time, not the old one's args
+     * with the new one's start time. A {@code tr} ahead of the real one on {@code PATH} — the command reads the
+     * {@code cmdline} with it, between the two {@code stat} reads — swaps the process on its first read of pid 7.
+     */
+    @Test
+    void aPidReusedBetweenTheStatReadsIsReadAgain(@TempDir Path dir) throws Exception {
+        final Path proc = Files.createDirectories(dir.resolve("proc"));
+        process(proc, 1, stat(1, "init", "S", 0, 1, 100), "/sbin/init\0");
+        process(proc, 7, stat(7, "old", "S", 1, 7, 9090511), "old-process\0--flag\0");
+        final Path bin = Files.createDirectories(dir.resolve("bin"));
+        final Path tr = Files.writeString(bin.resolve("tr"),
+                String.join("\n", "#!/bin/sh", "out=$(\"$REAL_TR\" \"$@\")", "printf '%s' \"$out\"",
+                        "case $out in *old-process*) printf '%s\\n' \"$NEW_STAT\" > \"$PROC/7/stat\"; "
+                                + "printf 'new-process\\0--other\\0' > \"$PROC/7/cmdline\";; esac",
+                        ""));
+        assertThat(tr.toFile().setExecutable(true)).isTrue();
+        final ProcessBuilder builder = new ProcessBuilder("bash", "-c", SandboxLeftovers.ps(proc.toString()))
+                .redirectErrorStream(true);
+        builder.environment().put("REAL_TR", which("tr"));
+        builder.environment().put("PROC", proc.toString());
+        builder.environment().put("NEW_STAT", stat(7, "new", "R", 1, 7, 9090540));
+        builder.environment().put("PATH", bin + ":" + System.getenv("PATH"));
+        final Process bash = builder.start();
+        final String out = new String(bash.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+        assertThat(bash.waitFor()).as(out).isZero();
+
+        assertThat(SandboxLeftovers.parse(out)).as(out).containsExactly(
+                new SandboxLeftovers.Proc(1, 0, 1, "S", "ticks:100", "/sbin/init"),
+                new SandboxLeftovers.Proc(7, 1, 7, "R", "ticks:9090540", "new-process --other"));
+    }
+
     @Test
     void theProbeReadsBackTheTopology() {
         final SandboxLeftovers.WatchdogProbe probe = SandboxLeftovers.parseProbe(
@@ -161,6 +196,30 @@ class SandboxLeftoversTest {
         final Set<Integer> wanted = Set.of(pids);
         return procs.stream().filter(p -> wanted.contains(p.pid())).map(SandboxLeftovers.Proc::key)
                 .collect(Collectors.toUnmodifiableSet());
+    }
+
+    /** Writes {@code proc/<pid>/stat} and {@code cmdline}; {@code cmdline} has its NULs as {@code \\0}. */
+    private static void process(Path proc, int pid, String stat, String cmdline) throws Exception {
+        final Path dir = Files.createDirectories(proc.resolve(Integer.toString(pid)));
+        Files.writeString(dir.resolve("stat"), stat + "\n");
+        Files.write(dir.resolve("cmdline"), cmdline.replace("\\0", "\0").getBytes(StandardCharsets.UTF_8));
+    }
+
+    /**
+     * @return a {@code /proc/<pid>/stat} line: pid, (comm), state, ppid, pgrp, then zeros up to field 22, the start
+     *         time, and a few more fields as the kernel has them
+     */
+    private static String stat(int pid, String comm, String state, int ppid, int pgrp, long starttime) {
+        return pid + " (" + comm + ") " + state + " " + ppid + " " + pgrp + " " + "0 ".repeat(16) + starttime
+                + " 0 0 0";
+    }
+
+    /** @return where {@code program} is on this JVM's {@code PATH} */
+    private static String which(String program) throws Exception {
+        final Process which = new ProcessBuilder("sh", "-c", "command -v " + program).start();
+        final String path = new String(which.getInputStream().readAllBytes(), StandardCharsets.UTF_8).strip();
+        assertThat(which.waitFor()).as("command -v %s", program).isZero();
+        return path;
     }
 
     /** A {@link SandboxLeftovers#PS} {@code /proc} line. */

@@ -816,7 +816,8 @@ as follows:
 | Template sandboxes | 5 | 5 |
 | Pool pods | 4 | 2 |
 
-So 9 sandboxes ran on a node other than the server's. PID 1's argv was the same as on one node in both modes.
+So 9 of the 16 pods ran on a node other than the server's: 5 template sandboxes and 4 pool pods (a pool pod hosts a
+pool sandbox once one is taken from it). PID 1's argv was the same as on one node in both modes.
 
 - **PID 1, template mode:** `/opt/opensandbox/execd --init -- tail -f /dev/null` (asserted: `bootstrap.sh` or
   `execd --init`). Without `execd_run_as_init` (the first run) it was `/bin/sh /opt/opensandbox/bootstrap.sh tail -f

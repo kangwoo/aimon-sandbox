@@ -37,14 +37,25 @@ final class SandboxLeftovers {
      * words in the C locale, to the second) and the args, its exit status {@code ps}'s. Either way the command's own
      * line is parsed like any other and filtered by args.
      */
-    static final String PS = "if [ -r /proc/1/stat ]; then for d in /proc/[0-9]*; do "
-            + "{ read -r s < \"$d/stat\"; } 2>/dev/null || continue; "
-            + "while :; do a=$(tr '\\0\\n' '  ' < \"$d/cmdline\" 2>/dev/null); "
-            + "{ read -r t < \"$d/stat\"; } 2>/dev/null || continue 2; "
-            + "set -- ${s##*) }; x=${20}; set -- ${t##*) }; [ \"$x\" = \"${20}\" ] && break; s=$t; done; "
-            + "c=${t#*(}; c=${c%)*}; [ -n \"$a\" ] || { a=\"[$c]\"; [ \"$1\" != Z ] || a=\"$a <defunct>\"; }; "
-            + "echo \"" + PROC + " ${d#/proc/} $2 $3 $1 ${20} $a\"; done; "
-            + "else LC_ALL=C ps -eo pid=,ppid=,pgid=,stat=,lstart=,args=; fi";
+    static final String PS = ps("/proc");
+
+    /**
+     * @param proc
+     *            the {@code /proc} that {@link #PS} reads: {@code /proc} itself, or a directory laid out like it, for a
+     *            test (a path without a single quote)
+     * @return {@link #PS}, reading {@code proc}
+     */
+    static String ps(String proc) {
+        final String root = "'" + proc + "'";
+        return "if [ -r " + root + "/1/stat ]; then for d in " + root + "/[0-9]*; do "
+                + "{ read -r s < \"$d/stat\"; } 2>/dev/null || continue; "
+                + "while :; do a=$(tr '\\0\\n' '  ' < \"$d/cmdline\" 2>/dev/null); "
+                + "{ read -r t < \"$d/stat\"; } 2>/dev/null || continue 2; "
+                + "set -- ${s##*) }; x=${20}; set -- ${t##*) }; [ \"$x\" = \"${20}\" ] && break; s=$t; done; "
+                + "c=${t#*(}; c=${c%)*}; [ -n \"$a\" ] || { a=\"[$c]\"; [ \"$1\" != Z ] || a=\"$a <defunct>\"; }; "
+                + "echo \"" + PROC + " ${d#" + root + "/} $2 $3 $1 ${20} $a\"; done; "
+                + "else LC_ALL=C ps -eo pid=,ppid=,pgid=,stat=,lstart=,args=; fi";
+    }
 
     /** How long a check waits for the watchdog's kill and the reaper's {@code wait} to finish: 50 × 200 ms. */
     private static final int ATTEMPTS = 50;
