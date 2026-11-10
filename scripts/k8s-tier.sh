@@ -20,7 +20,9 @@
 # and the control plane keeps its NoSchedule taint, so the server, the pools' pods and the sandboxes run on workers
 # and the tier's checks cross nodes (the server reaches a sandbox on another node; `kind load` puts the image on every
 # node). `test` records where each pod of the sandbox namespace was scheduled, in $AIMON_K8S_WORK/placement.txt
-# (pod, node, then the count per node), and prints it; `status` shows the nodes and the pods' nodes.
+# (pod, node, then the count per node, then the pod watch's restarts), and prints it; `status` shows the nodes and the
+# pods' nodes. placement.txt can miss a pod created and deleted within the 1 s in which a pod watch is restarted (see
+# watch_pods); it is a record of where pods ran, not one of the tier's checks.
 #
 # The server runs with `execd_run_as_init = true` (execd as the sandbox's init, OSEP-0018): in template mode execd is
 # PID 1, in pool mode a subreaper under task-executor, and either way it reaps the orphans of a run (core's watchdogs).
@@ -133,11 +135,15 @@ status() {
 }
 
 # $work/placement.txt from the pod watch: each pod of the sandbox namespace and the node it was scheduled on, then how
-# many landed on each node, then the server's and the controller's, from which every check reaches the sandboxes.
+# many landed on each node, then the watch's restarts, during each of which a pod can go unrecorded, then the server's
+# and the controller's, from which every check reaches the sandboxes.
 placement() {
   {
     awk '$2 != "<none>" && !seen[$1]++ { print; count[$2]++ }
          END { print "--- pods per node"; for (n in count) print n, count[n] }' "$work/placement.watch"
+    echo "--- pod watch restarts: $(wc -l < "$work/placement.restarts" | tr -d ' ')" \
+      "(a pod created and deleted while the watch was down is not above)"
+    cat "$work/placement.restarts"
     echo "--- the server and controller (namespace opensandbox-system)"
     kubectl -n opensandbox-system get pods --no-headers \
       -o custom-columns=POD:.metadata.name,NODE:.spec.nodeName 2>&1
@@ -147,17 +153,35 @@ placement() {
 }
 
 # Appends each pod of the sandbox namespace and its node to $work/placement.watch until it is killed. The API server
-# ends a watch after its timeout (minutes, randomized), so a watch that ends is started again; the new one lists the
-# pods that exist again, which placement() counts once. TERM stops the watch in progress, not just this loop.
+# ends a watch after its timeout (minutes, randomized), so a watch that ends is started again 1 s later; the new one
+# lists the pods that exist again, which placement() counts once. A pod created and deleted within that second is not
+# recorded. A watch that ends within 10 s of starting is a kubectl that cannot watch (the API server unreachable, the
+# context gone), not a timeout: it is retried after twice the last wait, up to 60 s, instead of every second. Each
+# restart is said on stderr, with kubectl's last error line, and appended to $work/placement.restarts. TERM stops the
+# watch or the wait in progress, not just this loop.
 watch_pods() {
-  local pid=
+  local pid= started rc took why delay=1 err="$work/placement.watch.err"
   trap 'kill "$pid" 2>/dev/null; exit 0' TERM
   while :; do
+    started=$SECONDS
     kubectl -n opensandbox get pods --watch --no-headers \
-      -o custom-columns=POD:.metadata.name,NODE:.spec.nodeName >> "$work/placement.watch" 2>/dev/null &
+      -o custom-columns=POD:.metadata.name,NODE:.spec.nodeName >> "$work/placement.watch" 2> "$err" &
+    pid=$!
+    rc=0
+    wait "$pid" || rc=$?
+    took=$((SECONDS - started))
+    if ((took < 10)); then
+      delay=$((delay * 2 > 60 ? 60 : delay * 2))
+    else
+      delay=1
+    fi
+    why=$(tail -n 1 "$err" 2>/dev/null || true)
+    echo "pod watch ended after ${took}s (exit $rc${why:+: $why}); restarting in ${delay}s" \
+      | tee -a "$work/placement.restarts" | sed 's/^/k8s-tier: /' >&2
+    # In the background, so that TERM interrupts the wait at once instead of after it.
+    sleep "$delay" &
     pid=$!
     wait "$pid" || true
-    sleep 1
   done
 }
 
@@ -169,6 +193,7 @@ run_tests() {
   forward=$!
   # Every pod the run creates in the sandbox namespace, as it is scheduled: the sandboxes are deleted by the end.
   : > "$work/placement.watch"
+  : > "$work/placement.restarts"
   watch_pods &
   watch=$!
   trap 'kill "$forward" "$watch" 2>/dev/null || true' EXIT

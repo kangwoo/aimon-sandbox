@@ -1506,6 +1506,25 @@ class OpenSandboxProviderTest {
         }
 
         @Test
+        void aSidecarReadRefusedAsUnauthorizedSaysTheKeyWasAcceptedAndNamesTheSandbox() {
+            server.overrides.put("GET /v1/sandboxes/",
+                    request -> request.path.endsWith("/networkpolicy")
+                            ? Reply.error(401, "MISSING_API_KEY", "Authentication credentials are missing.")
+                            : null);
+
+            assertThatThrownBy(() -> vaulted.create(spec("ws:v", 1).egress(List.of("github.com")).build()))
+                    .isInstanceOfSatisfying(SandboxProviderException.class,
+                            e -> assertThat(e.kind()).isEqualTo(SandboxProviderException.Kind.PERMANENT))
+                    .hasMessageContaining("egress sidecar was refused as unauthorized")
+                    .hasMessageContaining("had just accepted this api-key").hasMessageContaining("host port")
+                    .hasMessageContaining(
+                            "read network policy failed (HTTP 401): Authentication credentials are " + "missing.")
+                    .hasMessageMatching("(?s).*sandbox \\S+'s egress sidecar.*");
+            assertThat(HttpErrors.unauthorized(HttpErrors.failure(403, "x", "y"))).isTrue();
+            assertThat(HttpErrors.unauthorized(HttpErrors.failure(500, "x", "HTTP 401"))).isFalse();
+        }
+
+        @Test
         void aVaultTheSidecarRefusesIsPermanent() {
             server.overrides.put("POST /v1/sandboxes/",
                     request -> request.path.endsWith("/credential-vault")

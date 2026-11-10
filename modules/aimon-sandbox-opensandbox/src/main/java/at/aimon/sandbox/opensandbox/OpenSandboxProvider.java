@@ -307,6 +307,11 @@ public final class OpenSandboxProvider implements SandboxProvider {
     /**
      * The egress sidecar answers a moment after the sandbox is {@code Running} (HTTP 500 from the server's proxy until
      * then, measured in implementation step 4); the vault and {@link #verify} need it, so {@code create} waits for it.
+     * A 401 or 403 here is not this api-key's: the server accepted it for the create and the status reads just before,
+     * and relays what answered its own call to the sidecar's host port. A Docker test run (1.1.0 images) once met the
+     * server's own "credentials are missing" there while other runs shared the host: another server answering on that
+     * port, it seems (the server picks the sidecar's host port by probing inside its own container, as 1.2.0 still
+     * does, and still proxies this read to the sidecar's port 18080). So the failure says so.
      */
     private void awaitEgressSidecar(ProviderSandboxRef ref, long deadline) {
         while (true) {
@@ -316,6 +321,13 @@ public final class OpenSandboxProvider implements SandboxProvider {
             } catch (HttpErrors.NotFound e) {
                 throw new SandboxProviderException("the created sandbox disappeared before its egress sidecar was up");
             } catch (SandboxProviderException e) {
+                if (HttpErrors.unauthorized(e)) {
+                    throw new SandboxProviderException("the server's read of sandbox " + ref.sandboxId()
+                            + "'s egress sidecar was refused as unauthorized, though the server had just accepted this "
+                            + "api-key for the create: something other than the sidecar may answer on the sidecar's "
+                            + "host port (another OpenSandbox server or sandbox on the same Docker host). "
+                            + e.getMessage(), SandboxProviderException.Kind.PERMANENT, e);
+                }
                 if (e.kind() != SandboxProviderException.Kind.TRANSIENT || System.nanoTime() - deadline >= 0) {
                     throw e;
                 }

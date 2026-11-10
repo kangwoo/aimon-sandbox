@@ -76,7 +76,8 @@ class OpenSandboxWorkspaceIT {
     /** The out-of-memory test's memory limit, 256 Mi. */
     private static final long OOM_MEMORY = 256L * 1024 * 1024;
     /**
-     * The out-of-memory command's timeout: far above the kill's 330–380 ms without swap (measured on a local Docker
+     * The out-of-memory command's timeout: far above the about 0.3–0.4 s the kill takes without swap (measured on a
+     * local Docker
      * Desktop; a CI runner's time is in the test's stdout, which a green run does not upload), so that a server
      * whose Docker is not this JVM's, where swap stays (see the test), still has room, and a hang is still told apart.
      */
@@ -88,6 +89,8 @@ class OpenSandboxWorkspaceIT {
     private static final String MEMORY_FILES_V1 = "memory.limit_in_bytes memory.memsw.limit_in_bytes "
             + "memory.usage_in_bytes memory.memsw.usage_in_bytes memory.max_usage_in_bytes memory.failcnt "
             + "memory.oom_control";
+    /** What {@link #memoryCommand} reads for a memory file that does not exist, in place of its content. */
+    static final String MISSING = "(no such file)";
 
     private final ManualClock clock = new ManualClock(Instant.now());
     private final ManualScheduler scheduler = new ManualScheduler(clock);
@@ -238,7 +241,7 @@ class OpenSandboxWorkspaceIT {
      * afterwards (PR #55, cgroup v2, {@code memory.swap.max} 268435456), where an attempt that passed took 8 s and a
      * local Docker Desktop, with fast swap, 2–3 s. So the test takes swap away from its sandbox first
      * ({@link OpenSandboxTestServer#takeSwapAway}) and checks that the cgroup now allows none
-     * ({@link #swapAllowance}); without swap the kill took 330–380 ms on a local Docker Desktop. A server started
+     * ({@link #swapAllowance}); without swap the kill took about 0.3–0.4 s on a local Docker Desktop. A server started
      * elsewhere keeps its swap, and so does a host whose kernel accounts no cgroup's swap
      * ({@link #lacksSwapAccounting},
      * said on stdout); only the {@link #OOM_COMMAND} margin is left there. The cgroup's version must be readable: a
@@ -326,8 +329,10 @@ class OpenSandboxWorkspaceIT {
      *            a test (a path without a single quote)
      * @return the shell command of {@link #memory}: {@code cgroup: v2} where {@code cgroup.controllers} exists,
      *         {@code cgroup: v1} where the v1 memory controller's {@code memory/memory.limit_in_bytes} does, each
-     *         followed by its memory files; otherwise {@code cgroup: unknown} and what the directory holds, which
-     *         {@link #cgroupVersion} reads as no version, so the test fails instead of reading it as v1
+     *         followed by its memory files, a file that does not exist as {@link #MISSING} (a shell's own wording of
+     *         that differs: bash's and busybox's) and one that cannot be read with the error; otherwise
+     *         {@code cgroup: unknown} and what the directory holds, which {@link #cgroupVersion} reads as no version,
+     *         so the test fails instead of reading it as v1
      */
     static String memoryCommand(String cgroup) {
         final String root = "'" + cgroup + "'";
@@ -336,7 +341,8 @@ class OpenSandboxWorkspaceIT {
                 + root + "/memory && files='" + MEMORY_FILES_V1 + "'; else echo \"cgroup: unknown (neither "
                 + "cgroup.controllers nor memory/memory.limit_in_bytes in " + root + ": $(ls " + root
                 + " 2>&1 | tr '\\n' ' '))\"; files=; fi && for f in $files; "
-                + "do printf '%s: %s\\n' \"$f\" \"$(tr '\\n' ' ' 2>&1 < \"$f\")\"; done";
+                + "do if [ -e \"$f\" ]; then printf '%s: %s\\n' \"$f\" \"$(tr '\\n' ' ' 2>&1 < \"$f\")\"; "
+                + "else printf '%s: " + MISSING + "\\n' \"$f\"; fi; done";
     }
 
     /**
@@ -390,13 +396,20 @@ class OpenSandboxWorkspaceIT {
     /**
      * @param memory
      *            {@link #memory} once swap was taken away
-     * @return whether the host accounts no cgroup's swap: the cgroup's version and memory files were read, but
-     *         neither {@code memory.swap.max} (v2) nor {@code memory.memsw.limit_in_bytes} (v1), a kernel's swap
-     *         accounting, is among them. Docker then ignores the memory-swap it was given, and nothing can be asserted
-     *         of it; a reading without a version (execd did not answer) is not this
+     * @return whether the host accounts no cgroup's swap: the cgroup's version was read, and its swap file,
+     *         {@code memory.swap.max} (v2) or {@code memory.memsw.limit_in_bytes} (v1), a kernel's swap accounting,
+     *         does not exist ({@link #MISSING}). Docker then ignores the memory-swap it was given, and nothing can be
+     *         asserted of it. A reading without a version (execd did not answer) is not this, and neither is a swap
+     *         file that exists but could not be read (permission, I/O): the test's assertion on
+     *         {@link #swapAllowance} then fails with the reading
      */
     static boolean lacksSwapAccounting(String memory) {
-        return cgroupVersion(memory) != null && swapAllowance(memory) < 0;
+        final String version = cgroupVersion(memory);
+        final String swapFile = "v2".equals(version)
+                ? "memory.swap.max"
+                : "v1".equals(version) ? "memory.memsw.limit_in_bytes" : null;
+        return swapFile != null
+                && Pattern.compile("(?m)^" + Pattern.quote(swapFile + ": " + MISSING) + "$").matcher(memory).find();
     }
 
     @Test
