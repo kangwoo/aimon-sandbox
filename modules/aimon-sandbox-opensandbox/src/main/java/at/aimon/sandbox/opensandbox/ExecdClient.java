@@ -10,8 +10,8 @@ import at.aimon.sandbox.provider.ProviderSandboxRef;
 import at.aimon.sandbox.provider.SandboxNotFoundException;
 
 /**
- * One sandbox's in-sandbox daemon (execd on port 44772, or the egress sidecar on 18080), reached at the address the
- * lifecycle server resolves. The address is cached and resolved again once after a connect failure — on Kubernetes a
+ * One sandbox's execd (port 44772), reached at the address the lifecycle server resolves. The address is cached and
+ * resolved again once after a connect failure — on Kubernetes a
  * resumed sandbox comes back with a new IP (docs/design/opensandbox-spike.md §3). A sandbox that is gone is
  * {@link SandboxNotFoundException}; which 404 means "gone" and which "no such file" is settled by asking the lifecycle
  * server, since through the server proxy both are 404.
@@ -19,7 +19,6 @@ import at.aimon.sandbox.provider.SandboxNotFoundException;
 final class ExecdClient {
 
     static final int EXECD_PORT = 44772;
-    static final int EGRESS_PORT = 18080;
 
     /** execd's own code for a missing file: the one 404 that needs no second call to tell apart. */
     private static final String FILE_NOT_FOUND = "FILE_NOT_FOUND";

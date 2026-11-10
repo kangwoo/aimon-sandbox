@@ -13,6 +13,40 @@ it as you would across a minor: the auto-compact buffer and ratio members are go
 session log is written as version 2 by default, so a mixed-version cluster must pin `v1` (kangwoo/aimon-core#286). See
 core's [0.3.3 release notes](https://github.com/kangwoo/aimon-core/releases/tag/v0.3.3).
 
+### Changed: OpenSandbox 1.2.0
+
+`aimon-sandbox-opensandbox` now requires **OpenSandbox 1.2.0** — server, execd and egress sidecar
+([release notes](https://github.com/opensandbox-group/OpenSandbox/releases/tag/release-1.2.0)). The docker tier pins the three
+`release-1.2.0` images by digest, and the k8s tier renders the chart and images from the `release-1.2.0` tag (it used
+`release-1.1.0` / execd `v1.1.0` / egress `v1.1.7` and main `3738975` / `release-1.1.1-rc.1`).
+
+- **Command output is exact (behaviour change).** execd 1.1.1 and later send each output line with its own ending
+  (upstream #2033), and the provider now passes it through instead of appending `\n` to every event: a `\r` progress
+  line keeps its `\r`, `\r\n` stays `\r\n`, and a last line the command did not end has no `\n` added (`printf abc` is
+  `abc`, not `abc\n`). Output of older execd, which strips the endings, is still recognised from its events and gets
+  its `\n` back, but its first line is then handed to the `OutputSink` only once the next event arrives. (The execd
+  image is configured apart from the server — `execd_image`, a pool's pre-warmed installer — so a 1.2.0 server can
+  still drive an old execd; passing its stripped lines through would glue them together.)
+- **Exit codes come from `error.exit_code`** when execd sends it (1.2.0, upstream #2303), `evalue` otherwise.
+- **The credential vault is reached through the lifecycle server** (`/v1/sandboxes/{id}/credential-vault`, new in
+  1.2.0, upstream #2263), not the egress sidecar's port 18080 with its `OPENSANDBOX-EGRESS-AUTH` header. With
+  `useServerProxy(false)` the AIMON pods now need to reach only execd (44772) — the NetworkPolicy example in
+  `docs/guide/opensandbox-kubernetes.md` §6.1 drops 18080. **This is why 1.2.0 is required:** a 1.1.x server has no
+  such route, and a create with credentials fails on it — permanently, saying the server is older than 1.2.0. Vault
+  reads and deletes are retried when the server proxy answers 502/503/504 (the sidecar not up yet), as the direct calls
+  to the sidecar were retried after a failed connect.
+- **Transient command spools are removed from `/tmp/opensandbox-execd/` only.** The second place, `/tmp` itself, was for
+  execd before `release-1.1.0`.
+
+Verified on both tiers against 1.2.0: the docker tier (three `OpenSandboxWorkspaceIT` expectations moved from
+line-normalized to exact output, and the spool check's negative control is now a marker file in execd's spool
+directory, since execd removes a finished command's spool itself) and the k8s tier in template and pool mode on kind
+v1.37, the credential checks included.
+
+Behaviour changes upstream that the provider meets as they are, noted for operators: a deleted Kubernetes sandbox now
+stays listed as `Stopping` (read as TERMINATED) until its pod is gone (upstream #2154), and BatchSandbox pods default
+to `restartPolicy: Never` (the hardened template already set it).
+
 ### Added: the sandbox half of core's Python `ExecuteCode` shell engine (D2)
 
 Core 0.3.4's shell engine runs model-written Python inside the sandbox. A workspace sandbox now offers what it needs, so

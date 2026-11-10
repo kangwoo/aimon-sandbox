@@ -1,6 +1,6 @@
 package at.aimon.sandbox.opensandbox;
 
-import java.net.http.HttpRequest;
+import java.io.IOException;
 import java.net.http.HttpResponse;
 import java.util.List;
 import java.util.Map;
@@ -8,41 +8,57 @@ import java.util.Optional;
 import java.util.TreeSet;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import at.aimon.sandbox.provider.CredentialScope;
+import at.aimon.sandbox.provider.ProviderSandboxRef;
+import at.aimon.sandbox.provider.SandboxNotFoundException;
 import at.aimon.sandbox.provider.SandboxProviderException;
 
 /**
- * The egress sidecar's credential vault (port 18080), reached through endpoint resolution with the
- * {@code OPENSANDBOX-EGRESS-AUTH} header the lifecycle server hands out (docs/design/opensandbox-spike.md §6; the
- * header
- * was confirmed on the Docker runtime in implementation step 4). Only the bindings a sandbox's profile names are sent:
- * a secret no profile asked for never reaches a sandbox's sidecar.
+ * A sandbox's credential vault, through the lifecycle server's {@code /sandboxes/{id}/credential-vault} (OpenSandbox
+ * {@code release-1.2.0}, upstream #2263). On the Docker and Kubernetes runtimes the server proxies the egress
+ * sidecar's own {@code /credential-vault} (port 18080) with the sidecar's auth token, so the semantics are the
+ * sidecar's (docs/design/opensandbox-spike.md §6), but the provider needs neither the sidecar's address nor its token
+ * — it works without {@code use-server-proxy} as well. Only the bindings a sandbox's profile names are sent: a secret
+ * no profile asked for never reaches a sandbox's sidecar.
+ *
+ * <p>
+ * A 404 is the sandbox gone, the vault absent (the sidecar's plain-text answer), or — from a server older than 1.2.0 —
+ * the route itself missing (FastAPI's {@code {"detail":"Not Found"}}). The first is told apart by asking for the
+ * sandbox, the last by its body, and reported as permanent: no retry gives an old server the route.
  */
 final class VaultClient {
 
-    private final ExecdClient sidecar;
+    private static final String PATH = "credential-vault";
+    private static final ObjectMapper JSON = new ObjectMapper();
 
-    VaultClient(ExecdClient sidecar) {
-        this.sidecar = sidecar;
+    private final LifecycleClient lifecycle;
+    private final Transport transport;
+    private final ProviderSandboxRef ref;
+
+    VaultClient(LifecycleClient lifecycle, Transport transport, ProviderSandboxRef ref) {
+        this.lifecycle = lifecycle;
+        this.transport = transport;
+        this.ref = ref;
     }
 
     /** @return the binding names the vault holds, or empty when there is no vault yet */
     Optional<TreeSet<String>> bindingNames() {
-        final HttpResponse<byte[]> response = sidecar.send(ep -> ep.request("/credential-vault").GET(),
+        final HttpResponse<byte[]> response = lifecycle.sandboxCall(ref.sandboxId(), PATH, "GET", null,
                 "read credential vault");
         try {
             HttpErrors.check(response, "read credential vault");
         } catch (HttpErrors.NotFound e) {
-            sidecar.requireSandbox();
+            requireSandbox(response);
             return Optional.empty();
         } catch (SandboxProviderException e) {
             throw classify(response.statusCode(), e);
         }
         final TreeSet<String> names = new TreeSet<>();
-        for (JsonNode binding : sidecar.transport().read(response).path("bindings")) {
+        for (JsonNode binding : transport.read(response).path("bindings")) {
             names.add(binding.path("name").asText());
         }
         return Optional.of(names);
@@ -50,7 +66,7 @@ final class VaultClient {
 
     /** Creates the vault with the named bindings, their secrets read now. */
     void create(List<String> names, Map<String, CredentialDefinition> definitions) {
-        final ObjectNode body = sidecar.transport().json.createObjectNode();
+        final ObjectNode body = transport.json.createObjectNode();
         final ArrayNode credentials = body.putArray("credentials");
         final ArrayNode bindings = body.putArray("bindings");
         for (String name : names) {
@@ -74,14 +90,12 @@ final class VaultClient {
                 auth.put("name", definition.auth().headerName());
             }
         }
-        final byte[] payload = sidecar.transport().write(body);
-        final HttpResponse<byte[]> response = sidecar.send(ep -> ep.request("/credential-vault")
-                .header("Content-Type", "application/json").POST(HttpRequest.BodyPublishers.ofByteArray(payload)),
-                "configure credential vault");
+        final HttpResponse<byte[]> response = lifecycle.sandboxCall(ref.sandboxId(), PATH, "POST",
+                transport.write(body), "configure credential vault");
         try {
             HttpErrors.check(response, "configure credential vault");
         } catch (HttpErrors.NotFound e) {
-            sidecar.requireSandbox();
+            requireSandbox(response);
             throw HttpErrors.failure(404, "configure credential vault", e.getMessage());
         } catch (SandboxProviderException e) {
             throw classify(response.statusCode(), e);
@@ -90,14 +104,42 @@ final class VaultClient {
 
     /** Removes the vault; an absent vault is already removed. */
     void delete() {
-        final HttpResponse<byte[]> response = sidecar.send(ep -> ep.request("/credential-vault").DELETE(),
+        final HttpResponse<byte[]> response = lifecycle.sandboxCall(ref.sandboxId(), PATH, "DELETE", null,
                 "delete credential vault");
         try {
             HttpErrors.check(response, "delete credential vault");
         } catch (HttpErrors.NotFound e) {
-            sidecar.requireSandbox();
+            requireSandbox(response);
         } catch (SandboxProviderException e) {
             throw classify(response.statusCode(), e);
+        }
+    }
+
+    /**
+     * After a 404: the sandbox must still exist, and the server must have the route.
+     *
+     * @throws SandboxNotFoundException
+     *             when the sandbox is gone
+     * @throws SandboxProviderException
+     *             (permanent) when the server has no credential-vault route
+     */
+    private void requireSandbox(HttpResponse<byte[]> response) {
+        if (lifecycle.get(ref.sandboxId()).isEmpty()) {
+            throw new SandboxNotFoundException(ref);
+        }
+        if (routeMissing(response.body())) {
+            throw new SandboxProviderException("the OpenSandbox server has no credential-vault API: it is older than "
+                    + "1.2.0, which the provider requires", SandboxProviderException.Kind.PERMANENT, null);
+        }
+    }
+
+    /** @return whether a 404 body is FastAPI's answer for a route it does not have */
+    static boolean routeMissing(byte[] body) {
+        try {
+            final JsonNode json = JSON.readTree(body);
+            return json != null && json.size() == 1 && "Not Found".equals(json.path("detail").asText(null));
+        } catch (IOException | RuntimeException e) {
+            return false;
         }
     }
 

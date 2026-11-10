@@ -39,24 +39,27 @@ import at.aimon.sandbox.provider.SandboxProviderException;
  * One execd {@code POST /command}, streamed on a provider thread (docs/design/opensandbox-spike.md §3).
  *
  * <ul>
- * <li>Output arrives as one event per line: each gets its {@code \n} back ({@code "\n"} itself is an empty line), is
- * handed to the sink, and is captured per stream up to {@code maxCaptureBytes} counted after UTF-8 encoding — the rest
- * is discarded and the stream marked truncated, while the command keeps running to its own end (step-4 design D8).</li>
+ * <li>Output arrives as one event per line. From execd {@code release-1.1.1} on (upstream #2033) an event's text
+ * keeps the line's own ending ({@code \n}, {@code \r}, or none for a last line the command did not end), so the
+ * events concatenate to the exact output; older execd strips the ending and sends a blank line as {@code "\n"}. Which
+ * contract a command's execd follows is read from its events ({@link Endings}), and older execd's lines get their
+ * {@code \n} back. Each line is handed to the sink and captured per stream up to {@code maxCaptureBytes} counted after
+ * UTF-8 encoding — the rest is discarded and the stream marked truncated, while the command keeps running to its own
+ * end (step-4 design D8).</li>
  * <li>{@link #kill()} and an {@link #await} past its timeout always send {@code DELETE /command?id=}: a disconnect
  * does not stop a command. A kill before the {@code init} event is latched and sent when the id arrives.</li>
  * <li>A stream that ends without a terminal event is followed by polling {@code /command/status/{id}}, which keeps
  * the exit code for 24 hours.</li>
- * <li>Exit codes come from {@code error.evalue}; a signal ({@code -1}) becomes {@code 128 + n} from the traceback's
- * signal name.</li>
+ * <li>Exit codes come from {@code error.exit_code} (execd {@code release-1.2.0}, upstream #2303), else from
+ * {@code error.evalue}; a signal ({@code -1}) becomes {@code 128 + n} from the traceback's signal name.</li>
  * <li>An event line over {@link SseEvents#MAX_LINE_BYTES} stops the reading: the command is killed, both streams are
  * marked truncated, and the exit code is read from the command's status (docs/design/ptc-shell-prerequisites.md
  * S2). The outcome says so in {@link ExecOutcome#killCause()} (S8), unless a timeout or a caller's kill was already on
  * its way.</li>
  * <li>For a {@link ExecSpec#transientOutput() transient} command, execd's spool files of its output are removed once
- * it has ended, before {@link #await} reports it (S1). execd {@code release-1.1.0} and later remove them on their own
- * from {@code $TMPDIR/opensandbox-execd/}; older execd ({@code docker/execd/v1.1.0}) leaves them in {@code $TMPDIR}
- * itself. Both places are tried, with {@code $TMPDIR} taken as {@code /tmp}: the files API cannot expand an unset
- * variable.</li>
+ * it has ended, before {@link #await} reports it (S1). execd spools them in {@code $TMPDIR/opensandbox-execd/}, taken
+ * as {@code /tmp/opensandbox-execd/}: the files API cannot expand an unset variable. (Only execd before
+ * {@code release-1.1.0} spooled in {@code $TMPDIR} itself; the provider requires {@code release-1.2.0}.)</li>
  * </ul>
  */
 final class OpenSandboxRunningCommand implements RunningCommand {
@@ -72,11 +75,8 @@ final class OpenSandboxRunningCommand implements RunningCommand {
     private static final Duration POLL_SLACK = Duration.ofSeconds(30);
     private static final Duration POLL_INTERVAL = Duration.ofMillis(500);
     private static final int SIGKILL_EXIT = 128 + 9;
-    /**
-     * Where execd spools a foreground command's output: {@code os.TempDir()/opensandbox-execd} from
-     * {@code release-1.1.0}, {@code os.TempDir()} itself before.
-     */
-    static final List<String> SPOOL_DIRECTORIES = List.of("/tmp/opensandbox-execd", "/tmp");
+    /** Where execd spools a foreground command's output: {@code os.TempDir()/opensandbox-execd}. */
+    static final List<String> SPOOL_DIRECTORIES = List.of("/tmp/opensandbox-execd");
     /** A command id fit to name a spool file: execd's are 32 hex digits. */
     private static final Pattern SPOOL_ID = Pattern.compile("[A-Za-z0-9_-]{1,128}");
     private static final Map<String, Integer> SIGNALS = Map.of("hangup", 1, "interrupt", 2, "quit", 3, "killed", 9,
@@ -104,6 +104,32 @@ final class OpenSandboxRunningCommand implements RunningCommand {
     private final AtomicBoolean spoolRemoved = new AtomicBoolean();
     private boolean killRequested;
     private boolean killSent;
+    /** How this command's execd ends its output events; read and written on the reader thread only. */
+    private Endings endings = Endings.UNKNOWN;
+    /**
+     * An output event without a line ending, held back while {@link #endings} is {@link Endings#UNKNOWN}: whether it
+     * needs a {@code \n} is not known yet. Reader thread only.
+     */
+    private String heldStdout;
+    private String heldStderr;
+
+    /**
+     * Which output-event contract a command's execd follows. Under {@link #PRESERVED} (execd {@code release-1.1.1}
+     * and later) an event without an ending can only be a stream's last, flushed when the command ends; under
+     * {@link #STRIPPED} every line arrives without one. So an unterminated event followed by another on the same
+     * stream proves {@code STRIPPED}; an event ending in {@code \r}, or in {@code \n} after other text, proves
+     * {@code PRESERVED} ({@code "\n"} alone is a blank line under both); and so does a terminal event carrying
+     * {@code exit_code}, which only {@code release-1.2.0} sends.
+     *
+     * <p>
+     * The provider requires {@code release-1.2.0}, yet still reads the older contract: the execd image is configured
+     * apart from the server ({@code execd_image}, and on Kubernetes a pool's pre-warmed {@code execd-installer}), so a
+     * 1.2.0 server can drive an older execd, and passing its stripped events through would glue every line together
+     * without a word.
+     */
+    enum Endings {
+        UNKNOWN, PRESERVED, STRIPPED
+    }
 
     private OpenSandboxRunningCommand(ExecdClient execd, ExecSpec spec, OutputSink sink, Duration killGrace) {
         this.execd = execd;
@@ -174,6 +200,9 @@ final class OpenSandboxRunningCommand implements RunningCommand {
             } catch (IOException | RuntimeException e) {
                 log.debug("The command stream of {} broke: {}", execd.ref(), e.toString());
             }
+            // No terminal event said which contract: a held line is taken as release-1.2.0, the supported execd,
+            // sends it — its stream's unterminated last line.
+            releaseHeld(endings == Endings.STRIPPED);
             if (!exit.isDone()) {
                 pollStatus();
             }
@@ -201,10 +230,10 @@ final class OpenSandboxRunningCommand implements RunningCommand {
      * as success). All paths go in one call; execd stops at the first path it cannot remove (a directory, or a path
      * through a file — {@code /tmp/opensandbox-execd} made a plain file by the command) and answers 500, so a refused
      * call is followed by one call per path, and one bad path does not spare the others. A call execd did not act on
-     * is not: a transport failure or timeout, a 502 (the {@code release-1.1.0} server proxy's answer when it cannot
-     * connect to execd — at once on a refused connection, after its own timeout on a connect timeout), or a 503/504
+     * is not: a transport failure or timeout, a 502 (the server proxy's answer when it cannot connect to execd — at
+     * once on a refused connection, after its own timeout on a connect timeout), or a 503/504
      * (execd before its runtime init, or a gateway in front). No path was tried, so none is known to be unremovable,
-     * and four more calls would only reach the same execd that did not take the first — at best as fast failures, at
+     * and two more calls would only reach the same execd that did not take the first — at best as fast failures, at
      * worst each waiting out its timeout. That run's spool then stays. Never throws: a failure is logged.
      */
     private void removeSpool() {
@@ -282,15 +311,17 @@ final class OpenSandboxRunningCommand implements RunningCommand {
                 }
                 return true;
             case "stdout" :
-                deliver(OutputSink.Stream.STDOUT, stdout, event.path("text").asText(""));
+                output(OutputSink.Stream.STDOUT, event.path("text").asText(""));
                 return true;
             case "stderr" :
-                deliver(OutputSink.Stream.STDERR, stderr, event.path("text").asText(""));
+                output(OutputSink.Stream.STDERR, event.path("text").asText(""));
                 return true;
             case "execution_complete" :
+                releaseHeld(!preserved(event));
                 finish(0);
                 return false;
             case "error" :
+                releaseHeld(!preserved(event.path("error")));
                 finish(exitCode(event.path("error")));
                 return false;
             default :
@@ -298,9 +329,63 @@ final class OpenSandboxRunningCommand implements RunningCommand {
         }
     }
 
-    private void deliver(OutputSink.Stream stream, Capture capture, String text) {
-        final byte[] line = ("\n".equals(text) ? "\n" : text + "\n").getBytes(StandardCharsets.UTF_8);
-        capture.append(line);
+    /** @return whether, at a terminal event, the command's events are known to keep their endings */
+    private boolean preserved(JsonNode carrier) {
+        return endings == Endings.PRESERVED
+                || endings == Endings.UNKNOWN && carrier.path("exit_code").isIntegralNumber();
+    }
+
+    /** One output event, its line ending restored when execd stripped it ({@link Endings}). */
+    private void output(OutputSink.Stream stream, String text) {
+        if (text.isEmpty()) {
+            return;
+        }
+        final String held = stream == OutputSink.Stream.STDOUT ? heldStdout : heldStderr;
+        if (held != null) {
+            // Under PRESERVED nothing follows a stream's unterminated last line. Once that is known, the other
+            // stream's held line goes too, so neither waits for its own next line.
+            endings = Endings.STRIPPED;
+            releaseHeld(true);
+        }
+        final char last = text.charAt(text.length() - 1);
+        if (last == '\n' || last == '\r') {
+            if (endings == Endings.UNKNOWN && !"\n".equals(text)) {
+                endings = Endings.PRESERVED;
+            }
+            deliver(stream, text);
+        } else if (endings == Endings.PRESERVED) {
+            deliver(stream, text);
+        } else if (endings == Endings.STRIPPED) {
+            deliver(stream, text + "\n");
+        } else {
+            hold(stream, text);
+        }
+    }
+
+    private void hold(OutputSink.Stream stream, String text) {
+        if (stream == OutputSink.Stream.STDOUT) {
+            heldStdout = text;
+        } else {
+            heldStderr = text;
+        }
+    }
+
+    /** Delivers what {@link #output} held back, with a {@code \n} when {@code stripped}. */
+    private void releaseHeld(boolean stripped) {
+        final String suffix = stripped ? "\n" : "";
+        if (heldStdout != null) {
+            deliver(OutputSink.Stream.STDOUT, heldStdout + suffix);
+            heldStdout = null;
+        }
+        if (heldStderr != null) {
+            deliver(OutputSink.Stream.STDERR, heldStderr + suffix);
+            heldStderr = null;
+        }
+    }
+
+    private void deliver(OutputSink.Stream stream, String text) {
+        final byte[] line = text.getBytes(StandardCharsets.UTF_8);
+        (stream == OutputSink.Stream.STDOUT ? stdout : stderr).append(line);
         try {
             sink.accept(stream, line, 0, line.length);
         } catch (RuntimeException e) {
@@ -309,6 +394,10 @@ final class OpenSandboxRunningCommand implements RunningCommand {
     }
 
     private int exitCode(JsonNode error) {
+        final JsonNode exitCode = error.path("exit_code");
+        if (exitCode.isIntegralNumber() && exitCode.asInt() >= 0) {
+            return exitCode.asInt();
+        }
         final String value = error.path("evalue").asText("");
         try {
             final int code = Integer.parseInt(value.strip());

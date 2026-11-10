@@ -494,7 +494,7 @@ public final class OpenSandboxProvider implements SandboxProvider {
     }
 
     private VaultClient vault(ProviderSandboxRef ref) {
-        return new VaultClient(new ExecdClient(transport, lifecycle, ref, ExecdClient.EGRESS_PORT));
+        return new VaultClient(lifecycle, transport, ref);
     }
 
     /**

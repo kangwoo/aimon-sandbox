@@ -1,8 +1,10 @@
 package at.aimon.sandbox.opensandbox;
 
 import static at.aimon.sandbox.opensandbox.FakeOpenSandboxServer.complete;
+import static at.aimon.sandbox.opensandbox.FakeOpenSandboxServer.completed;
 import static at.aimon.sandbox.opensandbox.FakeOpenSandboxServer.err;
 import static at.aimon.sandbox.opensandbox.FakeOpenSandboxServer.exit;
+import static at.aimon.sandbox.opensandbox.FakeOpenSandboxServer.exited;
 import static at.aimon.sandbox.opensandbox.FakeOpenSandboxServer.init;
 import static at.aimon.sandbox.opensandbox.FakeOpenSandboxServer.out;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -466,6 +468,101 @@ class OpenSandboxProviderTest {
         }
 
         @Test
+        @DisplayName("release-1.2.0: events that keep their line endings concatenate to the exact output")
+        void eventsThatKeepTheirEndingsAreTakenAsTheyAre() throws Exception {
+            // As execd splits "a\n\npro\rgress\r\ntail" (no ending after "tail") and "warn\n" on stderr.
+            server.commands = body -> Reply.events(List.of(init("c1"), out("a\n"), out("\n"), out("pro\r"),
+                    out("gress\r"), err("warn\n"), out("\n"), out("tail"), completed()), null);
+            final List<String> seen = new java.util.concurrent.CopyOnWriteArrayList<>();
+
+            final ExecOutcome outcome = connection
+                    .run(ExecSpec.builder().command("x").timeout(Duration.ofSeconds(10)).build(),
+                            (stream, bytes, offset, length) -> seen
+                                    .add(new String(bytes, offset, length, StandardCharsets.UTF_8)))
+                    .await(Duration.ofSeconds(10));
+
+            assertThat(text(outcome.stdout())).isEqualTo("a\n\npro\rgress\r\ntail");
+            assertThat(text(outcome.stderr())).isEqualTo("warn\n");
+            assertThat(seen).containsExactly("a\n", "\n", "pro\r", "gress\r", "warn\n", "\n", "tail");
+            assertThat(outcome.exitCode()).isZero();
+        }
+
+        @Test
+        @DisplayName("release-1.2.0: output with no line ending at all stays without one when the exit carries exit_code")
+        void anUnterminatedOnlyLineIsKeptAsItIsUnderRelease120() throws Exception {
+            server.commands = body -> Reply.events(List.of(init("c1"), out("abc"), err("e"), completed()), null);
+            ExecOutcome outcome = run("x", 1024);
+            assertThat(text(outcome.stdout())).isEqualTo("abc");
+            assertThat(text(outcome.stderr())).isEqualTo("e");
+
+            server.commands = body -> Reply.events(List.of(init("c1"), out("abc"), exited(4, "4", "exit status 4")),
+                    null);
+            outcome = run("x", 1024);
+            assertThat(text(outcome.stdout())).isEqualTo("abc");
+            assertThat(outcome.exitCode()).isEqualTo(4);
+        }
+
+        @Test
+        @DisplayName("execd before release-1.1.1: a stripped line gets its \\n back, at the latest when the next one arrives")
+        void aStrippedLineIsReleasedByTheNextEvent() throws Exception {
+            final CountDownLatch hold = new CountDownLatch(1);
+            server.holds.put("c1", hold);
+            server.commands = body -> Reply.events(List.of(init("c1"), out("one"), out("two")), hold);
+            final List<String> seen = new java.util.concurrent.CopyOnWriteArrayList<>();
+            final RunningCommand command = connection
+                    .run(ExecSpec.builder().command("x").timeout(Duration.ofSeconds(10)).build(), (stream, bytes,
+                            offset, length) -> seen.add(new String(bytes, offset, length, StandardCharsets.UTF_8)));
+
+            // "two" proves the stripped contract: "one" goes with its \n, and "two" at once, not held in turn.
+            final long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+            while (seen.size() < 2 && System.nanoTime() < deadline) {
+                Thread.sleep(20);
+            }
+            assertThat(seen).containsExactly("one\n", "two\n");
+            command.kill();
+            command.await(Duration.ofSeconds(10));
+        }
+
+        @Test
+        @DisplayName("execd before release-1.1.1: once the stripped contract shows, the other stream's held line goes too")
+        void provingTheStrippedContractReleasesBothStreams() throws Exception {
+            final CountDownLatch hold = new CountDownLatch(1);
+            server.holds.put("c1", hold);
+            server.commands = body -> Reply.events(List.of(init("c1"), out("a"), err("b"), err("c")), hold);
+            final List<String> seen = new java.util.concurrent.CopyOnWriteArrayList<>();
+            final RunningCommand command = connection.run(
+                    ExecSpec.builder().command("x").timeout(Duration.ofSeconds(10)).build(),
+                    (stream, bytes, offset, length) -> seen
+                            .add(stream + ":" + new String(bytes, offset, length, StandardCharsets.UTF_8)));
+
+            final long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+            while (seen.size() < 3 && System.nanoTime() < deadline) {
+                Thread.sleep(20);
+            }
+            assertThat(seen).containsExactly("STDOUT:a\n", "STDERR:b\n", "STDERR:c\n");
+            command.kill();
+            command.await(Duration.ofSeconds(10));
+        }
+
+        @Test
+        @DisplayName("release-1.2.0: a stream that drops leaves an unterminated last line as it is")
+        void aDroppedStreamKeepsAnUnterminatedLineAsItIs() throws Exception {
+            server.commands = body -> Reply.events(List.of(init("c2"), out("done\n"), out("abc")), null);
+            server.commandStatus = FakeOpenSandboxServer.JSON.createObjectNode().put("running", false).put("exit_code",
+                    0);
+            assertThat(text(run("x", 100).stdout())).isEqualTo("done\nabc");
+        }
+
+        @Test
+        @DisplayName("release-1.2.0: error.exit_code is the exit code, whatever evalue says")
+        void theStructuredExitCodeWins() throws Exception {
+            server.commands = body -> Reply.events(List.of(init("c1"), exited(5, "boom", "x")), null);
+            assertThat(run("x", 10).exitCode()).isEqualTo(5);
+            server.commands = body -> Reply.events(List.of(init("c1"), exited(-1, "-1", "signal: terminated")), null);
+            assertThat(run("x", 10).exitCode()).isEqualTo(143);
+        }
+
+        @Test
         void aSignalIsReportedAs128PlusItsNumber() throws Exception {
             server.commands = body -> Reply.events(List.of(init("c1"), exit("-1", "signal: terminated")), null);
             assertThat(run("x", 10).exitCode()).isEqualTo(143);
@@ -503,7 +600,7 @@ class OpenSandboxProviderTest {
         void awaitPastItsTimeoutSendsTheInterrupt() throws Exception {
             final CountDownLatch hold = new CountDownLatch(1);
             server.holds.put("c9", hold);
-            server.commands = body -> Reply.events(List.of(init("c9"), out("started")), hold);
+            server.commands = body -> Reply.events(List.of(init("c9"), out("started\n")), hold);
             final RunningCommand command = connection.run(
                     ExecSpec.builder().command("sleep 60").timeout(Duration.ofSeconds(60)).build(), OutputSink.DISCARD);
 
@@ -558,7 +655,7 @@ class OpenSandboxProviderTest {
 
         @Test
         void aDroppedStreamIsFollowedByTheCommandStatus() throws Exception {
-            server.commands = body -> Reply.events(List.of(init("c2"), out("partial")), null);
+            server.commands = body -> Reply.events(List.of(init("c2"), out("partial\n")), null);
             server.commandStatus = FakeOpenSandboxServer.JSON.createObjectNode().put("running", false).put("exit_code",
                     3);
 
@@ -570,10 +667,10 @@ class OpenSandboxProviderTest {
                     .anyMatch(r -> r.path.endsWith("/command/status/c2"))).isTrue();
         }
 
-        /** Spool files of command {@code id} in both execd layouts, as the fake's file system holds them. */
+        /** Spool files of command {@code id} where execd keeps them, as the fake's file system holds them. */
         private List<String> spool(String id) {
             final List<String> paths = List.of("/tmp/opensandbox-execd/" + id + ".stdout",
-                    "/tmp/opensandbox-execd/" + id + ".stderr", "/tmp/" + id + ".stdout", "/tmp/" + id + ".stderr");
+                    "/tmp/opensandbox-execd/" + id + ".stderr");
             paths.forEach(p -> server.files.put(p, "secret\n".getBytes(StandardCharsets.UTF_8)));
             return paths;
         }
@@ -587,7 +684,7 @@ class OpenSandboxProviderTest {
         }
 
         @Test
-        @DisplayName("S1: a transient command's spool, in either execd layout, is gone when await reports it")
+        @DisplayName("S1: a transient command's spool is gone when await reports it")
         void aTransientCommandsSpoolIsRemovedBeforeAwaitReturns() throws Exception {
             final String id = "0123456789abcdef0123456789abcdef";
             final List<String> paths = spool(id);
@@ -620,7 +717,7 @@ class OpenSandboxProviderTest {
             final CountDownLatch hold = new CountDownLatch(1);
             server.holds.put("c9", hold);
             // The kill releases the hold: the stream then ends without a terminal event, and the status settles it.
-            server.commands = body -> Reply.events(List.of(init("c9"), out("started")), hold);
+            server.commands = body -> Reply.events(List.of(init("c9"), out("started\n")), hold);
             final RunningCommand command = connection.run(transientSpec(Duration.ofSeconds(60)), OutputSink.DISCARD);
 
             final ExecOutcome outcome = command.await(Duration.ofMillis(300));
@@ -634,7 +731,7 @@ class OpenSandboxProviderTest {
         @DisplayName("S1: a transient command whose stream dropped has its spool removed once the status settles it")
         void aDroppedTransientCommandsSpoolIsRemovedAfterTheStatus() throws Exception {
             final List<String> paths = spool("c2");
-            server.commands = body -> Reply.events(List.of(init("c2"), out("partial")), null);
+            server.commands = body -> Reply.events(List.of(init("c2"), out("partial\n")), null);
             server.commandStatus = FakeOpenSandboxServer.JSON.createObjectNode().put("running", false).put("exit_code",
                     3);
 
@@ -669,7 +766,7 @@ class OpenSandboxProviderTest {
             final CountDownLatch hold = new CountDownLatch(1);
             server.holds.put("c9", hold);
             // The kill releases the hold: the stream ends without a terminal event, and the status gives exit 3.
-            server.commands = body -> Reply.events(List.of(init("c9"), out("started")), hold);
+            server.commands = body -> Reply.events(List.of(init("c9"), out("started\n")), hold);
             server.commandStatus = FakeOpenSandboxServer.JSON.createObjectNode().put("running", false).put("exit_code",
                     3);
             final CountDownLatch removing = new CountDownLatch(1);
@@ -923,7 +1020,8 @@ class OpenSandboxProviderTest {
             final CountDownLatch hold = new CountDownLatch(1);
             server.holds.put("c5", hold);
             server.commands = body -> Reply.events(
-                    List.of(init("c5"), out("before"), out("x".repeat(SseEvents.MAX_LINE_BYTES)), out("after")), hold);
+                    List.of(init("c5"), out("before\n"), out("x".repeat(SseEvents.MAX_LINE_BYTES)), out("after")),
+                    hold);
             server.commandStatus = FakeOpenSandboxServer.JSON.createObjectNode().put("running", false).put("exit_code",
                     -1);
             final List<String> sunk = new java.util.concurrent.CopyOnWriteArrayList<>();
@@ -1374,6 +1472,37 @@ class OpenSandboxProviderTest {
             vaulted.create(spec("ws:v", 1).egress(List.of("github.com")).credentials(List.of("gh")).build());
 
             assertThat(server.vault).isNotNull();
+        }
+
+        @Test
+        @DisplayName("a server older than 1.2.0, which has no credential-vault route, is a permanent failure")
+        void aServerWithoutTheVaultRouteIsPermanent() {
+            server.overrides.put("GET /v1/sandboxes/",
+                    request -> request.path.endsWith("/credential-vault")
+                            ? Reply.json(404, Map.of("detail", "Not Found"))
+                            : null);
+
+            assertThatThrownBy(() -> vaulted
+                    .create(spec("ws:v", 1).egress(List.of("github.com")).credentials(List.of("gh")).build()))
+                    .isInstanceOfSatisfying(SandboxProviderException.class,
+                            e -> assertThat(e.kind()).isEqualTo(SandboxProviderException.Kind.PERMANENT))
+                    .hasMessageContaining("older than 1.2.0");
+        }
+
+        @Test
+        @DisplayName("a vault read the server proxy answers 502 (sidecar not up yet) is retried")
+        void aVaultReadAnswered502IsRetried() {
+            final AtomicInteger down = new AtomicInteger(2);
+            server.overrides.put("GET /v1/sandboxes/",
+                    request -> request.path.endsWith("/credential-vault") && down.getAndDecrement() > 0
+                            ? Reply.error(502, "PROXY::UPSTREAM_UNAVAILABLE", "connect refused")
+                            : null);
+
+            vaulted.create(spec("ws:v", 1).egress(List.of("github.com")).credentials(List.of("gh")).build());
+
+            assertThat(server.vault).isNotNull();
+            assertThat(server.requests("GET", "/v1/sandboxes").stream()
+                    .filter(r -> r.path.endsWith("/credential-vault")).count()).isEqualTo(3);
         }
 
         @Test
