@@ -5,7 +5,7 @@ All notable aimon-sandbox changes are recorded here. The format is loosely based
 
 ## [Unreleased]
 
-Requires aimon-core **0.3.4** (pinned to `0.3.4-SNAPSHOT` until core releases it; see below) — 0.3.3 for the seams of
+Requires aimon-core **0.3.4** — 0.3.3 for the seams of
 [`docs/design/workspace-sandbox-core-033.md`](docs/design/workspace-sandbox-core-033.md), 0.3.4 for streaming and the
 sandbox SPI of core's Python `ExecuteCode` shell engine. `aimon-sandbox` exposes core as an `api` dependency, so
 upgrading from 0.1.0 also raises core from 0.3.1 to 0.3.3, which core itself declares incompatible with 0.3.2 — upgrade
@@ -81,7 +81,7 @@ and departures: [`docs/design/ptc-shell-provider.md`](docs/design/ptc-shell-prov
   not publish. The local provider and the docker tier run it, and core's engine contract suite
   (`aimon-code-engine-testkit`, test-only) runs on both tiers.
 - **A timed-out, cancelled or limit-stopped `ExecuteCode` run leaves nothing running in the sandbox** — with the
-  `0.3.4-SNAPSHOT` that carries aimon-core#336 (Q-C4: core's runtime used to leave the exec's process group, so the
+  core 0.3.4, which carries aimon-core#336 (Q-C4: core's runtime used to leave the exec's process group, so the
   sandbox's kill missed it). No behaviour change here: main source changed only in javadoc (`SandboxShell`,
   `SandboxExecutionEnvironment`, `OpenSandboxRunningCommand`), the rest is tests. Both tiers now run the whole engine
   contract suite, and the docker tier checks that no runtime, child or zombie is left (`docs/design/ptc-shell-provider.md`
@@ -191,9 +191,8 @@ See [`docs/design/ptc-shell-prerequisites.md`](docs/design/ptc-shell-prerequisit
   provider delivers it. A streamed command takes a hook command's stream path — no shell lock, no state save, the
   session's cwd and exports, the watchdog for its timeout. This is what core's background `Monitor` command form needs
   in a sandbox (`docs/design/workspace-sandbox.md` §9.x).
-- **Pinned to `aimon-core 0.3.4-SNAPSHOT`** from Central's snapshot repository until core 0.3.4 is released — a release
-  blocker by design: `scripts/release.sh` refuses while the catalog pins a SNAPSHOT. The snapshot of 2026-11-06 (core
-  PTC pieces A–D1) made the hook-context builders require `origin(...)`; the one test that built one without it is
+- **Pinned to `aimon-core 0.3.4`** (released 2026-11-10); the `0.3.4-SNAPSHOT` pin and the filtered Central snapshot
+  repository in `build.gradle.kts` that served it are gone. The snapshot of 2026-11-06 (core PTC pieces A–D1) made the hook-context builders require `origin(...)`; the one test that built one without it is
   fixed.
 
 ### Added: workspace files for a file explorer

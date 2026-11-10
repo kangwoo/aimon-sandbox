@@ -8,25 +8,6 @@ allprojects {
 
     repositories {
         mavenCentral()
-        // Only for the aimon-core SNAPSHOT pinned in gradle/libs.versions.toml. Filtered to that group and to
-        // snapshots so no other coordinate, and no release, can be served from here instead of from Central.
-        // Delete this block together with the SNAPSHOT pin -- keeping it is a release blocker.
-        maven("https://central.sonatype.com/repository/maven-snapshots/") {
-            name = "centralSnapshots"
-            content {
-                includeGroup("at.aimon.core")
-            }
-            mavenContent {
-                snapshotsOnly()
-            }
-        }
-    }
-
-    // Same lifetime as the block above. A SNAPSHOT is a changing module, which Gradle caches for 24 hours by default
-    // -- and CI restores that cache, so a build right after a core snapshot is republished compiles against the old
-    // one. Re-check on every build instead; delete this together with the snapshot repository.
-    configurations.configureEach {
-        resolutionStrategy.cacheChangingModulesFor(0, "seconds")
     }
 }
 
