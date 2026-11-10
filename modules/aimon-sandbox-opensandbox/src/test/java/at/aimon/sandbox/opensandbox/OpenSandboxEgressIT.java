@@ -59,7 +59,7 @@ class OpenSandboxEgressIT {
     /** Creates a sandbox on {@code server}, retried once on the server's own host-port conflict (§16). */
     private ProviderSandboxRef create(OpenSandboxTestServer server, OpenSandboxProvider provider, List<String> egress,
             List<String> credentials) {
-        return server.retryOnPortConflict(() -> createOnce(provider, egress, credentials));
+        return server.retryOnPortConflict(OpenSandboxEgressIT.class, () -> createOnce(provider, egress, credentials));
     }
 
     private ProviderSandboxRef createOnce(OpenSandboxProvider provider, List<String> egress, List<String> credentials) {

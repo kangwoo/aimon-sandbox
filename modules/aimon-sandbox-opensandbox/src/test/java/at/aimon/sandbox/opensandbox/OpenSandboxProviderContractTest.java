@@ -2,6 +2,8 @@ package at.aimon.sandbox.opensandbox;
 
 import org.junit.jupiter.api.Tag;
 
+import at.aimon.sandbox.provider.CreateSpec;
+import at.aimon.sandbox.provider.ProviderSandboxRef;
 import at.aimon.sandbox.provider.SandboxProvider;
 import at.aimon.sandbox.testkit.SandboxProviderContract;
 
@@ -25,5 +27,15 @@ class OpenSandboxProviderContractTest extends SandboxProviderContract {
     @Override
     protected String deployment() {
         return OpenSandboxTestServer.DEPLOYMENT;
+    }
+
+    /**
+     * A create that Docker refused for a host port the server picked is retried once
+     * ({@link OpenSandboxTestServer#retryOnPortConflict(Class, java.util.function.Supplier)}): the server retries that
+     * itself here, but one still reached CI (PR #55, {@code extendExpiryMovesForwardOnly}).
+     */
+    @Override
+    protected ProviderSandboxRef create(CreateSpec spec) {
+        return OpenSandboxTestServer.dnsNft().retryOnPortConflict(getClass(), () -> super.create(spec));
     }
 }

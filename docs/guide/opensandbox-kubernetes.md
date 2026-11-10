@@ -386,6 +386,11 @@ scripts/k8s-tier.sh down   # 클러스터를 지운다
 컨텍스트는 그대로이고, 같은 이름의 클러스터가 이미 있으면 `up` 이 멈춘다. 손으로 `k8sTest` 를 돌릴 때는 `KUBECONFIG` 를
 그 파일로 export 한다.
 
+`AIMON_K8S_NODES=3` 처럼 노드 수를 주고 `up` 하면 컨트롤 플레인 하나와 워커 둘로 클러스터를 만든다. 컨트롤 플레인은
+kind 의 NoSchedule taint 를 그대로 두므로 서버 · 풀 파드 · 샌드박스가 모두 워커에 뜨고, 서버와 샌드박스가 서로 다른
+노드에 놓일 수 있는 채로 검사가 돈다. `test` 는 샌드박스 네임스페이스의 파드가 어느 노드에 놓였는지를
+`$AIMON_K8S_WORK/placement.txt` 에 남기고 찍는다. 노드가 늘면 Docker 메모리도 그만큼 더 든다.
+
 kind, kubectl, helm, git, docker 가 필요하고 Docker 메모리가 3 GB 쯤 든다. 새 노드에서의 첫 `test` 는 egress 이미지를 받는 동안
 (측정 2분 27초) 서버가 샌드박스 생성을 60초에 끊어 504 로 몇 개가 실패할 수 있다. 한 번 더 돌리면 된다. 이 스크립트의 API 키(`spike-key`)와
 RuntimeClass(runc 로 만든 `spike-runc`)는 테스트용이다.

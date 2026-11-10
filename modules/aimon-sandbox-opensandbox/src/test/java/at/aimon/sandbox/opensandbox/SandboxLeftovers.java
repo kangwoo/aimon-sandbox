@@ -3,7 +3,6 @@ package at.aimon.sandbox.opensandbox;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -16,29 +15,36 @@ import at.aimon.core.shell.ShellCommandResult;
 
 /**
  * What a shell-engine run leaves in a sandbox (docs/design/ptc-shell-provider.md §9 Q-C4): the sandbox's processes as
- * {@code ps} lists them, the ones that count as left over — a zombie, a core runtime ({@code aimon_ptc}) or a child the
- * test's program started — and which of them are new since a baseline. A zombie is shown with its parent, the process
- * that did not reap it. Also the program a run executes to record the runtime's process topology from the inside: its
- * anchor and its watchdog (aimon-core#336), which have both gone by the time the test can look.
+ * {@code /proc} (or {@code ps}) lists them, the ones that count as left over — a zombie, a core runtime
+ * ({@code aimon_ptc}) or a child the test's program started — and which of them are new since a baseline. A zombie is
+ * shown with its parent, the process that did not reap it. Also the program a run executes to record the runtime's
+ * process topology from the inside: its anchor and its watchdog (aimon-core#336), which have both gone by the time the
+ * test can look.
  */
 final class SandboxLeftovers {
 
-    /** The prefix of {@link #PS}'s {@code /proc/<pid>/stat} lines: the pid, then the fields after the command name. */
-    static final String STAT = "@stat";
+    /** The prefix of {@link #PS}'s {@code /proc} lines: pid, ppid, pgid, state, start time in clock ticks, args. */
+    static final String PROC = "@proc";
 
     /**
-     * Four fields, the start time ({@code lstart}: five words in the C locale, to the second) and the args, so the
-     * command's own line ({@code ps -eo …}) is parsed like any other and filtered by args. Then, where {@code /proc}
-     * has them, one {@link #STAT} line per process with its kernel start time ({@code starttime}, field 22 of
-     * {@code /proc/<pid>/stat}, in clock ticks since boot): finer than {@code lstart}, so a pid reused within the same
-     * second is still a new process. Its exit status is {@code ps}'s: a process that exits before its {@code stat} is
-     * read is left out, not a failure.
+     * Where {@code /proc} has them, one {@link #PROC} line per process, read from {@code /proc} alone in one pass: its
+     * {@code stat} (ppid, pgid, state, and the kernel start time {@code starttime}, field 22, in clock ticks since
+     * boot, finer than {@code ps}'s {@code lstart}: a pid reused within the same second is still a new process) and
+     * its {@code cmdline}, which a {@code stat} read before and after brackets: the two start times agree, or both are
+     * read again, so the args and the start time are one process's even when its pid is reused meanwhile. An empty
+     * {@code cmdline} (a zombie) shows as {@code ps} shows it, {@code [comm]}. A process that exits before it is read
+     * is left out, not a failure. Without {@code /proc}: {@code ps}'s four fields, the start time ({@code lstart}: five
+     * words in the C locale, to the second) and the args, its exit status {@code ps}'s. Either way the command's own
+     * line is parsed like any other and filtered by args.
      */
-    static final String PS = "LC_ALL=C ps -eo pid=,ppid=,pgid=,stat=,lstart=,args= && for s in /proc/[0-9]*/stat; do "
-            + "if { read -r l < \"$s\"; } 2>/dev/null; then echo \"" + STAT + " ${l%% *} ${l##*) }\"; fi; done";
-
-    /** Where {@code starttime} is among the fields after the command name: field 22, the first of them being 3. */
-    private static final int STARTTIME = 22 - 3;
+    static final String PS = "if [ -r /proc/1/stat ]; then for d in /proc/[0-9]*; do "
+            + "{ read -r s < \"$d/stat\"; } 2>/dev/null || continue; "
+            + "while :; do a=$(tr '\\0\\n' '  ' < \"$d/cmdline\" 2>/dev/null); "
+            + "{ read -r t < \"$d/stat\"; } 2>/dev/null || continue 2; "
+            + "set -- ${s##*) }; x=${20}; set -- ${t##*) }; [ \"$x\" = \"${20}\" ] && break; s=$t; done; "
+            + "c=${t#*(}; c=${c%)*}; [ -n \"$a\" ] || { a=\"[$c]\"; [ \"$1\" != Z ] || a=\"$a <defunct>\"; }; "
+            + "echo \"" + PROC + " ${d#/proc/} $2 $3 $1 ${20} $a\"; done; "
+            + "else LC_ALL=C ps -eo pid=,ppid=,pgid=,stat=,lstart=,args=; fi";
 
     /** How long a check waits for the watchdog's kill and the reaper's {@code wait} to finish: 50 × 200 ms. */
     private static final int ATTEMPTS = 50;
@@ -55,7 +61,7 @@ final class SandboxLeftovers {
 
     /**
      * One process of {@link #PS}; {@code started} is its {@code /proc} start time ({@code ticks:<starttime>}) where
-     * {@code PS} read one, its {@code lstart} otherwise, and empty where nothing recorded it.
+     * {@code PS} read {@code /proc}, its {@code lstart} otherwise, and empty where nothing recorded it.
      */
     record Proc(int pid, int ppid, int pgid, String stat, String started, String args) {
 
@@ -86,18 +92,20 @@ final class SandboxLeftovers {
     /**
      * @param ps
      *            the output of {@link #PS}
-     * @return its processes, each started at its {@code /proc} start time where a {@link #STAT} line gave one. A line
-     *         with neither the four fields, the start time's five words and the args, nor a start time is skipped
+     * @return its processes: a {@link #PROC} line's, started at its {@code /proc} start time, or a {@code ps} line's,
+     *         started at its {@code lstart}. A line that is neither (too few fields, a field that is not a number) is
+     *         skipped
      */
     static List<Proc> parse(String ps) {
         final List<Proc> procs = new ArrayList<>();
-        final Map<Integer, String> ticks = new HashMap<>();
         for (String line : ps.lines().map(String::strip).toList()) {
             try {
-                if (line.startsWith(STAT + " ")) {
-                    final String[] fields = line.split("\\s+");
-                    if (fields.length > STARTTIME + 2) {
-                        ticks.put(Integer.parseInt(fields[1]), "ticks:" + Long.parseLong(fields[STARTTIME + 2]));
+                if (line.startsWith(PROC + " ")) {
+                    final String[] fields = line.split("\\s+", 7);
+                    if (fields.length == 7) {
+                        procs.add(new Proc(Integer.parseInt(fields[1]), Integer.parseInt(fields[2]),
+                                Integer.parseInt(fields[3]), fields[4], "ticks:" + Long.parseLong(fields[5]),
+                                fields[6]));
                     }
                     continue;
                 }
@@ -111,11 +119,7 @@ final class SandboxLeftovers {
                 // a header or a wrapped line: not a process
             }
         }
-        return procs.stream()
-                .map(p -> ticks.containsKey(p.pid())
-                        ? new Proc(p.pid(), p.ppid(), p.pgid(), p.stat(), ticks.get(p.pid()), p.args())
-                        : p)
-                .toList();
+        return procs;
     }
 
     /**

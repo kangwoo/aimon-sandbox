@@ -99,7 +99,9 @@ WorkspaceSandbox sandbox = WorkspaceSandbox.builder().settings(settings).provide
 가 서버를 포트포워드해 모든 검사를 켠 채 돌리며, `scripts/k8s-tier.sh down` 이 지운다. 스크립트는 자기 kubeconfig
 (`AIMON_K8S_KUBECONFIG`, 기본 `$AIMON_K8S_WORK/kubeconfig`)만 읽고 쓰므로 `~/.kube/config` 와 그 현재 컨텍스트는 건드리지
 않고, 이미 있는 이름의 클러스터는 받아들이지 않는다(`AIMON_K8S_CLUSTER` 로 이름을 바꾼다). `scripts/k8s-tier.sh status` 는
-클러스터 · 파드 · 풀을 기록용으로 찍는다. 셸 엔진은 두 모드로 돈다 — `ShellEngineContractK8sTemplateIT`(서버가 템플릿으로
+클러스터 · 파드 · 풀을 기록용으로 찍는다. `AIMON_K8S_NODES`(기본 1)로 워커가 있는 다중 노드 클러스터를 만들 수 있고, 그때
+`test` 는 파드가 놓인 노드를 `$AIMON_K8S_WORK/placement.txt` 에 남긴다. 셸 엔진은 두 모드로 돈다 —
+`ShellEngineContractK8sTemplateIT`(서버가 템플릿으로
 파드를 만든다)와 `ShellEngineContractK8sPoolIT`(서버가 [`src/test/k8s/pool.yaml`](src/test/k8s/pool.yaml) 의 `Pool` 에서
 파드를 받는다, `extensions.poolRef` — 프로바이더의 테스트 전용 이음매다). 둘 다 코어의 엔진 계약 스위트, 남은 프로세스 검사,
 PID 1 기록, 고아 좀비 회수를 돈다. 측정 결과는
