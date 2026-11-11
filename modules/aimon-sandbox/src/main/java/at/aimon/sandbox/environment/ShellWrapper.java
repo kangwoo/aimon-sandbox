@@ -36,7 +36,8 @@ import java.util.regex.Pattern;
  * only the inner bash; the outer still reports its output and exit code.
  *
  * <p>
- * A model's command reaches the inner bash through the run file {@code run-{id}.cmd}, never as an argument: the outer
+ * A foreground or background command reaches the inner bash through the run file {@code run-{id}.cmd}, never as an
+ * argument (a streamed one is of the stream family below and is an argument): the outer
  * writes it there with the {@code printf} builtin, or — for a command too large to embed in the exec at all
  * ({@link #INLINE_COMMAND_LIMIT}) — {@code SandboxShell} uploads it through the files API and the script carries no
  * copy. Linux limits one argument to 128 KiB (MAX_ARG_STRLEN), and the exec's own script is one. Per-command
