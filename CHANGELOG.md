@@ -13,6 +13,19 @@ it as you would across a minor: the auto-compact buffer and ratio members are go
 session log is written as version 2 by default, so a mixed-version cluster must pin `v1` (kangwoo/aimon-core#286). See
 core's [0.3.3 release notes](https://github.com/kangwoo/aimon-core/releases/tag/v0.3.3).
 
+### Fixed: pre-release review
+
+- **A deleted session's `ws:{sessionId}` cannot be reopened.** `SandboxWorkspaces.reopen` and
+  `SandboxAdministration.reopen` refused only a closing workspace; one closed by the session lifecycle listener and
+  waiting to be deleted could be reopened by its owner, which took it out of the deletion. They now answer "being
+  removed; retry shortly", as the session's tools do.
+- **An owned provider is closed when `WorkspaceSandbox.Builder.build()` fails** (`ownProvider(true)`): a startup
+  validation failure used to leak it.
+- **The OpenSandbox provider no longer names a raw sandbox id** in the failure of a create whose egress-sidecar read
+  was refused as unauthorized; it carries the hashed ref, as every other message does.
+- **An interrupted move or link in the OpenSandbox files API kills its in-sandbox helper** instead of leaving it to
+  run on while the write cleans up.
+
 ### Fixed: an out-of-memory command no longer takes execd with it
 
 execd shares the sandbox's memory cgroup, and the OOM killer could choose it: when a pipeline such as
