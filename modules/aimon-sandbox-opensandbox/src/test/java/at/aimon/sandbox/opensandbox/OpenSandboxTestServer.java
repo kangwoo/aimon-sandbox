@@ -1,5 +1,6 @@
 package at.aimon.sandbox.opensandbox;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URI;
@@ -16,6 +17,7 @@ import java.util.Map;
 import java.util.TreeMap;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
@@ -27,8 +29,11 @@ import org.testcontainers.images.builder.ImageFromDockerfile;
 import org.testcontainers.images.builder.Transferable;
 
 import com.github.dockerjava.api.DockerClient;
+import com.github.dockerjava.api.async.ResultCallback;
+import com.github.dockerjava.api.command.InspectContainerResponse;
 import com.github.dockerjava.api.model.Container;
 import com.github.dockerjava.api.model.ContainerPort;
+import com.github.dockerjava.api.model.Frame;
 
 import at.aimon.sandbox.provider.ProviderSandbox;
 import at.aimon.sandbox.provider.ProviderSandboxRef;
@@ -333,14 +338,100 @@ final class OpenSandboxTestServer {
             return false;
         }
         final DockerClient docker = DockerClientFactory.instance().client();
+        docker.updateContainerCmd(sandboxContainer(docker, ref)).withMemory(memoryBytes).withMemorySwap(memoryBytes)
+                .exec();
+        return true;
+    }
+
+    /**
+     * @return the id of the sandbox's own container on this Docker, as
+     *         {@link #sandboxContainer(ProviderSandboxRef, List)} picks it
+     */
+    private static String sandboxContainer(DockerClient docker, ProviderSandboxRef ref) {
         final Map<String, DockerContainer> candidates = new LinkedHashMap<>();
         docker.listContainersCmd().withShowAll(true).withLabelFilter(Map.of(SANDBOX_ID_LABEL, ref.sandboxId())).exec()
                 .forEach(c -> candidates.put(c.getId(), DockerContainer.of(c)));
         docker.listContainersCmd().withShowAll(true).withNameFilter(List.of(containerName(ref))).exec()
                 .forEach(c -> candidates.putIfAbsent(c.getId(), DockerContainer.of(c)));
-        docker.updateContainerCmd(sandboxContainer(ref, List.copyOf(candidates.values()))).withMemory(memoryBytes)
-                .withMemorySwap(memoryBytes).exec();
-        return true;
+        return sandboxContainer(ref, List.copyOf(candidates.values()));
+    }
+
+    /** How long {@link #hostView} waits for its {@code docker exec}: a cgroup stuck at its limit can stall it too. */
+    private static final Duration HOST_VIEW_EXEC = Duration.ofSeconds(30);
+
+    /**
+     * The shell command of {@link #hostView}, run by {@code docker exec} as root (POSIX sh, coreutils or busybox): the
+     * cgroup's memory counters, its memory pressure, the reclaim lines of {@code memory.stat}, then one line per
+     * process with its RSS, OOM score and state.
+     */
+    static final String HOST_VIEW_COMMAND = "cd /sys/fs/cgroup 2>/dev/null; "
+            + "for f in memory.current memory.events memory.pressure; do "
+            + "printf '%s: %s\\n' \"$f\" \"$(tr '\\n' ' ' < \"$f\" 2>&1)\"; done; "
+            + "printf 'memory.stat: %s\\n' \"$(grep -E '^(anon|file|file_mapped|shmem|kernel|sock|pgmajfault|pgscan|pgsteal"
+            + "|workingset_refault_file|workingset_activate_file) ' memory.stat 2>&1 | tr '\\n' ' ')\"; "
+            + "for p in /proc/[0-9]*; do [ -r \"$p/status\" ] || continue; "
+            + "printf 'pid %s %s rss=%s oom_score=%s adj=%s cmd=%s\\n' \"${p#/proc/}\" "
+            + "\"$(sed -n 's/^State:[[:space:]]*//p' \"$p/status\" 2>/dev/null | cut -c1-12)\" "
+            + "\"$(sed -n 's/^VmRSS:[[:space:]]*//p' \"$p/status\" 2>/dev/null)\" \"$(cat \"$p/oom_score\" 2>/dev/null)\" "
+            + "\"$(cat \"$p/oom_score_adj\" 2>/dev/null)\" \"$(tr '\\0' ' ' < \"$p/cmdline\" 2>/dev/null | cut -c1-120)\"; done";
+
+    /**
+     * The sandbox as Docker sees it, without execd: a test whose command never came back cannot ask execd, which may be
+     * what stopped (CI, the §12.2 out-of-memory test). The container's state (running, OOM-killed, exit code), then,
+     * where it still runs, {@link #HOST_VIEW_COMMAND}'s output through {@code docker exec}, waited for at most
+     * {@link #HOST_VIEW_EXEC}.
+     *
+     * @param ref
+     *            the sandbox, on this server's Docker runtime
+     * @return what was seen, one item per line; for a server started elsewhere, or where Docker fails, why nothing was.
+     *         Never throws: it only feeds a failure message
+     */
+    String hostView(ProviderSandboxRef ref) {
+        if (container == null) {
+            return "(no host view: a server started elsewhere, whose Docker need not be this JVM's)\n";
+        }
+        try {
+            final DockerClient docker = DockerClientFactory.instance().client();
+            final String id = sandboxContainer(docker, ref);
+            final InspectContainerResponse.ContainerState state = docker.inspectContainerCmd(id).exec().getState();
+            final StringBuilder view = new StringBuilder(String.format(
+                    "container %s: status=%s running=%s oomKilled=%s exitCode=%s startedAt=%s finishedAt=%s%n",
+                    id.substring(0, Math.min(12, id.length())), state.getStatus(), state.getRunning(),
+                    state.getOOMKilled(), state.getExitCodeLong(), state.getStartedAt(), state.getFinishedAt()));
+            if (Boolean.TRUE.equals(state.getRunning())) {
+                view.append(exec(docker, id, HOST_VIEW_COMMAND));
+            }
+            return view.toString();
+        } catch (RuntimeException e) {
+            return "(no host view: " + e + ")\n";
+        }
+    }
+
+    /** @return {@code command}'s stdout and stderr through {@code docker exec} as root, or why it did not finish */
+    private static String exec(DockerClient docker, String containerId, String command) {
+        final String execId = docker.execCreateCmd(containerId).withUser("root").withAttachStdout(true)
+                .withAttachStderr(true).withCmd("sh", "-c", command).exec().getId();
+        final ByteArrayOutputStream output = new ByteArrayOutputStream();
+        final ResultCallback.Adapter<Frame> callback = new ResultCallback.Adapter<>() {
+            @Override
+            public void onNext(Frame frame) {
+                synchronized (output) {
+                    output.writeBytes(frame.getPayload());
+                }
+            }
+        };
+        boolean finished;
+        try {
+            finished = docker.execStartCmd(execId).exec(callback).awaitCompletion(HOST_VIEW_EXEC.toMillis(),
+                    TimeUnit.MILLISECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            finished = false;
+        }
+        synchronized (output) {
+            return output.toString(StandardCharsets.UTF_8)
+                    + (finished ? "" : "(docker exec did not finish within " + HOST_VIEW_EXEC + ")\n");
+        }
     }
 
     /** A Docker container as {@link #sandboxContainer} weighs it: its id, its names (without the slash), its labels. */

@@ -15,7 +15,10 @@ import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -82,6 +85,12 @@ class OpenSandboxWorkspaceIT {
      * whose Docker is not this JVM's, where swap stays (see the test), still has room, and a hang is still told apart.
      */
     private static final Duration OOM_COMMAND = Duration.ofSeconds(180);
+    /**
+     * When the out-of-memory test looks at its sandbox through Docker ({@link OpenSandboxTestServer#hostView}) if the
+     * command has not come back: long after a kill should have come, well before {@link #OOM_COMMAND} ends it, so the
+     * view shows the sandbox while it is stuck and not only once the timeout has killed what it could.
+     */
+    private static final Duration OOM_HOST_VIEW = Duration.ofSeconds(30);
     /** The cgroup v2 memory files the out-of-memory test records, in {@code /sys/fs/cgroup}. */
     private static final String MEMORY_FILES = "memory.max memory.swap.max memory.current memory.swap.current "
             + "memory.peak memory.events memory.swap.events";
@@ -264,6 +273,13 @@ class OpenSandboxWorkspaceIT {
         final ExecutionEnvironment neighbour = mainTurn(assembly, SessionId.generate());
 
         final ShellCommandResult pids = bash(env, "cat /sys/fs/cgroup/pids.max");
+        // The command runs at 1000, its wrapper at 500, execd at the sandbox's 0 (ShellWrapper): an OOM kill takes the
+        // command first and never execd before the wrapper. cat is the command's child; $$ is the inner bash, $PPID the
+        // outer wrapper; execd is found by its comm, since the wrapper's own command line carries this command's text.
+        assertThat(bash(env, "cat /proc/self/oom_score_adj /proc/$$/oom_score_adj /proc/$PPID/oom_score_adj; "
+                + "for p in /proc/[0-9]*; do [ \"$(cat $p/comm 2>/dev/null)\" = execd ] && cat $p/oom_score_adj; "
+                + "done").stdout()).as("oom_score_adj of the command, the inner bash, the wrapper, execd")
+                .isEqualTo("1000\n1000\n500\n0\n");
         final ProviderSandboxRef ref = assembly.store().find(SandboxWorkspaceId.of("ws:" + session.value()))
                 .orElseThrow().slot("primary").orElseThrow().providerRef().orElseThrow();
         final boolean swapTaken = OpenSandboxTestServer.dnsNft().takeSwapAway(ref, OOM_MEMORY);
@@ -283,12 +299,34 @@ class OpenSandboxWorkspaceIT {
             swap = "taken away";
         }
         final long started = System.nanoTime();
+        final CompletableFuture<ShellCommandResult> running = CompletableFuture.supplyAsync(() -> {
+            try {
+                return bash(env, "head -c 600000000 /dev/zero | tail -n 1 > /dev/null; echo rc=$?", OOM_COMMAND);
+            } catch (Exception e) {
+                throw new CompletionException(e);
+            }
+        });
+        String during = "(not taken: the command came back within " + OOM_HOST_VIEW + ")\n";
+        try {
+            running.get(OOM_HOST_VIEW.toMillis(), TimeUnit.MILLISECONDS);
+        } catch (TimeoutException slow) {
+            during = OpenSandboxTestServer.dnsNft().hostView(ref);
+        } catch (ExecutionException ignored) {
+            // join() below rethrows it
+        }
         final ShellCommandResult oom;
         try {
-            oom = bash(env, "head -c 600000000 /dev/zero | tail -n 1 > /dev/null; echo rc=$?", OOM_COMMAND);
-        } catch (ShellTimeoutException e) {
-            throw new AssertionError("the out-of-memory command was not killed within " + OOM_COMMAND + " (swap " + swap
-                    + "). The sandbox's memory before it:\n" + before + "after it:\n" + memory(env), e);
+            oom = running.join();
+        } catch (CompletionException e) {
+            if (e.getCause() instanceof ShellTimeoutException) {
+                throw new AssertionError(
+                        "the out-of-memory command was not killed within " + OOM_COMMAND + " (swap " + swap
+                                + "). The sandbox's memory before it:\n" + before + "as Docker saw it " + OOM_HOST_VIEW
+                                + " in:\n" + during + "after it, through execd:\n" + memory(env)
+                                + "and as Docker saw it:\n" + OpenSandboxTestServer.dnsNft().hostView(ref),
+                        e.getCause());
+            }
+            throw e.getCause() instanceof Exception cause ? cause : e;
         }
         final String after = memory(env);
         System.out.printf(
@@ -296,7 +334,14 @@ class OpenSandboxWorkspaceIT {
                 TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started), swap, before, after);
 
         assertThat(pids.stdout().strip()).as("the server's pids_limit").isEqualTo("4096");
-        assertThat(oom.stdout()).isEqualTo("rc=137\n");
+        // The hog is killed and its pipeline says so. The kernel can kill once more for the same command: head, charged
+        // for its pipe after tail was killed but before tail's memory came back. That kill takes the largest process
+        // left at the command's oom_score_adj, the inner bash, and the run ends 137 with nothing printed. It must never
+        // take execd, which is what the "alive" below checks (CI before the wrapper raised the scores: execd killed).
+        assertThat(oom.stdout().equals("rc=137\n") || oom.exitCode() == 137 && oom.stdout().isEmpty())
+                .as("the pipeline printed rc=137, or the inner bash was killed too (exit %d, stdout %s)",
+                        oom.exitCode(), oom.stdout())
+                .isTrue();
         assertThat(bash(env, "echo alive").stdout()).isEqualTo("alive\n");
         assertThat(bash(neighbour, "echo neighbour").stdout()).isEqualTo("neighbour\n");
         assumeTrue(!lacksOomKillCount(before, after),

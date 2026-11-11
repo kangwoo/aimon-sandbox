@@ -57,6 +57,23 @@ class ShellWrapperTest {
     }
 
     @Test
+    @DisplayName("an OOM kill takes the command, then the wrapper, before execd: every script raises its oom_score_adj first")
+    void everyScriptRaisesItsOomScoreBeforeAnythingElse() {
+        final String raise = "{ echo 500 > /proc/self/oom_score_adj; } 2>/dev/null\n";
+        final ShellWrapper.Invocation stream = invocation("true").privateDirectory("/workspace/.aimon-shell/.run.ab");
+        for (String script : List.of(ShellWrapper.foreground(invocation("true")),
+                ShellWrapper.background(invocation("true")), ShellWrapper.hook(stream),
+                ShellWrapper.isolated(stream))) {
+            // First thing: the watchdog, forked later, inherits it.
+            assertThat(script).startsWith(raise);
+        }
+        assertThat(ShellWrapper.INNER).startsWith("{ echo 1000 > /proc/self/oom_score_adj; } 2>/dev/null\n");
+        assertThat(ShellWrapper.COMMAND_OOM_SCORE_ADJ).isGreaterThan(ShellWrapper.WRAPPER_OOM_SCORE_ADJ)
+                .isLessThanOrEqualTo(1000);
+        assertThat(ShellWrapper.WRAPPER_OOM_SCORE_ADJ).isPositive();
+    }
+
+    @Test
     void theInlineSizeCountsTheQuotedEnvironmentAndWorkingDirectory() {
         // " 'A=x'" is 6 bytes; "'it'\''s'" is 9.
         assertThat(ShellWrapper.inlineSize(Map.of("A", "x"), null)).isEqualTo(6);
