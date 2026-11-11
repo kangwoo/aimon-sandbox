@@ -36,7 +36,7 @@ WorkspaceSandbox sandbox = WorkspaceSandbox.builder().settings(settings).provide
 | `runtime-class` | 없음 | `{name, kind: gvisor \| kata \| other}`. Docker 에서는 거부. gVisor 와 `dns+nft` 는 함께 쓸 수 없다 |
 | `credentials` | 없음 | 이름 → `CredentialDefinition`(범위 · 주입 방식 · 비밀 공급자). `dns+nft` 필요 |
 | `volume-reclaimer` | 없음 | `VolumeReclaimer` 인스턴스. 주면 `SHARED_VOLUME` 을 광고한다. 내장 구현은 5단계 |
-| `use-server-proxy` | `false` | execd · egress 사이드카를 서버 프록시로 부른다(클러스터 밖의 K8s, docker 테스트 계층) |
+| `use-server-proxy` | `false` | execd 를 서버 프록시로 부른다(클러스터 밖의 K8s, docker 테스트 계층). credential vault 는 이 설정과 상관없이 늘 서버를 거친다(1.2.0) |
 | `request-timeout` · `create-timeout` | 30s · 90s | 호출 하나 · 생성과 `Running` 대기 |
 | `retry` | 3회, 500ms 부터 두 배 | 멱등 호출(상태 · 목록 · 삭제 · 연장 · 엔드포인트 · 파일 조회)만 |
 | `max-concurrent-calls` | 32 | 요청/응답 호출의 동시 상한. 명령 스트림은 세지 않는다 |

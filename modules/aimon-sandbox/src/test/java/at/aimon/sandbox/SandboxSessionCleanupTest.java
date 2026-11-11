@@ -184,6 +184,22 @@ class SandboxSessionCleanupTest {
     }
 
     @Test
+    @DisplayName("core-033 §6.3: a deleted session's ws:{sid} cannot be reopened out of its deletion")
+    void aDeletedSessionsWorkspaceIsNotReopened() throws Exception {
+        aliveWithOptions();
+        harness.sandbox.manager().close(derived(), ALICE);
+        delete();
+        assertThat(record().orElseThrow().closeCause()).contains(CloseCause.SESSION_DELETED);
+
+        assertThatThrownBy(() -> harness.sandbox.manager().reopen(derived(), ALICE))
+                .hasMessageContaining("being removed; retry shortly");
+        assertThat(record().orElseThrow().closeCause()).contains(CloseCause.SESSION_DELETED);
+
+        background.runAll();
+        assertThat(record()).isEmpty();
+    }
+
+    @Test
     @DisplayName("core-033 §6.3: an attached managed workspace is shared — it stays OPEN with its sandbox")
     void anAttachedManagedWorkspaceIsKept() throws Exception {
         records.provision(session, "agent", ALICE);

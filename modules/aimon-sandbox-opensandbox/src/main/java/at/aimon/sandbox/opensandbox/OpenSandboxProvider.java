@@ -59,8 +59,8 @@ import at.aimon.sandbox.provider.VolumeMount;
  *
  * <p>
  * Sandbox ids are never logged at INFO: on OpenSandbox, knowing one is enough to run commands in it through the
- * server's proxy route (spike §4-5). {@link #close()} releases the HTTP client's threads and the command readers; it
- * never destroys sandboxes.
+ * server's proxy route (spike §4-5). {@link #close()} stops the command readers (on Java 17 the JDK HTTP client has no
+ * {@code close()}; its selector thread ends when the client is collected); it never destroys sandboxes.
  */
 public final class OpenSandboxProvider implements SandboxProvider {
 
@@ -322,7 +322,7 @@ public final class OpenSandboxProvider implements SandboxProvider {
                 throw new SandboxProviderException("the created sandbox disappeared before its egress sidecar was up");
             } catch (SandboxProviderException e) {
                 if (HttpErrors.unauthorized(e)) {
-                    throw new SandboxProviderException("the server's read of sandbox " + ref.sandboxId()
+                    throw new SandboxProviderException("the server's read of sandbox " + ref
                             + "'s egress sidecar was refused as unauthorized, though the server had just accepted this "
                             + "api-key for the create: something other than the sidecar may answer on the sidecar's "
                             + "host port (another OpenSandbox server or sandbox on the same Docker host). "

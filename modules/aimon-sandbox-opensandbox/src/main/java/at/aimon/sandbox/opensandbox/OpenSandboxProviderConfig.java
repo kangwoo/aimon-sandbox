@@ -286,7 +286,7 @@ public final class OpenSandboxProviderConfig {
         return Optional.ofNullable(volumeReclaimer);
     }
 
-    /** @return {@code use-server-proxy}: reach execd and the egress sidecar through the server */
+    /** @return {@code use-server-proxy}: reach execd through the server (the credential vault always does) */
     public boolean useServerProxy() {
         return useServerProxy;
     }

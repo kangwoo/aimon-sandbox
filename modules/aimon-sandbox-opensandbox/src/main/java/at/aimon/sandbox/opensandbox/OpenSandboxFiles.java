@@ -31,6 +31,7 @@ import at.aimon.sandbox.provider.ExecOutcome;
 import at.aimon.sandbox.provider.ExecSpec;
 import at.aimon.sandbox.provider.FileStat;
 import at.aimon.sandbox.provider.OutputSink;
+import at.aimon.sandbox.provider.RunningCommand;
 import at.aimon.sandbox.provider.SandboxFiles;
 import at.aimon.sandbox.provider.SandboxProviderException;
 import at.aimon.sandbox.provider.WriteMode;
@@ -194,9 +195,12 @@ final class OpenSandboxFiles implements SandboxFiles {
     private ExecOutcome helper(String script, String first, String second) {
         final ExecSpec spec = ExecSpec.builder().command("set -- " + shell(first) + " " + shell(second) + "; " + script)
                 .workingDirectory("/").timeout(HELPER_TIMEOUT).maxCaptureBytes(8 * 1024).build();
+        final RunningCommand command = connection.run(spec, OutputSink.DISCARD);
         try {
-            return connection.run(spec, OutputSink.DISCARD).await(HELPER_TIMEOUT);
+            return command.await(HELPER_TIMEOUT);
         } catch (InterruptedException e) {
+            // await's contract: an interrupted wait leaves the command running, and its caller kills it.
+            command.kill();
             Thread.currentThread().interrupt();
             throw new VirtualFileSystemException("interrupted while moving " + first + " to " + second);
         }
