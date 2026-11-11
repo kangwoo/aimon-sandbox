@@ -69,6 +69,19 @@ class WorkspaceSandboxTest {
     }
 
     @Test
+    void anOwnedProviderIsClosedWhenTheAssemblyFailsToStart() {
+        final LocalProcessSandboxProvider provider = LocalProcessSandboxProvider.builder().build();
+        final SandboxSettings settings = SandboxTestProfiles.settings(SandboxTestProfiles.local("p").build())
+                .requirePrincipal(true).build();
+
+        assertThatThrownBy(
+                () -> WorkspaceSandbox.builder().settings(settings).provider(provider).ownProvider(true).build())
+                .isInstanceOf(SandboxConfigurationException.class);
+
+        assertThat(provider.baseDirectory()).doesNotExist();
+    }
+
+    @Test
     void theJanitorRunsOnItsOwnThreadSoHeartbeatsNeverQueueBehindIt() throws Exception {
         final LocalProcessSandboxProvider provider = LocalProcessSandboxProvider.builder().build();
         final CountDownLatch release = new CountDownLatch(1);

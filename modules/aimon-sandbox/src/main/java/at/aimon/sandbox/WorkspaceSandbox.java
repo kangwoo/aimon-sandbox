@@ -98,9 +98,15 @@ public final class WorkspaceSandbox implements AutoCloseable {
     private WorkspaceSandbox(Builder builder) {
         this.settings = Objects.requireNonNull(builder.settings, "settings must not be null");
         this.provider = Objects.requireNonNull(builder.provider, "provider must not be null");
-        SandboxStartupValidator.validate(settings, new SandboxStartupValidator.Wiring(provider.capabilities(),
-                builder.tenantResolver != null, builder.sessionOwnerLookup != null || builder.sessionRecords != null));
         this.ownProvider = builder.ownProvider;
+        try {
+            SandboxStartupValidator.validate(settings,
+                    new SandboxStartupValidator.Wiring(provider.capabilities(), builder.tenantResolver != null,
+                            builder.sessionOwnerLookup != null || builder.sessionRecords != null));
+        } catch (RuntimeException e) {
+            closeOwnedProvider(e);
+            throw e;
+        }
         this.ownScheduler = builder.scheduler == null;
         // The janitor gets a thread of its own: one pass can wait up to close-wait per closing workspace, and the
         // heartbeats that keep running commands alive must not queue behind it.
@@ -146,6 +152,7 @@ public final class WorkspaceSandbox implements AutoCloseable {
             // Nothing is returned to close: the threads this constructor started must not outlive the failure.
             closeSchedulers();
             closeBackground();
+            closeOwnedProvider(e);
             throw e;
         }
         log.info("Workspace sandbox ready: deployment={}, node={}, profiles={}, default={}", settings.deployment(),
@@ -250,6 +257,18 @@ public final class WorkspaceSandbox implements AutoCloseable {
         closeSchedulers();
         if (ownProvider) {
             provider.close();
+        }
+    }
+
+    /** A failed start returns nothing to close, so a provider owned via {@code ownProvider(true)} closes here. */
+    private void closeOwnedProvider(RuntimeException failure) {
+        if (!ownProvider) {
+            return;
+        }
+        try {
+            provider.close();
+        } catch (RuntimeException e) {
+            failure.addSuppressed(e);
         }
     }
 
