@@ -23,7 +23,8 @@ by default, so a mixed-version cluster must pin `v1`, kangwoo/aimon-core#286 —
   with credentials fails permanently, saying the server is older than 1.2.0.
 - **`CloseCause` has a third constant, `SESSION_DELETED`**, and **`SandboxEvent.Type` has new constants**
   (`WORKSPACE_CREATED`, `WORKSPACE_PURGED`, `SESSION_OPTIONS_SET`, `SESSION_OPTIONS_CLEARED`, `FILES_CHANGED`): an
-  exhaustive `switch` needs a branch or a default.
+  exhaustive `switch` needs a branch or a default. **`SandboxEvent.workspaceId()` throws** for a session event that
+  names no workspace; use `workspace()` (an `Optional`).
 - **A custom `SandboxWorkspaceStore` must persist** the new `origin`, `name`, `profile` and `access` fields of
   `SandboxWorkspace` through `createIfAbsent` and `update` (dropping `access` widens a narrowed workspace, dropping
   `origin` lets the janitor delete a managed record), and should honour `WorkspaceScan`'s new `owner` and `origin`
@@ -35,10 +36,19 @@ by default, so a mixed-version cluster must pin `v1`, kangwoo/aimon-core#286 —
 - **Non-String `environment.*` execution attributes** make that turn's environment unavailable: core 0.3.3 reserves the
   prefix, and any `environment.sandbox.*` key other than the two below is refused.
 - **Command output is exact.** With execd 1.1.1 or later the provider no longer appends `\n` to every output event:
-  `printf abc` is `abc`, a `\r` progress line keeps its `\r`.
+  `printf abc` is `abc`, a `\r` progress line keeps its `\r`. With an older execd, which strips line endings, the
+  first line reaches the `OutputSink` only when the next event arrives.
 - **A hook's background jobs end with the hook**, and a hook, isolated or streamed command over 64 KiB is refused.
 - **A run directory with a secret file is always uploaded**, never inlined, so a small secret set can now fail with
   "could not pass … into the sandbox" where it used to be inlined. Every `ExecuteCode` run takes this path.
+- **Kubernetes: run the OpenSandbox server with `execd_run_as_init = true`** — required in pool mode, where
+  task-executor as the pod's PID 1 reaps nothing and every `ExecuteCode` run would leave zombies
+  ([guide](docs/guide/opensandbox-kubernetes.md) §4.2). Upstream 1.2.0 also lists a deleted Kubernetes sandbox as
+  `Stopping` (read as TERMINATED) until its pod is gone, and defaults BatchSandbox pods to `restartPolicy: Never`.
+- **A skill hook's `AIMON_SKILL_DIR`** is now a private per-run directory
+  (`/workspace/.aimon-shell/.run.{hex}/d`, removed after the run), not the staged copy under `.aimon-staged`.
+- **A failed re-provisioning after a reset** returns the bare reason as the tool error; the reset arrives as an
+  `[environment]` line instead of an "(also: …)" suffix.
 - **The image contract** adds `base64`, asks for GNU coreutils (`sha256sum` and `base64` in `/usr/bin`), and, for a
   profile that declares it, `python3` 3.8 or later.
 
@@ -59,7 +69,8 @@ by default, so a mixed-version cluster must pin `v1`, kangwoo/aimon-core#286 —
 - **Session owner from core and session deletion** (kangwoo/aimon-core#253): `Builder.sessionRecords(...)` takes the
   owner core recorded; `WorkspaceSandbox.sessionLifecycleListener()` removes a deleted session's options and destroys
   its `ws:{sessionId}` workspace in the background (`Builder.backgroundExecutor(...)`). Once any owner source is wired,
-  a session with no known owner gets no sandbox.
+  a session with no known owner gets no sandbox. A deleted session's workspace cannot be reopened while it is being
+  removed.
 - **Workspace files for a file explorer** (`SandboxWorkspaceFiles`, [design](docs/design/workspace-sandbox-files.md)):
   stat, list, ranged read, name search, write, mkdir, move and delete under `/workspace` of a running sandbox, without
   provisioning it. Changes publish `FILES_CHANGED`.
@@ -102,11 +113,8 @@ by default, so a mixed-version cluster must pin `v1`, kangwoo/aimon-core#286 —
   (`docs/design/workspace-sandbox.md` §12.2).
 - **A skill's shell hook no longer waits for the model's shell** (#9): it takes no shell lock and ends at its own
   timeout. The 0.1.0 notes were wrong that a hook's `cd` and `export` persisted into the model's shell; they never did.
-- **A deleted session's `ws:{sessionId}` cannot be reopened** out of its deletion; reopen answers "being removed; retry
-  shortly".
 - **An owned provider is closed when `WorkspaceSandbox.Builder.build()` fails.**
-- **The OpenSandbox provider no longer names a raw sandbox id** in an egress-sidecar refusal, and recorded failures
-  never quote one.
+- **Recorded failures never quote the provider's raw sandbox id**; a server message that does gets the id's hash.
 - **An interrupted move or link in the OpenSandbox files API kills its in-sandbox helper.**
 - An event listener that throws a `LinkageError` no longer fails the transition it hears of.
 - Testkit: `LocalProcessSandboxProvider`'s shims start at once on macOS.

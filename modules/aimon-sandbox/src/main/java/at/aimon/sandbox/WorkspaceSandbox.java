@@ -342,7 +342,10 @@ public final class WorkspaceSandbox implements AutoCloseable {
             return this;
         }
 
-        /** Whether {@link WorkspaceSandbox#close()} closes the provider too (default: borrowed). */
+        /**
+         * Whether {@link WorkspaceSandbox#close()} closes the provider too, as a failed {@link #build()} then does
+         * (default: borrowed).
+         */
         public Builder ownProvider(boolean ownProvider) {
             this.ownProvider = ownProvider;
             return this;
