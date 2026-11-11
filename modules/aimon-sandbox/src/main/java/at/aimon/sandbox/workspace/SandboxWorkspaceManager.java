@@ -670,7 +670,9 @@ public final class SandboxWorkspaceManager {
      *            the principal asking; must have the manage right ({@link #checkManage})
      * @throws SandboxUnavailableException
      *             when the caller may not reopen it, it does not exist, or it is still closing — also when it became
-     *             CLOSING after this call first read it
+     *             CLOSING after this call first read it; and, ahead of the manage check and of "still closing", when
+     *             its session was deleted ("being removed; retry shortly", {@link CloseCause#SESSION_DELETED}) —
+     *             also when that happened after this call first read it
      * @throws at.aimon.sandbox.binding.BindingRejectedException
      *             when the principal gate refuses the caller (§8.3) — like {@code SandboxUnavailableException}, an
      *             {@code ExecutionEnvironmentUnavailableException}
