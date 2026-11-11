@@ -13,6 +13,21 @@ it as you would across a minor: the auto-compact buffer and ratio members are go
 session log is written as version 2 by default, so a mixed-version cluster must pin `v1` (kangwoo/aimon-core#286). See
 core's [0.3.3 release notes](https://github.com/kangwoo/aimon-core/releases/tag/v0.3.3).
 
+### Fixed: an out-of-memory command no longer takes execd with it
+
+execd shares the sandbox's memory cgroup, and the OOM killer could choose it: when a pipeline such as
+`head -c 600000000 /dev/zero | tail -n 1` hit the limit, the kernel killed `tail`, then — before `tail`'s memory came
+back — killed again for `head`, charged for its pipe, and took the largest process left, execd. The command never came
+back and the sandbox stopped answering (the §12.2 docker-tier test, about one CI run in three). The shell wrapper now
+raises its own `oom_score_adj` to 500 first thing, and the inner bash its own to 1000, which everything the command
+starts inherits: an OOM kill takes the command, then the wrapper or its watchdog, and execd (0) last. Raising it needs no
+privilege; a sandbox without `/proc` keeps its default. A second kill that takes the command's inner bash ends that run
+with exit 137 and nothing printed; the sandbox and the next command go on (`docs/design/workspace-sandbox.md` §12.2).
+
+The §12.2 test checks those scores on the real sandbox, accepts either outcome of the command, and, when a command does
+not come back, looks at the sandbox through Docker rather than execd; the integration job prints the kernel's OOM log on
+failure.
+
 ### Changed: OpenSandbox 1.2.0
 
 `aimon-sandbox-opensandbox` now requires **OpenSandbox 1.2.0** — server, execd and egress sidecar

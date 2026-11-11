@@ -82,6 +82,15 @@ import java.util.regex.Pattern;
  * is the outer's two builtins, and the command did run for its whole timeout.
  *
  * <p>
+ * An out-of-memory kill in the sandbox takes the command before the wrapper, and both before execd: the outer raises
+ * its own {@code oom_score_adj} to {@value #WRAPPER_OOM_SCORE_ADJ} first thing — the watchdog, forked from it, inherits
+ * that — and the inner bash raises its own to {@value #COMMAND_OOM_SCORE_ADJ}, which everything the command starts
+ * inherits. execd shares the sandbox's memory cgroup at {@code 0}; without this, the kernel's second OOM kill of one
+ * command (a pipeline's writer, charged for its pipe after the reader was killed but before that memory was returned)
+ * can choose execd, the largest process left, and the sandbox stops answering (the §12.2 test on CI). Raising the value
+ * needs no privilege; a sandbox without {@code /proc} keeps its default, silently.
+ *
+ * <p>
  * The script is bash 3.2 compatible and needs {@code flock}, {@code head}, {@code wc}, {@code sleep}, {@code kill},
  * {@code mv} and {@code rm}, plus {@code cat}, {@code find}, {@code /usr/bin/base64} and {@code /usr/bin/sha256sum}
  * for a private directory; a {@code /proc} is used when present (the owner's start time, for cross-node takeover) and
@@ -94,6 +103,17 @@ final class ShellWrapper {
 
     /** The exec's working directory: the mount the seed guarantees, which a command cannot remove. */
     static final String EXEC_DIRECTORY = "/workspace";
+
+    /** The outer wrapper's {@code oom_score_adj}, its watchdog's too: killed after the command, before execd. */
+    static final int WRAPPER_OOM_SCORE_ADJ = 500;
+
+    /** The inner bash's {@code oom_score_adj}, so the command's and its children's: the first an OOM kill takes. */
+    static final int COMMAND_OOM_SCORE_ADJ = 1000;
+
+    /** The script line that raises the running bash's own {@code oom_score_adj}, quiet where {@code /proc} is not. */
+    private static String raiseOomScore(int value) {
+        return "{ echo " + value + " > /proc/self/oom_score_adj; } 2>/dev/null\n";
+    }
 
     /** Exit code of the outer wrapper when the in-sandbox lock stayed busy for the lock wait. */
     static final int LOCK_BUSY_EXIT = 75;
@@ -152,7 +172,7 @@ final class ShellWrapper {
      * that variable and would fail verification. An explicit {@code GIT_SSL_CAINFO} wins, and the export is part of the
      * base environment, so it is not saved as shell state.
      */
-    static final String INNER = """
+    static final String INNER = "{ echo " + COMMAND_OOM_SCORE_ADJ + " > /proc/self/oom_score_adj; } 2>/dev/null\n" + """
             if [ -n "${SSL_CERT_FILE-}" ] && [ -z "${GIT_SSL_CAINFO+x}" ]; then
               export GIT_SSL_CAINFO="$SSL_CERT_FILE"
             fi
@@ -469,6 +489,7 @@ final class ShellWrapper {
     private static String stream(Invocation in, String mode) {
         Objects.requireNonNull(in.privateDirectory, "a stream script needs a private directory");
         final StringBuilder s = new StringBuilder();
+        s.append(raiseOomScore(WRAPPER_OOM_SCORE_ADJ));
         s.append("__aimon_inner=").append(quote(INNER)).append('\n');
         s.append("d=").append(quote(in.directory)).append('\n');
         s.append("r=").append(quote(in.runPrefix)).append('\n');
@@ -510,6 +531,7 @@ final class ShellWrapper {
 
     private static StringBuilder prologue(Invocation in, boolean withPrivate) {
         final StringBuilder s = new StringBuilder();
+        s.append(raiseOomScore(WRAPPER_OOM_SCORE_ADJ));
         s.append("__aimon_inner=").append(quote(INNER)).append('\n');
         s.append("d=").append(quote(in.directory)).append('\n');
         s.append("r=").append(quote(in.runPrefix)).append('\n');

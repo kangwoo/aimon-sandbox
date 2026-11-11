@@ -273,6 +273,13 @@ class OpenSandboxWorkspaceIT {
         final ExecutionEnvironment neighbour = mainTurn(assembly, SessionId.generate());
 
         final ShellCommandResult pids = bash(env, "cat /sys/fs/cgroup/pids.max");
+        // The command runs at 1000, its wrapper at 500, execd at the sandbox's 0 (ShellWrapper): an OOM kill takes the
+        // command first and never execd before the wrapper. cat is the command's child; $$ is the inner bash, $PPID the
+        // outer wrapper; execd is found by its comm, since the wrapper's own command line carries this command's text.
+        assertThat(bash(env, "cat /proc/self/oom_score_adj /proc/$$/oom_score_adj /proc/$PPID/oom_score_adj; "
+                + "for p in /proc/[0-9]*; do [ \"$(cat $p/comm 2>/dev/null)\" = execd ] && cat $p/oom_score_adj; "
+                + "done").stdout()).as("oom_score_adj of the command, the inner bash, the wrapper, execd")
+                .isEqualTo("1000\n1000\n500\n0\n");
         final ProviderSandboxRef ref = assembly.store().find(SandboxWorkspaceId.of("ws:" + session.value()))
                 .orElseThrow().slot("primary").orElseThrow().providerRef().orElseThrow();
         final boolean swapTaken = OpenSandboxTestServer.dnsNft().takeSwapAway(ref, OOM_MEMORY);
@@ -327,7 +334,14 @@ class OpenSandboxWorkspaceIT {
                 TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started), swap, before, after);
 
         assertThat(pids.stdout().strip()).as("the server's pids_limit").isEqualTo("4096");
-        assertThat(oom.stdout()).isEqualTo("rc=137\n");
+        // The hog is killed and its pipeline says so. The kernel can kill once more for the same command: head, charged
+        // for its pipe after tail was killed but before tail's memory came back. That kill takes the largest process
+        // left at the command's oom_score_adj, the inner bash, and the run ends 137 with nothing printed. It must never
+        // take execd, which is what the "alive" below checks (CI before the wrapper raised the scores: execd killed).
+        assertThat(oom.stdout().equals("rc=137\n") || oom.exitCode() == 137 && oom.stdout().isEmpty())
+                .as("the pipeline printed rc=137, or the inner bash was killed too (exit %d, stdout %s)",
+                        oom.exitCode(), oom.stdout())
+                .isTrue();
         assertThat(bash(env, "echo alive").stdout()).isEqualTo("alive\n");
         assertThat(bash(neighbour, "echo neighbour").stdout()).isEqualTo("neighbour\n");
         assumeTrue(!lacksOomKillCount(before, after),
