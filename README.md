@@ -26,8 +26,8 @@ The guides are in Korean.
 implementation steps 3 and 4 (§18): the workspace domain, the provider SPI and the local path (step 3), and the
 production OpenSandbox provider with the janitor's sandbox reconciliation (step 4). Multiple slots and shared volumes
 (step 5), a persistent store for several nodes (step 6) and pause/resume (step 7) are not in it, and profiles that
-ask for them are refused at startup. `main` (the next release, [`CHANGELOG.md`](CHANGELOG.md) › Unreleased) needs
-aimon-core 0.3.4 and OpenSandbox 1.2.0 (server, execd and egress sidecar).
+ask for them are refused at startup. **0.1.1** needs aimon-core 0.3.4 and OpenSandbox 1.2.0 (server, execd and egress
+sidecar). While the version is 0.x, a patch release may break API or behaviour; the changelog lists what to change.
 
 The identifier-based sandbox it was split out of aimon-core with — four `*Sandbox` tools, the
 `SandboxBackend` SPI and its Docker and Kubernetes backends — has been deleted, not kept alongside the new
