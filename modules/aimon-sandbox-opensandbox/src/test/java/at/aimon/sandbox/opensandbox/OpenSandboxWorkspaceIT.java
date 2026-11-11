@@ -15,7 +15,10 @@ import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -82,6 +85,12 @@ class OpenSandboxWorkspaceIT {
      * whose Docker is not this JVM's, where swap stays (see the test), still has room, and a hang is still told apart.
      */
     private static final Duration OOM_COMMAND = Duration.ofSeconds(180);
+    /**
+     * When the out-of-memory test looks at its sandbox through Docker ({@link OpenSandboxTestServer#hostView}) if the
+     * command has not come back: long after a kill should have come, well before {@link #OOM_COMMAND} ends it, so the
+     * view shows the sandbox while it is stuck and not only once the timeout has killed what it could.
+     */
+    private static final Duration OOM_HOST_VIEW = Duration.ofSeconds(30);
     /** The cgroup v2 memory files the out-of-memory test records, in {@code /sys/fs/cgroup}. */
     private static final String MEMORY_FILES = "memory.max memory.swap.max memory.current memory.swap.current "
             + "memory.peak memory.events memory.swap.events";
@@ -283,12 +292,34 @@ class OpenSandboxWorkspaceIT {
             swap = "taken away";
         }
         final long started = System.nanoTime();
+        final CompletableFuture<ShellCommandResult> running = CompletableFuture.supplyAsync(() -> {
+            try {
+                return bash(env, "head -c 600000000 /dev/zero | tail -n 1 > /dev/null; echo rc=$?", OOM_COMMAND);
+            } catch (Exception e) {
+                throw new CompletionException(e);
+            }
+        });
+        String during = "(not taken: the command came back within " + OOM_HOST_VIEW + ")\n";
+        try {
+            running.get(OOM_HOST_VIEW.toMillis(), TimeUnit.MILLISECONDS);
+        } catch (TimeoutException slow) {
+            during = OpenSandboxTestServer.dnsNft().hostView(ref);
+        } catch (ExecutionException ignored) {
+            // join() below rethrows it
+        }
         final ShellCommandResult oom;
         try {
-            oom = bash(env, "head -c 600000000 /dev/zero | tail -n 1 > /dev/null; echo rc=$?", OOM_COMMAND);
-        } catch (ShellTimeoutException e) {
-            throw new AssertionError("the out-of-memory command was not killed within " + OOM_COMMAND + " (swap " + swap
-                    + "). The sandbox's memory before it:\n" + before + "after it:\n" + memory(env), e);
+            oom = running.join();
+        } catch (CompletionException e) {
+            if (e.getCause() instanceof ShellTimeoutException) {
+                throw new AssertionError(
+                        "the out-of-memory command was not killed within " + OOM_COMMAND + " (swap " + swap
+                                + "). The sandbox's memory before it:\n" + before + "as Docker saw it " + OOM_HOST_VIEW
+                                + " in:\n" + during + "after it, through execd:\n" + memory(env)
+                                + "and as Docker saw it:\n" + OpenSandboxTestServer.dnsNft().hostView(ref),
+                        e.getCause());
+            }
+            throw e.getCause() instanceof Exception cause ? cause : e;
         }
         final String after = memory(env);
         System.out.printf(

@@ -100,6 +100,17 @@ jobs:
       - name: Docker integration tests
         run: ./gradlew --no-daemon integrationTest
 
+      # The kernel's side of a sandbox that ran out of memory: which task the OOM killer chose, with the memory cgroup's
+      # task list, or that it never ran. The §12.2 test's failure message has the sandbox as Docker saw it; only the
+      # runner's kernel log says what the OOM killer did. Bounded, so a noisy log cannot flood the job output.
+      - name: Kernel OOM log
+        if: failure()
+        continue-on-error: true
+        run: |
+          sudo dmesg -T | grep -iE -A40 'invoked oom-killer' | tail -n 400 || true
+          echo '--- kills and memory cgroup lines'
+          sudo dmesg -T | grep -iE 'killed process|out of memory|oom_reaper|memory cgroup|hung_task|blocked for more than' | tail -n 100 || true
+
       - name: Upload integration test reports
         if: failure()
         continue-on-error: true
