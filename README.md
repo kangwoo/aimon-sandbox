@@ -26,7 +26,8 @@ The guides are in Korean.
 implementation steps 3 and 4 (§18): the workspace domain, the provider SPI and the local path (step 3), and the
 production OpenSandbox provider with the janitor's sandbox reconciliation (step 4). Multiple slots and shared volumes
 (step 5), a persistent store for several nodes (step 6) and pause/resume (step 7) are not in it, and profiles that
-ask for them are refused at startup.
+ask for them are refused at startup. `main` (the next release, [`CHANGELOG.md`](CHANGELOG.md) › Unreleased) needs
+aimon-core 0.3.4 and OpenSandbox 1.2.0 (server, execd and egress sidecar).
 
 The identifier-based sandbox it was split out of aimon-core with — four `*Sandbox` tools, the
 `SandboxBackend` SPI and its Docker and Kubernetes backends — has been deleted, not kept alongside the new
@@ -112,8 +113,8 @@ SessionSpec.builder().lifecycleListener(sandbox.sessionLifecycleListener());   /
 - **Core's Python `ExecuteCode` can run in a sandbox.** A profile that declares `runtimes: [python3]` (the image must
   provide it; the seed checks) gets a descriptor that declares the runtime and `SANDBOXED` isolation, a runtime file
   system for the engine's reply files, and secret run files kept off every command line — what core 0.3.4's shell
-  engine needs before it offers `ExecuteCode` there. A timed-out or cancelled run's code is not yet stopped inside the
-  sandbox (a core defect, design §20)
+  engine needs before it offers `ExecuteCode` there. A timed-out, cancelled or limit-stopped run leaves nothing
+  running in the sandbox (core 0.3.4 carries the fix, kangwoo/aimon-core#336; design §9 Q-C4)
   ([`docs/design/ptc-shell-provider.md`](docs/design/ptc-shell-provider.md)).
 
 - **Use `shared(...)`, not `provider(Supplier)`.** The host owns the `WorkspaceSandbox` and closes it; the stack
@@ -281,7 +282,7 @@ taken back.
    `main` in sync with `origin`, a running Docker daemon, and the publish credentials below.
 4. **Release.** `scripts/release.sh patch --k8s-verified`. Without `--k8s-verified` the script refuses. It asks
    you to type the version, publishes, commits `VERSION_NAME=X.Y.Z`, tags `vX.Y.Z`, moves `main` to the next
-   `-SNAPSHOT`, and pushes. From `0.1.0-SNAPSHOT`, `patch` releases `0.1.0`.
+   `-SNAPSHOT`, and pushes. From `0.1.1-SNAPSHOT`, `patch` releases `0.1.1` and `minor` releases `0.2.0`.
 5. The pushed tag triggers [`.github/workflows/release.yml`](.github/workflows/release.yml), which checks the tag
    against `VERSION_NAME` and creates the GitHub Release from the matching `CHANGELOG.md` section. It publishes
    nothing.
