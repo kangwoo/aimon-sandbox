@@ -690,6 +690,12 @@ public final class SandboxWorkspaceManager {
                 throw new SandboxUnavailableException(
                         "the sandbox workspace is still closing; reopen it once it is closed");
             }
+            if (current.closeCause().orElse(null) == CloseCause.SESSION_DELETED) {
+                // Its session is gone and the record is about to be deleted (core-033 design §6.3). Reopening would
+                // clear the cause and take it out of that deletion, keeping a deleted session's workspace alive.
+                throw new SandboxUnavailableException(
+                        "this session's sandbox workspace is being removed; retry shortly");
+            }
             return current.state() == WorkspaceState.CLOSED ? reopened(current, clock.instant()) : null;
         }).ifPresent(reopened -> {
             if (!reopened.incarnation().equals(found.incarnation())) {
