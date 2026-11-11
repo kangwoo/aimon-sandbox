@@ -21,8 +21,8 @@ import at.aimon.sandbox.provider.SandboxProviderException;
 
 /**
  * The JDK {@link HttpClient} shared by every call of one provider, with the {@code max-concurrent-calls} semaphore over
- * request/response calls. Streams ({@code /command}, downloads) take no permit: a twenty-minute build must not starve
- * the janitor.
+ * request/response calls. Command streams ({@code /command}) take no permit: a twenty-minute build must not starve
+ * the janitor. A file download is a request/response call (one buffered ranged read) and takes one.
  */
 final class Transport {
 
