@@ -200,6 +200,23 @@ class SandboxSessionCleanupTest {
     }
 
     @Test
+    @DisplayName("core-033 §6.3: reopening a deleted session's workspace gets one answer — while CLOSING, and for another owner")
+    void aDeletedSessionsWorkspaceGetsOneReopenAnswer() throws Exception {
+        aliveWithOptions();
+        delete();
+        assertThat(record().orElseThrow().state()).isEqualTo(WorkspaceState.CLOSING);
+
+        assertThatThrownBy(() -> harness.sandbox.manager().reopen(derived(), ALICE))
+                .hasMessageContaining("being removed; retry shortly");
+        assertThatThrownBy(() -> harness.sandbox.manager().reopen(derived(), BOB))
+                .hasMessageContaining("being removed; retry shortly");
+        assertThat(record().orElseThrow().closeCause()).contains(CloseCause.SESSION_DELETED);
+
+        background.runAll();
+        assertThat(record()).isEmpty();
+    }
+
+    @Test
     @DisplayName("core-033 §6.3: an attached managed workspace is shared — it stays OPEN with its sandbox")
     void anAttachedManagedWorkspaceIsKept() throws Exception {
         records.provision(session, "agent", ALICE);

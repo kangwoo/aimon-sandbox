@@ -682,19 +682,20 @@ public final class SandboxWorkspaceManager {
     private void reopen(SandboxWorkspaceId id, Acting acting) {
         final SandboxWorkspace found = store.find(id)
                 .orElseThrow(() -> new SandboxUnavailableException("no such sandbox workspace"));
+        // Ahead of the manage check, as in connect: a re-created session with the same id and another owner hears the
+        // same answer as its predecessor's owner, never "not permitted".
+        refuseIfSessionDeleted(found);
         acting.checkManage(this, found);
         // Decided on the freshly read record inside the CAS: a close that started since the first read is refused,
         // not silently ignored.
         mutate(id, current -> {
+            // Before the CLOSING check, so a deleted session's workspace gets one answer whether or not its close has
+            // finished. Its session is gone and the record is about to be deleted (core-033 design §6.3); reopening
+            // would clear the cause and take it out of that deletion, keeping a deleted session's workspace alive.
+            refuseIfSessionDeleted(current);
             if (current.state() == WorkspaceState.CLOSING) {
                 throw new SandboxUnavailableException(
                         "the sandbox workspace is still closing; reopen it once it is closed");
-            }
-            if (current.closeCause().orElse(null) == CloseCause.SESSION_DELETED) {
-                // Its session is gone and the record is about to be deleted (core-033 design §6.3). Reopening would
-                // clear the cause and take it out of that deletion, keeping a deleted session's workspace alive.
-                throw new SandboxUnavailableException(
-                        "this session's sandbox workspace is being removed; retry shortly");
             }
             return current.state() == WorkspaceState.CLOSED ? reopened(current, clock.instant()) : null;
         }).ifPresent(reopened -> {
@@ -704,6 +705,13 @@ public final class SandboxWorkspaceManager {
                         acting.actor(), null);
             }
         });
+    }
+
+    private static void refuseIfSessionDeleted(SandboxWorkspace workspace) {
+        if (workspace.state() != WorkspaceState.OPEN
+                && workspace.closeCause().orElse(null) == CloseCause.SESSION_DELETED) {
+            throw new SandboxUnavailableException("this session's sandbox workspace is being removed; retry shortly");
+        }
     }
 
     /**
