@@ -493,4 +493,66 @@ class WorkspaceLifecycleIT {
                 .isInstanceOf(SandboxUnavailableException.class).hasMessageContaining("still closing");
         assertThat(harness.record(session).state()).isEqualTo(WorkspaceState.CLOSING);
     }
+
+    @Test
+    @DisplayName("core-033 §6.3: a session deleted after reopen's first read — OPEN, now CLOSING — is \"being removed\"")
+    void aReopenRacingASessionDeletionOfAnOpenWorkspaceIsBeingRemoved() throws Exception {
+        final SessionId session = raceSessionDeletionAfterFirstRead(false);
+
+        assertThatThrownBy(() -> harness.sandbox.manager().reopen(id(session), ALICE))
+                .isInstanceOf(SandboxUnavailableException.class).hasMessageContaining("being removed; retry shortly");
+        assertThat(harness.record(session).state()).isEqualTo(WorkspaceState.CLOSING);
+        assertThat(harness.record(session).closeCause()).contains(CloseCause.SESSION_DELETED);
+    }
+
+    @Test
+    @DisplayName("core-033 §6.3: a session deleted after reopen's first read — CLOSED — keeps its cause and incarnation")
+    void aReopenRacingASessionDeletionOfAClosedWorkspaceKeepsItInTheDeletion() throws Exception {
+        final SessionId session = raceSessionDeletionAfterFirstRead(true);
+        final String incarnation = incarnationBeforeRace;
+
+        assertThatThrownBy(() -> harness.sandbox.manager().reopen(id(session), ALICE))
+                .isInstanceOf(SandboxUnavailableException.class).hasMessageContaining("being removed; retry shortly");
+        assertThat(harness.record(session).state()).isEqualTo(WorkspaceState.CLOSED);
+        assertThat(harness.record(session).closeCause()).contains(CloseCause.SESSION_DELETED);
+        assertThat(harness.record(session).incarnation().toString()).isEqualTo(incarnation);
+    }
+
+    private String incarnationBeforeRace;
+
+    /**
+     * A workspace, OPEN or explicitly CLOSED, whose next {@code find} returns it as it is and then marks it as
+     * {@code sessionDeleted} would: OPEN becomes CLOSING, CLOSING and CLOSED keep their state; the cause becomes
+     * SESSION_DELETED. Only the check inside reopen's CAS can see it.
+     */
+    private SessionId raceSessionDeletionAfterFirstRead(boolean closedFirst) throws Exception {
+        harness.close();
+        final InMemorySandboxWorkspaceStore delegate = new InMemorySandboxWorkspaceStore();
+        final java.util.concurrent.atomic.AtomicBoolean armed = new java.util.concurrent.atomic.AtomicBoolean();
+        final SandboxWorkspaceStore store = new at.aimon.sandbox.DelegatingStore(delegate) {
+            @Override
+            public java.util.Optional<SandboxWorkspace> find(SandboxWorkspaceId id) {
+                final java.util.Optional<SandboxWorkspace> read = delegate.find(id);
+                if (armed.compareAndSet(true, false)) {
+                    final SandboxWorkspace seen = read.orElseThrow();
+                    final SandboxWorkspace.Builder marked = seen.toBuilder().closeCause(CloseCause.SESSION_DELETED);
+                    if (seen.state() == WorkspaceState.OPEN) {
+                        marked.state(WorkspaceState.CLOSING);
+                    }
+                    delegate.update(id, seen.version(), marked.build());
+                }
+                return read;
+            }
+        };
+        harness = SandboxHarness.builder().store(store).build();
+        final SessionId session = SessionId.generate();
+        bash(harness.mainTurn(session, ALICE), "true");
+        if (closedFirst) {
+            harness.sandbox.manager().close(id(session), ALICE);
+        }
+        // Read now: once armed, the next find (reopen's first read) is the one that races.
+        incarnationBeforeRace = harness.record(session).incarnation().toString();
+        armed.set(true);
+        return session;
+    }
 }

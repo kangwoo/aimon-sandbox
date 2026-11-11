@@ -11,8 +11,9 @@ public enum CloseCause {
 
     /**
      * Its session was deleted (kangwoo/aimon-core#253, docs/design/workspace-sandbox-core-033.md §6.3): set on a
-     * derived {@code ws:{sessionId}} record by the session cleanup, under the session's lease. {@code connect} refuses
-     * the record ("being removed") rather than reopening it, and it is deleted as soon as its sandboxes are gone,
+     * derived {@code ws:{sessionId}} record by the session cleanup, under the session's lease. {@code connect} and
+     * {@code reopen} refuse the record ("being removed") rather than reopening it, and it is deleted as soon as its
+     * sandboxes are gone,
      * without {@code closedRetention} — by the cleanup's deferred step or else by the janitor.
      */
     SESSION_DELETED
