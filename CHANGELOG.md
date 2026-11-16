@@ -6,7 +6,7 @@ behaviour; each such release lists what to change under "Upgrading".
 
 ## [Unreleased]
 
-## [0.1.1] - 2026-11-11
+## [0.1.1] - 2026-11-16
 
 Requires **aimon-core 0.3.4** and **OpenSandbox 1.2.0** (server, execd and egress sidecar), and Java 17.
 
