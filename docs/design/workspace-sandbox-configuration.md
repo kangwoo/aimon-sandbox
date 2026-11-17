@@ -241,8 +241,9 @@ execd 는 이미지에 넣지 않는다. OpenSandbox 가 주입한다 — Docker
 
 **실행 uid 는 execd 의 uid 다.** OpenSandbox 의 files API 와 명령은 execd 프로세스의 사용자로 돈다. 이 모듈은 `/command` 의 uid
 인자를 쓰지 않는다. files API 가 execd 의 uid 로 파일을 쓰므로, 명령을 다른 uid 로 돌리면 파일 도구가 쓴 파일에 명령이 쓰지
-못하기 때문이다(확인 필요: OpenSandbox 1.2.0 의 files API 가 uid 를 받는지 — 이 이유는 execd v1.1.0 에서 확인했다. 서버 쪽 사실은
-[OpenSandbox §3.2](workspace-sandbox-opensandbox.md)). 그래서 "uid 1000
+못하기 때문이다. 이 이유는 files API 에 uid 경로가 없던 execd v1.1.0 의 사실이다. 1.2.0 의 execd 는 `/v1/filesystem/{uid}/{gid}/…`
+경로로 files API 도 지정한 uid 로 돌리므로([OpenSandbox §3.2](workspace-sandbox-opensandbox.md), 1.2.0 소스로 확인) 이 이유는
+약해졌다(확인 필요: 결정을 다시 볼지). 그래서 "uid 1000
 으로 돈다" 는 이미지와 SecurityContext(`runAsUser: 1000`, `runAsNonRoot`)가 함께 지켜야 하고, seed 의 `id -u` 검사가 그 결과를
 확인한다. root 로 도는 샌드박스는 `insecureAllow` 에 `HARDENED_SECURITY_CONTEXT` 가 없으면 영구 실패한다.
 

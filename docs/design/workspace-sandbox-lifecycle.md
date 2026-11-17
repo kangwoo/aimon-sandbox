@@ -258,9 +258,9 @@ idle 은 `lastActivityAt` 으로 잰다. 도는 명령이 있는 동안은 heart
 
 - **일시 정지 중에도 만료 시각은 흐른다.** 그래서 PAUSED 슬롯의 최후 방어선도 프로바이더 만료이고, 멈춘 슬롯은 마지막 활동에서
   `terminateAfter` 뒤에 사라진다 — 원하는 동작이다.
-- **pause 하기 전에 만료를 민 뒤 멈추고, 멈춘 샌드박스에는 `extendExpiry` 를 부르지 않는다.** OpenSandbox 의 K8s 런타임에서 멈춘
-  샌드박스를 renew 하면 샌드박스가 `Failed` 가 된다([OpenSandbox §3.1](workspace-sandbox-opensandbox.md)). 프로바이더는 `Paused`
-  상태의 `extendExpiry` 를 PERMANENT 에러로 거부한다.
+- **pause 하기 전에 만료를 민 뒤 멈추고, 멈춘 샌드박스에는 `extendExpiry` 를 부르지 않는다.** OpenSandbox 1.1.x 의 K8s 런타임에서는 멈춘
+  샌드박스를 renew 하면 샌드박스가 `Failed` 가 되었다. 1.2.0 소스에서는 이 문제가 고쳐졌다([OpenSandbox §3.1](workspace-sandbox-opensandbox.md))
+  (확인 필요: pause 를 구현할 때 이 규칙을 유지할지). 프로바이더는 `Paused` 상태의 `extendExpiry` 를 PERMANENT 에러로 거부한다.
 - 멈춘 샌드박스로 간 execd 호출은 실패하지 않고 멈춘다(Docker 런타임, 1.1.x 에서 잼 — 1.2.0 확인 필요). 그래서 모든 execd 호출에
   클라이언트 타임아웃을 둔다([OpenSandbox §4](workspace-sandbox-opensandbox.md)).
 - **resume 은 연결의 엔드포인트를 다시 해석한다.** K8s 의 resume 은 새 파드를 띄운다. resume 할 때도 만료를 `now + terminateAfter`

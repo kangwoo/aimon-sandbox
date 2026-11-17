@@ -615,8 +615,8 @@ janitor 의 지운 세션 스윕과 purge 된 attachment 스윕은 이벤트를 
   때까지 두지 않는다.
 - **모델에게 알리기.** 호스트가 고른 notice 를 세션의 다음 도구 결과에 싣는 방법은 환경 notice 큐를 쓰므로 붙일 세션이 필요하다. 워크스페이스에는
   세션이 여럿일 수도 없을 수도 있다.
-- **OpenSandbox 의 파일 단위 stat 오류.** 프로바이더의 stat 은 404 만 "없음" 으로 본다. execd 가 파일을 지나는 경로(`a.txt/b`, `ENOTDIR`)에 다른 상태를
-  답하면 `UNREACHABLE` 로 나온다. execd 에서 확인하지 않았다(확인 필요: `ENOTDIR` 경로에 execd 가 답하는 상태 코드). 그 Reason 에 기대기 전에 docker
+- **OpenSandbox 의 파일 단위 stat 오류.** 프로바이더의 stat 은 404 만 "없음" 으로 본다. execd 는 파일을 지나는 경로(`a.txt/b`, `ENOTDIR`)에 404 가
+  아니라 500 으로 답하므로(1.2.0 소스로 확인) `UNREACHABLE` 로 나온다. 그 Reason 에 기대기 전에 docker
   계층 케이스로 고정한다([OpenSandbox §3.3](workspace-sandbox-opensandbox.md)).
 
 다른 문서가 소유하는 관련 질문: 비동기 · 멱등 `create` 는 [수명 §9](workspace-sandbox-lifecycle.md), 첫 submit 전의 세션 옵션은
