@@ -27,7 +27,7 @@ import at.aimon.sandbox.workspace.WorkspaceScan;
 /**
  * One workspace sandbox on the docker tier's OpenSandbox server, or the k8s tier's in template or pool mode,
  * provisioned and seeded once and shared by every test of a class — the classes of the shell engine
- * (docs/design/ptc-shell-provider.md §5.7) would otherwise create a sandbox per test. Its profile declares
+ * (docs/design/workspace-sandbox-testing.md §1.5) would otherwise create a sandbox per test. Its profile declares
  * {@code python3}, which the tiers' image provides.
  */
 final class SharedSandbox implements AutoCloseable {
@@ -68,8 +68,8 @@ final class SharedSandbox implements AutoCloseable {
     }
 
     /**
-     * @return the k8s tier's template mode (docs/design/workspace-sandbox.md §16): a profile without waivers — deny-all
-     *         egress, the declared runtime class, hardened — that declares {@code python3}, started
+     * @return the k8s tier's template mode (docs/design/workspace-sandbox-testing.md §3.3): a profile without waivers —
+     *         deny-all egress, the declared runtime class, hardened — that declares {@code python3}, started
      */
     static SharedSandbox k8sTemplate() throws Exception {
         return started(new SharedSandbox(new OpenSandboxProvider(K8sTier.config().build()), k8sDeployment(),

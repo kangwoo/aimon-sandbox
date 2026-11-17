@@ -41,9 +41,9 @@ import at.aimon.sandbox.provider.SandboxLabels;
 import at.aimon.sandbox.provider.SandboxProviderException;
 
 /**
- * The OpenSandbox server of the {@code docker} tier (docs/design/workspace-sandbox.md §16): one container per egress
- * mode, started on first use from the runner's Docker socket and shared by every test class of the run, which labels
- * everything with deployment {@code ci-{runId}} and deletes what is still listed under it afterwards.
+ * The OpenSandbox server of the {@code docker} tier (docs/design/workspace-sandbox-testing.md §3.2): one container per
+ * egress mode, started on first use from the runner's Docker socket and shared by every test class of the run, which
+ * labels everything with deployment {@code ci-{runId}} and deletes what is still listed under it afterwards.
  *
  * <p>
  * {@code OPENSANDBOX_TEST_ENDPOINT} and {@code OPENSANDBOX_TEST_API_KEY} point the tier at a server started elsewhere
@@ -142,9 +142,10 @@ final class OpenSandboxTestServer {
 
     /**
      * @return {@link #sandboxImage()} with {@code python3} removed from {@code PATH} — an image that breaks the
-     *         optional {@code python3} item of the image contract (§13.3) and nothing else, built once per run. Every
-     *         {@code python3*} in every {@code PATH} directory goes, so an override image with {@code python3}
-     *         outside {@code /usr/bin} works too; if one is still found, the build fails saying so.
+     *         optional {@code python3} item of the image contract (docs/design/workspace-sandbox-shell-engine.md §2)
+     *         and nothing else, built once per run. Every {@code python3*} in every {@code PATH} directory goes, so an
+     *         override image with {@code python3} outside {@code /usr/bin} works too; if one is still found, the build
+     *         fails saying so.
      */
     static synchronized String sandboxImageWithoutPython3() {
         if (sandboxImageWithoutPython3 == null) {
@@ -377,9 +378,9 @@ final class OpenSandboxTestServer {
 
     /**
      * The sandbox as Docker sees it, without execd: a test whose command never came back cannot ask execd, which may be
-     * what stopped (CI, the §12.2 out-of-memory test). The container's state (running, OOM-killed, exit code), then,
-     * where it still runs, {@link #HOST_VIEW_COMMAND}'s output through {@code docker exec}, waited for at most
-     * {@link #HOST_VIEW_EXEC}.
+     * what stopped (CI, the out-of-memory test of docs/design/workspace-sandbox-security.md §9). The container's state
+     * (running, OOM-killed, exit code), then, where it still runs, {@link #HOST_VIEW_COMMAND}'s output through
+     * {@code docker exec}, waited for at most {@link #HOST_VIEW_EXEC}.
      *
      * @param ref
      *            the sandbox, on this server's Docker runtime

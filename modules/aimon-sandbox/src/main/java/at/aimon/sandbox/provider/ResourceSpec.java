@@ -4,8 +4,9 @@ import java.util.Objects;
 import java.util.Optional;
 
 /**
- * The resources one sandbox may use (docs/design/workspace-sandbox.md §13.1). Quantities keep the operator's
- * spelling ({@code 2}, {@code 4Gi}) — the provider translates them, the manager never does arithmetic on them.
+ * The resources one sandbox may use (docs/design/workspace-sandbox-configuration.md §1.1). Quantities keep the
+ * operator's spelling ({@code 2}, {@code 4Gi}) — the provider translates them, the manager never does arithmetic on
+ * them.
  */
 public final class ResourceSpec {
 

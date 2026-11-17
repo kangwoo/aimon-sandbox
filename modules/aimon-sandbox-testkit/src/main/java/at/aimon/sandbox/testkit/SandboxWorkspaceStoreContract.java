@@ -36,13 +36,12 @@ import at.aimon.sandbox.workspace.WorkspaceScan;
 import at.aimon.sandbox.workspace.WorkspaceState;
 
 /**
- * The contract every {@link SandboxWorkspaceStore} must pass (docs/design/workspace-sandbox.md §16): one winner for
- * concurrent {@code createIfAbsent}, {@link StaleVersionException} for a stale, absent or deleted CAS, the version the
- * store assigns (never the caller's, never one a deleted record had), records that read back exactly as returned,
- * scan filters (owner and origin too, kept across pages) and keyset paging, the managed fields, and tombstones kept
- * until a CAS-guarded delete. {@code InMemorySandboxWorkspaceStore}
- * passes it from
- * implementation step 3; the JDBC store (step 6) must pass the same suite, so the two cannot drift apart.
+ * The contract every {@link SandboxWorkspaceStore} must pass (docs/design/workspace-sandbox-testing.md §1.2): one
+ * winner for concurrent {@code createIfAbsent}, {@link StaleVersionException} for a stale, absent or deleted CAS, the
+ * version the store assigns (never the caller's, never one a deleted record had), records that read back exactly as
+ * returned, scan filters (owner and origin too, kept across pages) and keyset paging, the managed fields, and
+ * tombstones kept until a CAS-guarded delete. {@code InMemorySandboxWorkspaceStore} passes it from implementation step
+ * 3; the JDBC store (step 6) must pass the same suite, so the two cannot drift apart.
  *
  * <p>
  * Extend it and implement {@link #createStore()}; every test gets a fresh, empty store.

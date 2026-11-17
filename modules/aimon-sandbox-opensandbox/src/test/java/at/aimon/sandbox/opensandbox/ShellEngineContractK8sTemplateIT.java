@@ -39,8 +39,9 @@ class ShellEngineContractK8sTemplateIT extends AbstractShellEngineK8sIT {
     }
 
     /**
-     * execd's bootstrap is PID 1 and waits for the entrypoint, reaping any child (docs/design/ptc-shell-provider.md
-     * §9); with the server's {@code execd_run_as_init} it is {@code execd --init} instead, which reaps too.
+     * execd's bootstrap is PID 1 and waits for the entrypoint, reaping any child
+     * (docs/design/workspace-sandbox-shell-engine.md §7); with the server's {@code execd_run_as_init} it is
+     * {@code execd --init} instead, which reaps too.
      */
     @Override
     protected void checkPid1(List<String> argv, List<SandboxLeftovers.Proc> procs) {

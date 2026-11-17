@@ -9,8 +9,8 @@ import java.util.Optional;
 
 /**
  * The configured profiles and which one a new slot gets when its binding requires none
- * (docs/design/workspace-sandbox.md §8.2, §13.2). A slot keeps the profile it was created with even when a redeploy
- * changes the default (§8.3).
+ * (docs/design/workspace-sandbox-binding.md §3; docs/design/workspace-sandbox-configuration.md §2.1). A slot keeps the
+ * profile it was created with even when a redeploy changes the default (docs/design/workspace-sandbox-binding.md §5).
  */
 public final class SandboxProfileRegistry {
 

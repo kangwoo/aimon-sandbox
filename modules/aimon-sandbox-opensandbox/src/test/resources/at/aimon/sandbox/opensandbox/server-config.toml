@@ -1,4 +1,4 @@
-# The OpenSandbox server of the docker test tier (docs/design/workspace-sandbox-step4.md §9.2). The server runs in a
+# The OpenSandbox server of the docker test tier (docs/design/workspace-sandbox-testing.md §3.2). The server runs in a
 # container and drives the host's Docker through its socket; the settings follow upstream's reference compose
 # (server/docker-compose.example.yaml): sandboxes publish execd on the host, the server reaches them at
 # host.docker.internal, and the test JVM reaches execd only through the server's proxy route.

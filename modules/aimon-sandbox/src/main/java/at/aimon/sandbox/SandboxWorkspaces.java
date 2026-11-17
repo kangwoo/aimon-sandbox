@@ -15,7 +15,7 @@ import at.aimon.sandbox.workspace.WorkspaceQuery;
 import at.aimon.sandbox.workspace.WorkspaceView;
 
 /**
- * The owner-facing management of workspaces (docs/design/workspace-sandbox-management.md §5.1): create a sandbox
+ * The owner-facing management of workspaces (docs/design/workspace-sandbox-management.md §2): create a sandbox
  * before any agent runs, attach sessions to it, and close, reopen or purge it. Get it from
  * {@link WorkspaceSandbox#workspaces()}; every call takes the calling principal, which passes the same principal gate
  * as an execution.
@@ -52,8 +52,8 @@ public final class SandboxWorkspaces {
     }
 
     /**
-     * The files of a workspace's running sandbox, for a file explorer (docs/design/workspace-sandbox-files.md): every
-     * call needs the use right, never provisions, and records changes with the caller as the actor.
+     * The files of a workspace's running sandbox, for a file explorer (docs/design/workspace-sandbox-management.md §6):
+     * every call needs the use right, never provisions, and records changes with the caller as the actor.
      *
      * @return the owner-facing files
      */

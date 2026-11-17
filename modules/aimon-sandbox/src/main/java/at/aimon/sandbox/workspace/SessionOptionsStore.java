@@ -7,8 +7,8 @@ import at.aimon.core.agent.session.SessionId;
 
 /**
  * Persists {@link SessionSandboxOptions}, one record per session, with version CAS
- * (docs/design/workspace-sandbox-management.md §5.2). Every implementation must pass
- * {@code SessionOptionsStoreContract} from {@code aimon-sandbox-testkit}.
+ * (docs/design/workspace-sandbox-domain.md §5). Every implementation must pass {@code SessionOptionsStoreContract} from
+ * {@code aimon-sandbox-testkit}.
  *
  * <p>
  * The CAS rules are {@link SandboxWorkspaceStore}'s, including its no-ABA rule: a record created again after

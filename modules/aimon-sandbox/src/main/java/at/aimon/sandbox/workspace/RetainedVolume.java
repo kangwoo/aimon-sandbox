@@ -7,8 +7,8 @@ import at.aimon.sandbox.provider.VolumeRef;
 
 /**
  * A shared volume of an earlier incarnation kept until a deadline after an idle reopen
- * (docs/design/workspace-sandbox.md §5.1, §10.4). Part of the record's schema; implementation step 3 never writes one
- * (no shared volumes until step 5).
+ * (docs/design/workspace-sandbox-domain.md §1; docs/design/workspace-sandbox-lifecycle.md §6.3). Part of the record's
+ * schema; implementation step 3 never writes one (no shared volumes until step 5).
  */
 public final class RetainedVolume {
 

@@ -21,28 +21,32 @@ import at.aimon.sandbox.provider.ResourceSpec;
 
 /**
  * How to build a sandbox: operator configuration the model can choose between but never edit
- * (docs/design/workspace-sandbox.md §13.1).
+ * (docs/design/workspace-sandbox-configuration.md §1).
  *
  * <p>
  * {@link #egress()} distinguishes <i>absent</i> (no egress policy requested) from <i>empty</i> (deny everything); an
- * empty list still requires {@link Capability#EGRESS_POLICY} (§6.4). {@link #insecureAllow()} waives isolation
- * capabilities for local development only, and every waiver is logged at startup. {@link #runtimes()} declares the
- * language runtimes the image provides beyond the image contract — only {@code python3} so far — which the seed
- * verifies and the environment descriptor carries (docs/design/ptc-shell-prerequisites.md S3).
+ * empty list still requires {@link Capability#EGRESS_POLICY} (docs/design/workspace-sandbox-provider.md §6).
+ * {@link #insecureAllow()} waives isolation capabilities for local development only, and every waiver is logged at
+ * startup. {@link #runtimes()} declares the language runtimes the image provides beyond the image contract — only
+ * {@code python3} so far — which the seed verifies and the environment descriptor carries
+ * (docs/design/workspace-sandbox-shell-engine.md §1, §2).
  */
 public final class SandboxProfile {
 
-    /** The capabilities {@link #insecureAllow()} may waive (§13.1). */
+    /** The capabilities {@link #insecureAllow()} may waive (§1.1). */
     public static final Set<Capability> WAIVABLE = Collections.unmodifiableSet(
             EnumSet.of(Capability.HARDENED_SECURITY_CONTEXT, Capability.RUNTIME_CLASS, Capability.NETWORK_ISOLATION));
 
     /**
      * The runtimes a profile may declare: those the seed has a check for. Startup refuses any other name, since the
-     * descriptor would otherwise promise a runtime nothing verified (§13.1, §13.3).
+     * descriptor would otherwise promise a runtime nothing verified (§1.1, §3.1).
      */
     public static final Set<String> SUPPORTED_RUNTIMES = Set.of(EnvironmentDescriptor.RUNTIME_PYTHON3);
 
-    /** The background-command ceiling of a profile that configures none (§5.3, §13.1). */
+    /**
+     * The background-command ceiling of a profile that configures none (§1.1;
+     * docs/design/workspace-sandbox-shell.md §7.2).
+     */
     public static final Duration DEFAULT_BACKGROUND_COMMAND_TIMEOUT = Duration.ofHours(24);
 
     private final String name;
@@ -138,7 +142,7 @@ public final class SandboxProfile {
         return credentials;
     }
 
-    /** @return the static environment (never secrets, §12.1) */
+    /** @return the static environment (never secrets, docs/design/workspace-sandbox-security.md §5) */
     public Map<String, String> environment() {
         return environment;
     }
@@ -159,10 +163,11 @@ public final class SandboxProfile {
     }
 
     /**
-     * The longest a background command may run (§5.3): what the environment answers core's
-     * {@code backgroundCommandTimeout()} with. Unless configured it is {@link #DEFAULT_BACKGROUND_COMMAND_TIMEOUT}
-     * (24 hours), independent of {@link #backgroundHeartbeatLimit()}: past that limit the command no longer keeps the
-     * sandbox awake, so without other activity the idle policy pauses or terminates the sandbox under it first.
+     * The longest a background command may run (docs/design/workspace-sandbox-shell.md §7.2): what the environment
+     * answers core's {@code backgroundCommandTimeout()} with. Unless configured it is
+     * {@link #DEFAULT_BACKGROUND_COMMAND_TIMEOUT} (24 hours), independent of {@link #backgroundHeartbeatLimit()}: past
+     * that limit the command no longer keeps the sandbox awake, so without other activity the idle policy pauses or
+     * terminates the sandbox under it first.
      *
      * @return the configured ceiling, else {@link #DEFAULT_BACKGROUND_COMMAND_TIMEOUT}
      */
@@ -193,7 +198,7 @@ public final class SandboxProfile {
     /**
      * The language runtimes the image provides, as core names them ({@code python3}): checked by the seed (a permanent
      * failure when the image lacks one) and carried by the environment descriptor, where core's shell engine of
-     * {@code ExecuteCode} looks for {@code python3} (§13.3).
+     * {@code ExecuteCode} looks for {@code python3} (docs/design/workspace-sandbox-shell-engine.md §1).
      *
      * @return the declared runtimes, sorted; empty by default
      */
@@ -202,9 +207,9 @@ public final class SandboxProfile {
     }
 
     /**
-     * The capabilities a provider must advertise to run this profile (§6.4): {@code EXEC}, {@code FILES},
-     * {@code EXPIRY}, {@code HARDENED_SECURITY_CONTEXT} and {@code NETWORK_ISOLATION} always, plus what the
-     * configuration implies, minus {@link #insecureAllow()}.
+     * The capabilities a provider must advertise to run this profile (docs/design/workspace-sandbox-provider.md §6):
+     * {@code EXEC}, {@code FILES}, {@code EXPIRY}, {@code HARDENED_SECURITY_CONTEXT} and {@code NETWORK_ISOLATION}
+     * always, plus what the configuration implies, minus {@link #insecureAllow()}.
      *
      * @return the required capabilities
      */
@@ -232,7 +237,7 @@ public final class SandboxProfile {
 
     /**
      * The SHA-256 of the profile's canonical form. A slot records it, so a permanent failure is retried exactly when
-     * the profile's content changes (§10.1).
+     * the profile's content changes (§1.2).
      *
      * <p>
      * <b>Internal.</b> Public only for use across this library's packages: not supported API, and it may change in

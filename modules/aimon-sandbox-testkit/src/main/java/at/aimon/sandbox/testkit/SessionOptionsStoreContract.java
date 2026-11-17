@@ -31,12 +31,13 @@ import at.aimon.sandbox.workspace.UnannouncedReset;
 import at.aimon.sandbox.workspace.WorkspaceOwner;
 
 /**
- * The contract every {@link SessionOptionsStore} must pass (docs/design/workspace-sandbox-management.md §4.5, §5.2):
- * create-only and CAS puts, {@link StaleVersionException} for a stale, absent or deleted CAS, no version reuse after
- * delete, records that read back exactly as returned, stable {@code byWorkspace}, {@code workspaces} and
- * {@code sessions} paging, and an idempotent {@code deleteByWorkspace} that keeps every other field. Every field
- * round-trips, the unannounced reset included (docs/design/workspace-sandbox-unannounced-reset.md §3.4).
- * {@code InMemorySessionOptionsStore} passes it; a persistent store (step 6) must pass the same suite.
+ * The contract every {@link SessionOptionsStore} must pass (docs/design/workspace-sandbox-testing.md §1.3,
+ * docs/design/workspace-sandbox-domain.md §5): create-only and CAS puts, {@link StaleVersionException} for a stale,
+ * absent or deleted CAS, no version reuse after delete, records that read back exactly as returned, stable
+ * {@code byWorkspace}, {@code workspaces} and {@code sessions} paging, and an idempotent {@code deleteByWorkspace} that
+ * keeps every other field. Every field round-trips, the unannounced reset included
+ * (docs/design/workspace-sandbox-testing.md §1.3). {@code InMemorySessionOptionsStore} passes it; a persistent store
+ * (step 6) must pass the same suite.
  *
  * <p>
  * Extend it and implement {@link #createStore()}; every test gets a fresh, empty store.
@@ -100,8 +101,9 @@ public abstract class SessionOptionsStoreContract {
         assertThat(created.unannouncedReset()).contains(RESET);
         assertThat(store.find(SessionId.of("s1"))).contains(created);
 
-        // Nanoseconds that a store may round (§3.1 of the design keeps the stored value, not the written one): whatever
-        // it keeps, find must answer the same as the write returned, to at least millisecond precision.
+        // Nanoseconds that a store may round (the environment keeps the stored value, not the written one —
+        // docs/design/workspace-sandbox-notices.md §5.2): whatever it keeps, find must answer the same as the write
+        // returned, to at least millisecond precision.
         final Instant precise = T0.plusNanos(1_234_567_891L);
         final SessionSandboxOptions replaced = store.put(
                 created.toBuilder().unannouncedReset(UnannouncedReset.of(B, "exp-a", precise)).build(),

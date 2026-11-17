@@ -5,9 +5,9 @@ import java.util.Objects;
 import java.util.Optional;
 
 /**
- * One file or directory under {@code /workspace} as a file explorer sees it (docs/design/workspace-sandbox-files.md
- * §5.2). {@link #path()} is relative to {@code /workspace} — {@code ""} is {@code /workspace} itself. No view carries a
- * provider sandbox id.
+ * One file or directory under {@code /workspace} as a file explorer sees it
+ * (docs/design/workspace-sandbox-management.md §5). {@link #path()} is relative to {@code /workspace} — {@code ""} is
+ * {@code /workspace} itself. No view carries a provider sandbox id.
  */
 public final class WorkspaceFile {
 

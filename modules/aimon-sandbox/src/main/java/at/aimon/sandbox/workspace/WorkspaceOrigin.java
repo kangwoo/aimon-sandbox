@@ -1,6 +1,9 @@
 package at.aimon.sandbox.workspace;
 
-/** How a workspace record came to exist (docs/design/workspace-sandbox-management.md §3.1, §6.6). */
+/**
+ * How a workspace record came to exist (docs/design/workspace-sandbox-domain.md §1;
+ * docs/design/workspace-sandbox-management.md §2).
+ */
 public enum WorkspaceOrigin {
 
     /**

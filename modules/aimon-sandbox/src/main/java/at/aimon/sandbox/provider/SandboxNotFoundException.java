@@ -4,8 +4,8 @@ import java.io.Serial;
 
 /**
  * The sandbox does not exist (any more). Thrown by {@link SandboxProvider#extendExpiry}, {@link SandboxProvider#resume}
- * and {@link SandboxProvider#connect}; the manager answers it with the LOST path (docs/design/workspace-sandbox.md
- * §10.1).
+ * and {@link SandboxProvider#connect}; the manager answers it with the LOST path
+ * (docs/design/workspace-sandbox-lifecycle.md §2.1).
  */
 public class SandboxNotFoundException extends SandboxProviderException {
 

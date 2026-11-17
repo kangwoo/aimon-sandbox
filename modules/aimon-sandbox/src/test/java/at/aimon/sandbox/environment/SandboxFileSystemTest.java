@@ -25,7 +25,10 @@ import at.aimon.core.filesystem.exception.InvalidPathException;
 import at.aimon.core.filesystem.exception.VirtualFileSystemException;
 import at.aimon.sandbox.SandboxHarness;
 
-/** {@link SandboxFileSystem}: root-relative paths, the read-only areas (§16 row 17), and the VFS contract. */
+/**
+ * {@link SandboxFileSystem}: root-relative paths, the read-only areas (docs/design/workspace-sandbox-testing.md §5.4),
+ * and the VFS contract.
+ */
 class SandboxFileSystemTest {
 
     private final SandboxHarness harness = SandboxHarness.standard();

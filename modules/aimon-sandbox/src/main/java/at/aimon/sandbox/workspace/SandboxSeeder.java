@@ -18,15 +18,15 @@ import at.aimon.sandbox.provider.SandboxConnection;
 import at.aimon.sandbox.provider.SandboxProviderException;
 
 /**
- * The seed (docs/design/workspace-sandbox.md §11.3, §7): one exec, idempotent, that checks the image against the image
- * contract and the profile's declarations and lays out {@code /workspace}.
+ * The seed (docs/design/workspace-sandbox-lifecycle.md §3): one exec, idempotent, that checks the image against the
+ * image contract and the profile's declarations and lays out {@code /workspace}.
  *
  * <ul>
  * <li>{@code /workspace} is a writable directory, and the seed lock in it can be opened — the mount contract
- * (§13.3);</li>
+ * (docs/design/workspace-sandbox-configuration.md §4);</li>
  * <li>{@code command -v git rg flock sha256sum base64}, {@code /usr/bin/sha256sum} and {@code /usr/bin/base64}
  * executable, and {@code /usr/bin/sha256sum -c --strict -} accepting a manifest as GNU coreutils does — the image
- * contract (§13.3);</li>
+ * contract (docs/design/workspace-sandbox-configuration.md §4);</li>
  * <li>{@code uname -s}, lower-cased, equals the declared platform; {@code uname -sr} matches the declared OS version
  * as a glob ({@code Linux 6.x} reads as {@code Linux 6.*}) when one is declared;</li>
  * <li>not root and no service-account token — skipped when {@code HARDENED_SECURITY_CONTEXT} is waived;</li>
@@ -34,7 +34,7 @@ import at.aimon.sandbox.provider.SandboxProviderException;
  * required (not waived). Refused, timed out (3 s) or unresolvable all pass; only an established connection fails;</li>
  * <li>when the profile declares the {@code python3} runtime: {@code python3} on {@code PATH}, version 3.8 or later, and
  * {@code python3 -I} importing every standard-library module core's {@code ExecuteCode} runtime imports — step
- * {@code runtime-python3} (§13.3, docs/design/ptc-shell-prerequisites.md S3);</li>
+ * {@code runtime-python3} (docs/design/workspace-sandbox-shell-engine.md §2);</li>
  * <li>{@code rm -rf /workspace/.tmp-*}, then {@code mkdir -p} the staging and shell areas and the root.</li>
  * </ul>
  * Everything after the contract check runs under {@code flock} on {@code /workspace/.aimon-seed.lock}, held on an fd
@@ -141,12 +141,14 @@ final class SandboxSeeder {
         final StringBuilder s = new StringBuilder();
         s.append("fail() { printf '").append(FAIL_MARKER).append("%s %s\\n' \"$1\" \"$2\"; exit ").append(FAIL_EXIT)
                 .append("; }\n");
-        // The mount contract (§13.3): without it the lock below cannot even be opened.
+        // The mount contract (docs/design/workspace-sandbox-configuration.md §4): without it the lock below cannot even
+        // be opened.
         s.append("[ -d /workspace ] && [ -w /workspace ] || fail workspace '/workspace is missing or not writable'\n");
         s.append("for t in git rg flock sha256sum base64; do command -v \"$t\" >/dev/null 2>&1 || fail image-contract "
                 + "\"the image lacks $t (it must provide git, rg, flock, sha256sum and base64)\"; done\n");
-        // The run-directory check calls both by absolute path, and reads sha256sum's status 1 as tampering: a
-        // sha256sum that refuses `-c --strict -` (BusyBox) would report every hook as tampered (§9, §13.3).
+        // The run-directory check calls both by absolute path, and reads sha256sum's status 1 as tampering: a sha256sum
+        // that refuses `-c --strict -` (BusyBox) would report every hook as tampered
+        // (docs/design/workspace-sandbox-shell.md §9.3, docs/design/workspace-sandbox-configuration.md §4).
         s.append("for t in /usr/bin/sha256sum /usr/bin/base64; do [ -x \"$t\" ] || fail image-contract "
                 + "\"the image lacks $t (sha256sum and base64 must be in /usr/bin)\"; done\n");
         s.append("printf '%s  /dev/null\\n' ").append(EMPTY_SHA256)
@@ -183,9 +185,9 @@ final class SandboxSeeder {
     }
 
     /**
-     * The checks of the profile's declared runtimes (§13.3): empty when it declares none. Uses the script's
-     * {@code fail}; reads nothing in {@code /workspace}. The version is checked before the imports, so an old
-     * {@code python3} is reported as old rather than as missing a module.
+     * The checks of the profile's declared runtimes (docs/design/workspace-sandbox-shell-engine.md §2): empty when it
+     * declares none. Uses the script's {@code fail}; reads nothing in {@code /workspace}. The version is checked before
+     * the imports, so an old {@code python3} is reported as old rather than as missing a module.
      */
     static String runtimeChecks(SandboxProfile profile) {
         if (!profile.runtimes().contains(EnvironmentDescriptor.RUNTIME_PYTHON3)) {
@@ -200,7 +202,7 @@ final class SandboxSeeder {
     }
 
     /**
-     * The control-plane probe (§11.3): bash's {@code /dev/tcp} (bash is in the image contract; no {@code timeout} or
+     * The control-plane probe (§3): bash's {@code /dev/tcp} (bash is in the image contract; no {@code timeout} or
      * {@code nc} is assumed) with a watchdog, since an unroutable address can hold a connect for over a minute. The
      * probe's own output goes nowhere, so bash's job notice for a killed connect does not end up in a failure reason.
      */

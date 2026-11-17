@@ -42,7 +42,8 @@ import at.aimon.sandbox.workspace.WorkspaceOwner;
 /**
  * A reset the model never heard of — caused by a hook, a staging call or any other call core does not drain — is kept
  * on the session's options record and told at the session's next tool result, once
- * (kangwoo/aimon-sandbox#28, docs/design/workspace-sandbox-unannounced-reset.md §7, §9). Local provider, manual clock;
+ * (kangwoo/aimon-sandbox#28, docs/design/workspace-sandbox-notices.md §5.4,
+ * docs/design/workspace-sandbox-testing.md §5.6). Local provider, manual clock;
  * the background executor is inline unless a test queues it.
  */
 class UnannouncedResetIT {

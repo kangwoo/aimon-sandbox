@@ -1,6 +1,6 @@
 package at.aimon.sandbox.workspace;
 
-/** The state of one slot (docs/design/workspace-sandbox.md §5.2). */
+/** The state of one slot (docs/design/workspace-sandbox-domain.md §2.2). */
 public enum SlotState {
 
     /** A node claimed the slot and is creating its sandbox. */

@@ -5,7 +5,7 @@ import java.util.Objects;
 
 /**
  * A provider call failed. {@link #kind()} is what the manager's failure classification reads
- * (docs/design/workspace-sandbox.md §10.1): a {@link Kind#TRANSIENT} failure is retried with backoff, a
+ * (docs/design/workspace-sandbox-lifecycle.md §2.2): a {@link Kind#TRANSIENT} failure is retried with backoff, a
  * {@link Kind#PERMANENT} one waits until the profile changes.
  */
 public class SandboxProviderException extends RuntimeException {

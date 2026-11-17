@@ -2,9 +2,10 @@
 
 워크스페이스 샌드박스의 운영용 `SandboxProvider` 다. [OpenSandbox](https://github.com/alibaba/OpenSandbox) 의 REST API 를 JDK
 `HttpClient` 와 Jackson 으로 직접 부른다 — SDK 는 쓰지 않는다. 설계는
-[`docs/design/workspace-sandbox.md`](../../docs/design/workspace-sandbox.md) §6 · §13 에, 이 모듈을 만든 방법과 거기서 벗어난 점은
-[`docs/design/workspace-sandbox-step4.md`](../../docs/design/workspace-sandbox-step4.md) 에, 서버의 실제 동작은
-[`docs/design/opensandbox-spike.md`](../../docs/design/opensandbox-spike.md) 에 있다.
+[`docs/design/workspace-sandbox-opensandbox.md`](../../docs/design/workspace-sandbox-opensandbox.md) 에(서버의 실제 동작은 §3,
+이 프로바이더의 동작은 §4), 프로바이더 SPI 계약은
+[`docs/design/workspace-sandbox-provider.md`](../../docs/design/workspace-sandbox-provider.md) 에, 설정과 운영자 준비물은
+[`docs/design/workspace-sandbox-configuration.md`](../../docs/design/workspace-sandbox-configuration.md) 에 있다.
 
 ```java
 OpenSandboxProvider provider = new OpenSandboxProvider(OpenSandboxProviderConfig.builder()
@@ -21,7 +22,7 @@ OpenSandboxProvider provider = new OpenSandboxProvider(OpenSandboxProviderConfig
 WorkspaceSandbox sandbox = WorkspaceSandbox.builder().settings(settings).provider(provider).ownProvider(true).build();
 ```
 
-## 설정 (`aimon.sandbox.opensandbox.*`, WS §13.2)
+## 설정 (`aimon.sandbox.opensandbox.*`, `docs/design/workspace-sandbox-configuration.md` §2.3)
 
 | 키 | 기본값 | 뜻 |
 |---|---|---|
@@ -59,9 +60,9 @@ WorkspaceSandbox sandbox = WorkspaceSandbox.builder().settings(settings).provide
 | `PAUSE_RESUME` · `SNAPSHOT` · `FORK` | 광고하지 않는다(7 · 8단계) |
 
 선언은 확인 없이 믿지 않는다. seed 단계의 `verify` 가 `enforcementMode == dns+nft` 와 vault 의 바인딩을 대조하고, seed 스크립트가
-`control-plane-probes` 로 연결을 시도한다(WS §11.3). 틀린 선언은 슬롯을 FAILED(영구)로 만든다.
+`control-plane-probes` 로 연결을 시도한다(`docs/design/workspace-sandbox-lifecycle.md` §3). 틀린 선언은 슬롯을 FAILED(영구)로 만든다.
 
-## 운영 계약 (WS §13.3)
+## 운영 계약 (`docs/design/workspace-sandbox-configuration.md` §4 · §5)
 
 - **서버 엔드포인트는 AIMON 노드만 닿는 네트워크에 둔다.** 단일 테넌트 서버의 프록시 경로와 execd 는 인증하지 않는다 —
   샌드박스 id 를 알면 root 로 명령을 실행한다. 이 모듈은 샌드박스 id 를 INFO 로그에 남기지 않는다.
@@ -73,9 +74,9 @@ WorkspaceSandbox sandbox = WorkspaceSandbox.builder().settings(settings).provide
 - **`InMemory` 저장소는 한 노드 전용이다.** 여러 노드가 각자 `InMemory` 로 같은 `deployment` 를 쓰면 janitor 의 조정이 서로의
   샌드박스를 고아로 지운다.
 - **자격 증명의 HTTPS 주입은 샌드박스가 egress 사이드카의 CA 를 신뢰해야 동작한다.** execd 가 CA 번들을 `SSL_CERT_FILE` 등으로
-  내보내고, 셸 래퍼가 git 에 `GIT_SSL_CAINFO` 로 넘긴다. 이 변수들을 읽지 않는 도구는 검증에 실패한다(WS §20). 이미지는
+  내보내고, 셸 래퍼가 git 에 `GIT_SSL_CAINFO` 로 넘긴다. 이 변수들을 읽지 않는 도구는 검증에 실패한다(`docs/design/workspace-sandbox-shell.md` §10.2). 이미지는
   `ca-certificates` 를 갖추는 것이 좋다.
-- 출력은 줄로 정규화된다(`\r` 은 줄바꿈, 마지막 줄바꿈은 늘 있음, 잘못된 UTF-8 은 U+FFFD — WS §6.1). 프로파일의 `disk` · `pids` 는
+- 출력은 줄로 정규화된다(`\r` 은 줄바꿈, 마지막 줄바꿈은 늘 있음, 잘못된 UTF-8 은 U+FFFD — `docs/design/workspace-sandbox-provider.md` §2.3). 프로파일의 `disk` · `pids` 는
   요청 필드가 없어 서버 설정(Docker `pids_limit`)으로만 걸린다.
 
 ## 테스트 계층
@@ -104,9 +105,9 @@ WorkspaceSandbox sandbox = WorkspaceSandbox.builder().settings(settings).provide
 `ShellEngineContractK8sTemplateIT`(서버가 템플릿으로
 파드를 만든다)와 `ShellEngineContractK8sPoolIT`(서버가 [`src/test/k8s/pool.yaml`](src/test/k8s/pool.yaml) 의 `Pool` 에서
 파드를 받는다, `extensions.poolRef` — 프로바이더의 테스트 전용 이음매다). 둘 다 코어의 엔진 계약 스위트, 남은 프로세스 검사,
-PID 1 기록, 고아 좀비 회수를 돈다. 측정 결과는
-[`ptc-shell-provider.md`](../../docs/design/ptc-shell-provider.md) §9 "K8s tier, measured" 에, 검증 설계는
-[`ptc-shell-verification.md`](../../docs/design/ptc-shell-verification.md) 에 있다. 스크립트는 서버를
+PID 1 기록, 고아 좀비 회수를 돈다. 이 검사가 무엇을 보장하는지는
+[`workspace-sandbox-testing.md`](../../docs/design/workspace-sandbox-testing.md) §6 에, k8s 계층은 같은 문서 §3.3 에
+있다. 스크립트는 서버를
 `execd_run_as_init = true` 로 띄운다 — 풀 모드에는 필수다([설치 가이드 §4.2](../../docs/guide/opensandbox-kubernetes.md#42-valuesyaml)). 손으로 할 때는 스파이크의 절차([`C-k8s.md`](../../spike/opensandbox/reports/C-k8s.md) §1)와
 [`spike/opensandbox/k8s/deploy/`](../../spike/opensandbox/k8s/deploy/) 의 값 — kind, OpenSandbox 차트, 샌드박스 컨테이너 단위로
 강화한 템플릿, `netpol-sandbox-isolation.yaml` — 으로 준비한 뒤 `kubectl port-forward` 로 서버를 열고 다음을 준다:

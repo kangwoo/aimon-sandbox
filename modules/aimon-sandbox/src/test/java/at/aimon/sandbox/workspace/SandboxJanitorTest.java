@@ -26,7 +26,10 @@ import at.aimon.sandbox.provider.ProviderSandboxRef;
 import at.aimon.sandbox.provider.SandboxLabels;
 import at.aimon.sandbox.testkit.SandboxTestProfiles;
 
-/** {@link SandboxJanitor}: idle enforcement items (a)–(d) and the exec-shell sweep (§10.4 item 1). */
+/**
+ * {@link SandboxJanitor}: idle enforcement items (a)–(d) and the exec-shell sweep
+ * (docs/design/workspace-sandbox-lifecycle.md §6.1).
+ */
 class SandboxJanitorTest {
 
     private SandboxHarness harness = SandboxHarness.builder()
@@ -246,7 +249,8 @@ class SandboxJanitorTest {
 
     @Test
     void aProvisioningClaimYoungerThanTwiceTheProvisionTimeoutIsLeftToItsClaimer() {
-        // Past provisionTimeout the next connect takes it over (§10.1); the janitor waits twice as long.
+        // Past provisionTimeout the next connect takes it over (docs/design/workspace-sandbox-lifecycle.md §2.4); the
+        // janitor waits twice as long.
         final SandboxWorkspace stuck = stuckProvisioning(Duration.ofMinutes(6));
 
         harness.sandbox.janitor().runOnce();

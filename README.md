@@ -23,21 +23,18 @@ The guides are in Korean.
 ## Status
 
 **0.1.0 is the first release** (requires aimon-core 0.3.1; see [`CHANGELOG.md`](CHANGELOG.md)). It contains
-implementation steps 3 and 4 (§18): the workspace domain, the provider SPI and the local path (step 3), and the
+implementation steps 3 and 4: the workspace domain, the provider SPI and the local path (step 3), and the
 production OpenSandbox provider with the janitor's sandbox reconciliation (step 4). Multiple slots and shared volumes
 (step 5), a persistent store for several nodes (step 6) and pause/resume (step 7) are not in it, and profiles that
-ask for them are refused at startup. **0.1.1** needs aimon-core 0.3.4 and OpenSandbox 1.2.0 (server, execd and egress
+ask for them are refused at startup ([`workspace-sandbox.md`](docs/design/workspace-sandbox.md) §8). **0.1.1** needs aimon-core 0.3.4 and OpenSandbox 1.2.0 (server, execd and egress
 sidecar). While the version is 0.x, a patch release may break API or behaviour; the changelog lists what to change.
 
 The identifier-based sandbox it was split out of aimon-core with — four `*Sandbox` tools, the
 `SandboxBackend` SPI and its Docker and Kubernetes backends — has been deleted, not kept alongside the new
-design (why: [`workspace-sandbox.md`](docs/design/workspace-sandbox.md) §19; old-to-new map: §17). How steps 3
-and 4 were built, and where they departed from the plan, is
-[`workspace-sandbox-step3.md`](docs/design/workspace-sandbox-step3.md) and
-[`workspace-sandbox-step4.md`](docs/design/workspace-sandbox-step4.md); what the OpenSandbox server actually does is
-[`opensandbox-spike.md`](docs/design/opensandbox-spike.md); how the sandbox follows aimon-core 0.3.1 (shell
-cancellation, the background ceiling, runtime bindings) is
-[`workspace-sandbox-core-031.md`](docs/design/workspace-sandbox-core-031.md).
+design. The design is split into topic documents, listed in [`workspace-sandbox.md`](docs/design/workspace-sandbox.md)
+§9; what the OpenSandbox server actually does is
+[`workspace-sandbox-opensandbox.md`](docs/design/workspace-sandbox-opensandbox.md) §3, and which aimon-core features the
+sandbox uses is [`workspace-sandbox.md`](docs/design/workspace-sandbox.md) §6.3.
 
 | Module | Coordinate | What it is |
 |---|---|---|
@@ -56,12 +53,12 @@ Maven Central and still works; its design document was deleted with it and survi
 The dependency runs one way: this repository compiles against a released `at.aimon.core:aimon-core` from
 Maven Central (one line in [`gradle/libs.versions.toml`](gradle/libs.versions.toml)), and aimon-core has no
 reference to anything here. The workspace sandbox implements aimon-core's execution-environment SPI
-(design §7), which aimon-core has since 0.3.1. `main` needs 0.3.4: 0.3.3 for per-request attributes
+([`workspace-sandbox.md`](docs/design/workspace-sandbox.md) §6), which aimon-core has since 0.3.1. `main` needs 0.3.4: 0.3.3 for per-request attributes
 (kangwoo/aimon-core#252), the recorded session owner and the session deletion event (kangwoo/aimon-core#253) and
 environment notices on every tool result (kangwoo/aimon-core#254)
-([`docs/design/workspace-sandbox-core-033.md`](docs/design/workspace-sandbox-core-033.md)), and 0.3.4 for streaming
+([`docs/design/workspace-sandbox.md`](docs/design/workspace-sandbox.md) §6.3), and 0.3.4 for streaming
 (kangwoo/aimon-core#303) and the sandbox SPI of the Python `ExecuteCode` shell engine (kangwoo/aimon-core#330, #333,
-#334, #335; [`docs/design/ptc-shell-provider.md`](docs/design/ptc-shell-provider.md)).
+#334, #335; [`docs/design/workspace-sandbox-shell-engine.md`](docs/design/workspace-sandbox-shell-engine.md)).
 
 ## Wiring
 
@@ -103,19 +100,19 @@ SessionSpec.builder().lifecycleListener(sandbox.sessionLifecycleListener());   /
   caused where core drains nothing — a Stop hook's command, a workflow step, a staging call — is kept on the session's
   options and told on the session's next tool result, a turn later if need be, so a custom `SessionOptionsStore` must
   persist `unannouncedReset`
-  ([`docs/design/workspace-sandbox-unannounced-reset.md`](docs/design/workspace-sandbox-unannounced-reset.md)).
+  ([`docs/design/workspace-sandbox-notices.md`](docs/design/workspace-sandbox-notices.md) §5).
 - **Hooks get their files for the run, and a hook's background jobs end with it.** The sandbox shell declares
   `RUN_DIRECTORY`: a `hooks.json` handler that runs `"$AIMON_HOOK_DIR/…"` now runs in the sandbox, and a skill hook's
   `AIMON_SKILL_DIR` is a private directory placed and digest-checked for that run. Hook and isolated runs keep no
   files in `/workspace/.aimon-shell/{h}/` and their exec is killed once the hook has ended, so a `cmd &` a hook leaves
   behind is killed with it. Sandbox images must provide `base64` in `/usr/bin`
-  ([`docs/design/workspace-sandbox-run-directory.md`](docs/design/workspace-sandbox-run-directory.md)).
+  ([`docs/design/workspace-sandbox-shell.md`](docs/design/workspace-sandbox-shell.md) §9).
 - **Core's Python `ExecuteCode` can run in a sandbox.** A profile that declares `runtimes: [python3]` (the image must
   provide it; the seed checks) gets a descriptor that declares the runtime and `SANDBOXED` isolation, a runtime file
   system for the engine's reply files, and secret run files kept off every command line — what core 0.3.4's shell
   engine needs before it offers `ExecuteCode` there. A timed-out, cancelled or limit-stopped run leaves nothing
-  running in the sandbox (core 0.3.4 carries the fix, kangwoo/aimon-core#336; design §9 Q-C4)
-  ([`docs/design/ptc-shell-provider.md`](docs/design/ptc-shell-provider.md)).
+  running in the sandbox (core 0.3.4 carries the fix, kangwoo/aimon-core#336)
+  ([`docs/design/workspace-sandbox-shell-engine.md`](docs/design/workspace-sandbox-shell-engine.md), §7 for what is left running).
 
 - **Use `shared(...)`, not `provider(Supplier)`.** The host owns the `WorkspaceSandbox` and closes it; the stack
   must not. `ExecutionEnvironmentSpec.factory` no longer exists in aimon-core 0.3.1.
@@ -126,9 +123,9 @@ SessionSpec.builder().lifecycleListener(sandbox.sessionLifecycleListener());   /
 - **Background commands can be stopped, and they end.** `KillShell` stops a sandbox background command and what it
   started in its process group (a job the command moved out of the group with `setsid` or `set -m` survives until
   the sandbox goes). A command nobody stops ends at the profile's `background-command-timeout`, 24 hours by
-  default (design §5.3).
+  default ([`workspace-sandbox-shell.md`](docs/design/workspace-sandbox-shell.md) §7.2).
 - **Runtimes can come and go.** The provider keeps nothing per `AgentRuntime`, so evicting one stops no command and
-  touches no sandbox; sandboxes live as long as their workspaces (design §3.2, §7).
+  touches no sandbox; sandboxes live as long as their workspaces ([`workspace-sandbox.md`](docs/design/workspace-sandbox.md) §4, §6.4).
 - **Skill shell hooks run in the sandbox, and guards fail closed.** With aimon-core 0.3.1 a shell hook that a skill
   declares runs in the execution's sandbox shell, never on the host (with core's default
   `DefaultShellActionExecutor`; a host that installs another executor gets what that one does). When the sandbox is unavailable — the binding
@@ -136,8 +133,8 @@ SessionSpec.builder().lifecycleListener(sandbox.sessionLifecycleListener());   /
   shell hook is **blocked** with the reason, and a skill fork with an `onStart` shell guard **does not start**.
   Give hooks that only observe `failOpen: true`. `OrcaRuntimeSandboxE2ETest` checks this against a real
   `OrcaAgentExecutor`. To refuse
-  skill-declared shell hooks altogether, build core's `SkillHookSetParser` with `NoOpShellActionExecutor` (design
-  §12.1). A hook's command runs outside the model's shell session: it takes no shell lock, starts from the
+  skill-declared shell hooks altogether, build core's `SkillHookSetParser` with `NoOpShellActionExecutor`
+  ([`workspace-sandbox-security.md`](docs/design/workspace-sandbox-security.md) §6). A hook's command runs outside the model's shell session: it takes no shell lock, starts from the
   session's cwd and exports, and changes neither (aimon-core 0.3.2's `ExecutionOptions.isHook()`).
 - **`hooks.json` hooks run in the sandbox too; a guard that must hold against the agent goes on the host.** With
   aimon-core 0.3.3 a `hooks.json` handler on an in-execution event (`preTool`, `postTool`, …) runs in the execution's
@@ -147,7 +144,7 @@ SessionSpec.builder().lifecycleListener(sandbox.sessionLifecycleListener());   /
   boundary — the agent runs as the same uid, so its processes can still reach a hook while it runs (aimon-sandbox#34).
   For a guard that must hold against the agent during its run, give the handler `"shell": "host"` and have it judge
   only the tool input on stdin: it cannot see the sandbox's files, and a careless guard on the host (one that `eval`s
-  its input, say) runs model-shaped input outside the container (design §12.1).
+  its input, say) runs model-shaped input outside the container ([`workspace-sandbox-security.md`](docs/design/workspace-sandbox-security.md) §6).
 
 ## Managing workspaces
 
@@ -206,7 +203,7 @@ workspaces.purge(ws.id(), alice);                                               
 
 `sandbox.workspaces().files()` is the backend of a file explorer: list, stat, read (ranged), search, write, create,
 move and delete under `/workspace` of a workspace's running sandbox
-([`docs/design/workspace-sandbox-files.md`](docs/design/workspace-sandbox-files.md)):
+([`docs/design/workspace-sandbox-management.md`](docs/design/workspace-sandbox-management.md) §6):
 
 ```java
 SandboxWorkspaceFiles files = sandbox.workspaces().files();

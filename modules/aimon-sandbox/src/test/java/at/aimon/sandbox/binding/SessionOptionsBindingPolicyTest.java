@@ -35,8 +35,8 @@ import at.aimon.sandbox.workspace.UnannouncedReset;
 import at.aimon.sandbox.workspace.WorkspaceOwner;
 
 /**
- * {@link SessionOptionsBindingPolicy}: the order of management design §6.3 with core-033 row 0, the unattached layers,
- * the switch.
+ * {@link SessionOptionsBindingPolicy}: the order of docs/design/workspace-sandbox-binding.md §2 with row 0, the
+ * unattached layers, the switch.
  */
 class SessionOptionsBindingPolicyTest {
 
@@ -260,7 +260,7 @@ class SessionOptionsBindingPolicyTest {
     }
 
     // ----------------------------------------------------------------------------------------------------------------
-    // row 0: request attributes (kangwoo/aimon-core#252, core-033 design §5.1, §6.1)
+    // row 0: request attributes (kangwoo/aimon-core#252, docs/design/workspace-sandbox-binding.md §2)
     // ----------------------------------------------------------------------------------------------------------------
 
     @Test
@@ -398,7 +398,7 @@ class SessionOptionsBindingPolicyTest {
     }
 
     // ----------------------------------------------------------------------------------------------------------------
-    // session bookkeeping (docs/design/workspace-sandbox-unannounced-reset.md §3.2)
+    // session bookkeeping (docs/design/workspace-sandbox-notices.md §5.2)
     // ----------------------------------------------------------------------------------------------------------------
 
     @Test

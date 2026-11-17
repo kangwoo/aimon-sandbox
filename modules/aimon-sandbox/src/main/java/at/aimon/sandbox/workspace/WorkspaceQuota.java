@@ -4,9 +4,9 @@ import java.util.Objects;
 import java.util.Optional;
 
 /**
- * Per-workspace limits, copied from the settings into the record when it is created so a configuration change does
- * not shake running workspaces (docs/design/workspace-sandbox.md §5.1, §12.2). Implementation step 3 records them;
- * enforcement arrives with multiple slots (step 5).
+ * Per-workspace limits, copied from the settings into the record when it is created so a configuration change does not
+ * shake running workspaces (docs/design/workspace-sandbox-domain.md §1; docs/design/workspace-sandbox-security.md §8).
+ * Implementation step 3 records them; enforcement arrives with multiple slots (step 5).
  */
 public final class WorkspaceQuota {
 

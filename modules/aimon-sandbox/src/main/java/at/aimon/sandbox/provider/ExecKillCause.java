@@ -2,7 +2,7 @@ package at.aimon.sandbox.provider;
 
 /**
  * Why a provider ended a command itself — not a timeout ({@link ExecOutcome#timedOut()}) and not a
- * {@link RunningCommand#kill()} call (docs/design/ptc-shell-prerequisites.md S8).
+ * {@link RunningCommand#kill()} call (docs/design/workspace-sandbox-provider.md §2.5).
  */
 public enum ExecKillCause {
 

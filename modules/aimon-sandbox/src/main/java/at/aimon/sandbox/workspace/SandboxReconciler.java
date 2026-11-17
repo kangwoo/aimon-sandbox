@@ -20,11 +20,11 @@ import at.aimon.sandbox.provider.ProviderSandboxState;
 import at.aimon.sandbox.provider.SandboxLabels;
 
 /**
- * Sandbox reconciliation (docs/design/workspace-sandbox.md §10.4 item 2): compares what the provider lists under this
+ * Sandbox reconciliation (docs/design/workspace-sandbox-lifecycle.md §6.2): compares what the provider lists under this
  * deployment's labels with the workspace records, destroys what is provably nobody's, and confirms missing sandboxes
  * LOST. It is the only mechanism that reclaims what an {@code InMemory} store forgot on restart — which is also why an
  * {@code InMemory} store must never run on more than one node of a deployment: its janitor would reclaim the other
- * nodes' sandboxes as orphans (§5.3).
+ * nodes' sandboxes as orphans (docs/design/workspace-sandbox-domain.md §4.4).
  *
  * <p>
  * One {@link #reconcile} pass: scan every record <b>first</b>, list second (a record always exists before its first
@@ -43,9 +43,12 @@ final class SandboxReconciler {
 
     private static final Logger log = LoggerFactory.getLogger(SandboxReconciler.class);
 
-    /** What reconciliation makes of one listed sandbox (the §10.4 table). */
+    /** What reconciliation makes of one listed sandbox (the §6.2 table). */
     enum Verdict {
-        /** Its labels do not say what it is, or it failed the label comparison (§6.3): not ours to judge. */
+        /**
+         * Its labels do not say what it is, or it failed the label comparison
+         * (docs/design/workspace-sandbox-provider.md §4.4): not ours to judge.
+         */
         SKIP(false, false),
         /** The record's current sandbox. */
         OK(false, false),
@@ -267,8 +270,8 @@ final class SandboxReconciler {
     }
 
     /**
-     * The §10.4 table, first matching row wins. Pure: the verdict before grace (an ORPHAN or DUPLICATE is destroyed
-     * only once older than {@code orphan-grace}; an IN_FLIGHT ahead of the record's generation becomes ORPHAN then).
+     * The §6.2 table, first matching row wins. Pure: the verdict before grace (an ORPHAN or DUPLICATE is destroyed only
+     * once older than {@code orphan-grace}; an IN_FLIGHT ahead of the record's generation becomes ORPHAN then).
      *
      * @param record
      *            the record the sandbox's workspace label points at, or {@code null}
@@ -286,7 +289,8 @@ final class SandboxReconciler {
         final SandboxSlot slot = record == null ? null : record.slot(slotName).orElse(null);
         if (slot != null && slot.generation() == generation && slot.state() == SlotState.FAILED
                 && slot.failure().map(f -> "labels".equals(f.step())).orElse(false)) {
-            // §6.3: a sandbox that failed the label comparison may not be ours; only provider expiry removes it.
+            // docs/design/workspace-sandbox-provider.md §4.4: a sandbox that failed the label comparison may not be
+            // ours; only provider expiry removes it.
             return Verdict.SKIP;
         }
         if (record == null || !record.incarnation().equals(incarnation) || slot == null) {

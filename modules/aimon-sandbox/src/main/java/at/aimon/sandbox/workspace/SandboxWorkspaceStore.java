@@ -4,8 +4,8 @@ import java.util.List;
 import java.util.Optional;
 
 /**
- * Persists workspace records, one aggregate per workspace, with version CAS (docs/design/workspace-sandbox.md §5.3).
- * Every implementation must pass {@code SandboxWorkspaceStoreContract} from {@code aimon-sandbox-testkit}.
+ * Persists workspace records, one aggregate per workspace, with version CAS (docs/design/workspace-sandbox-domain.md
+ * §4). Every implementation must pass {@code SandboxWorkspaceStoreContract} from {@code aimon-sandbox-testkit}.
  *
  * <p>
  * What a store returns is what it keeps: a later {@link #find} gives a record equal to the one {@link #update} or
@@ -49,8 +49,8 @@ public interface SandboxWorkspaceStore {
     SandboxWorkspace update(SandboxWorkspaceId id, long expectedVersion, SandboxWorkspace next);
 
     /**
-     * Deletes the record when it is still at {@code expectedVersion} (expired tombstones, §10.5). An absent record is
-     * success.
+     * Deletes the record when it is still at {@code expectedVersion} (expired tombstones,
+     * docs/design/workspace-sandbox-lifecycle.md §7.2). An absent record is success.
      *
      * @param id
      *            the workspace

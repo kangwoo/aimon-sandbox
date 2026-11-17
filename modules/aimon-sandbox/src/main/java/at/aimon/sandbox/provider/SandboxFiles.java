@@ -5,10 +5,10 @@ import java.util.List;
 import java.util.Optional;
 
 /**
- * The files API of one sandbox (docs/design/workspace-sandbox.md §6.1). Every path is an <b>absolute</b> path inside
- * the sandbox. Failures are core VFS exceptions — {@code FileNotFoundException}, {@code FileAlreadyExistsException},
- * {@code VirtualFileSystemException} — so the file tools report them as they report any filesystem's; a missing
- * sandbox is {@link SandboxNotFoundException}.
+ * The files API of one sandbox (docs/design/workspace-sandbox-provider.md §3). Every path is an <b>absolute</b> path
+ * inside the sandbox. Failures are core VFS exceptions — {@code FileNotFoundException},
+ * {@code FileAlreadyExistsException}, {@code VirtualFileSystemException} — so the file tools report them as they report
+ * any filesystem's; a missing sandbox is {@link SandboxNotFoundException}.
  */
 public interface SandboxFiles {
 

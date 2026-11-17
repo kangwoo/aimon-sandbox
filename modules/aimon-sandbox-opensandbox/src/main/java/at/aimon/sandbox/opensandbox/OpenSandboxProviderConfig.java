@@ -23,17 +23,17 @@ import at.aimon.sandbox.provider.CredentialScope;
 import at.aimon.sandbox.provider.HostPort;
 
 /**
- * The provider's configuration — the {@code aimon.sandbox.opensandbox.*} keys of docs/design/workspace-sandbox.md
- * §13.2 ({@code max-expiry} is {@link #maxExpiry()}, and so on).
+ * The provider's configuration — the {@code aimon.sandbox.opensandbox.*} keys of
+ * docs/design/workspace-sandbox-opensandbox.md §5 ({@code max-expiry} is {@link #maxExpiry()}, and so on).
  *
  * <p>
- * Capabilities are <b>derived from these declarations</b>, never probed at startup (§6.4): the server exposes none of
- * the deciding facts before a sandbox exists. What can be checked on a live sandbox is checked once per generation by
- * {@link OpenSandboxProvider#verify}. {@link Builder#build()} refuses a declaration the runtime cannot honour and
- * lists every violation at once:
+ * Capabilities are <b>derived from these declarations</b>, never probed at startup (§2): the server exposes none of the
+ * deciding facts before a sandbox exists. What can be checked on a live sandbox is checked once per generation by
+ * {@link OpenSandboxProvider#verify}. {@link Builder#build()} refuses a declaration the runtime cannot honour and lists
+ * every violation at once:
  * <ul>
  * <li>{@code network-isolation}, {@code hardened-security-context} and {@code runtime-class} on the {@code docker}
- * runtime — the Docker runtime has no way to provide them (docs/design/opensandbox-spike.md §1, §7);</li>
+ * runtime — the Docker runtime has no way to provide them (§3.6, §3.7);</li>
  * <li>{@code egress-enforcement: dns+nft} with a gVisor runtime class — the server refuses every {@code networkPolicy}
  * then (gVisor's netstack has no iptables nat table);</li>
  * <li>{@code credentials} without {@code dns+nft} — the server refuses {@code credentialProxy} then;</li>
@@ -166,7 +166,7 @@ public final class OpenSandboxProviderConfig {
         this.extensions = Collections.unmodifiableMap(new LinkedHashMap<>(builder.extensions));
     }
 
-    /** @return a new builder with the §13.2 defaults */
+    /** @return a new builder with the §5 defaults */
     public static Builder builder() {
         return new Builder();
     }
@@ -196,8 +196,8 @@ public final class OpenSandboxProviderConfig {
     }
 
     /**
-     * The capabilities these declarations justify (§6.4, docs/design/opensandbox-spike.md §1). {@code PAUSE_RESUME},
-     * {@code SNAPSHOT} and {@code FORK} are never advertised before implementation steps 7 and 8.
+     * The capabilities these declarations justify (§2). {@code PAUSE_RESUME}, {@code SNAPSHOT} and {@code FORK} are
+     * never advertised before implementation steps 7 and 8.
      *
      * @return the advertised capabilities
      */
@@ -333,7 +333,8 @@ public final class OpenSandboxProviderConfig {
 
     /**
      * @return the create body's {@code extensions}, empty by default. Package-private and set only by the k8s test
-     *         tier's pool mode ({@code poolRef}): pools are not part of the SPI (docs/design/workspace-sandbox.md §6.4)
+     *         tier's pool mode ({@code poolRef}): pools are not part of the SPI
+     *         (docs/design/workspace-sandbox-provider.md §7)
      */
     Map<String, String> extensions() {
         return extensions;
@@ -347,7 +348,7 @@ public final class OpenSandboxProviderConfig {
                 + ", credentials=" + credentials.keySet() + ", useServerProxy=" + useServerProxy + '}';
     }
 
-    /** Builder for {@link OpenSandboxProviderConfig}, holding the §13.2 defaults. */
+    /** Builder for {@link OpenSandboxProviderConfig}, holding the §5 defaults. */
     public static final class Builder {
         private URI endpoint;
         private Supplier<String> apiKey;

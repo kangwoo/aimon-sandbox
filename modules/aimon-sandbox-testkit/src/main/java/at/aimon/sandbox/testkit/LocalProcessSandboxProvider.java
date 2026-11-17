@@ -48,9 +48,9 @@ import at.aimon.sandbox.provider.SandboxProvider;
 import at.aimon.sandbox.provider.SharedVolumes;
 
 /**
- * A {@link SandboxProvider} made of temporary directories and local processes — <b>for tests only. It isolates
- * nothing; never use it in production.</b> It exists so the manager, the binding, the environment provider and core's
- * tools can be tested together without Docker (docs/design/workspace-sandbox.md §16), and it passes
+ * A {@link SandboxProvider} made of temporary directories and local processes — <b>for tests only. It isolates nothing;
+ * never use it in production.</b> It exists so the manager, the binding, the environment provider and core's tools can
+ * be tested together without Docker (docs/design/workspace-sandbox-testing.md §2.1), and it passes
  * {@code SandboxProviderContract}.
  *
  * <p>

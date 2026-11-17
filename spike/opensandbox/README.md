@@ -1,6 +1,6 @@
 # OpenSandbox 스파이크 — 프로브와 근거
 
-[`docs/design/opensandbox-spike.md`](../../docs/design/opensandbox-spike.md) 의 근거 자료다. 빌드에 들어가지 않는다.
+[`docs/design/workspace-sandbox-opensandbox.md`](../../docs/design/workspace-sandbox-opensandbox.md) §3 이 정리한 서버 동작의 근거 자료다. 빌드에 들어가지 않는다.
 4단계의 `aimon-sandbox-opensandbox` 가 계약 스위트를 실서버에 돌리기 시작하면 이 프로브는 역할을 다한다.
 
 | 경로 | 내용 |

@@ -5,7 +5,7 @@ import java.util.Objects;
 
 /**
  * {@code (since, nodeId)} — which node is provisioning a slot and since when; the takeover rule of
- * docs/design/workspace-sandbox.md §10.1 compares {@code since + provisionTimeout} with now.
+ * docs/design/workspace-sandbox-lifecycle.md §2.4 compares {@code since + provisionTimeout} with now.
  */
 public final class ProvisioningClaim {
 

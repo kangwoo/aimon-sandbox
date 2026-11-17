@@ -4,7 +4,7 @@ import java.util.Objects;
 
 /**
  * A tenant. Core's {@code Principal} has no tenant field, so the application maps principals to tenants through
- * {@code SandboxTenantResolver} (docs/design/workspace-sandbox.md §8.3).
+ * {@code SandboxTenantResolver} (docs/design/workspace-sandbox-binding.md §4).
  */
 public final class TenantId {
 

@@ -3,7 +3,7 @@ package at.aimon.sandbox.binding;
 import java.util.Locale;
 
 /**
- * What a root request with no attached workspace gets (docs/design/workspace-sandbox-management.md §6.3). Three layers
+ * What a root request with no attached workspace gets (docs/design/workspace-sandbox-binding.md §2). Three layers
  * decide it — the {@code unattached} setting, the definition's {@code sandbox.unattached} attribute and the session's
  * own option — and each can only tighten the one above it: {@link #strictest}.
  */

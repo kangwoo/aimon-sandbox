@@ -36,16 +36,17 @@ import at.aimon.sandbox.provider.SandboxNotFoundException;
 import at.aimon.sandbox.provider.SandboxProviderException;
 
 /**
- * One execd {@code POST /command}, streamed on a provider thread (docs/design/opensandbox-spike.md §3).
+ * One execd {@code POST /command}, streamed on a provider thread (docs/design/workspace-sandbox-opensandbox.md §3.2,
+ * §4.4).
  *
  * <ul>
- * <li>Output arrives as one event per line. From execd {@code release-1.1.1} on (upstream #2033) an event's text
- * keeps the line's own ending ({@code \n}, {@code \r}, or none for a last line the command did not end), so the
- * events concatenate to the exact output; older execd strips the ending and sends a blank line as {@code "\n"}. Which
- * contract a command's execd follows is read from its events ({@link Endings}), and older execd's lines get their
- * {@code \n} back. Each line is handed to the sink and captured per stream up to {@code maxCaptureBytes} counted after
- * UTF-8 encoding — the rest is discarded and the stream marked truncated, while the command keeps running to its own
- * end (step-4 design D8).</li>
+ * <li>Output arrives as one event per line. From execd {@code release-1.1.1} on (upstream #2033) an event's text keeps
+ * the line's own ending ({@code \n}, {@code \r}, or none for a last line the command did not end), so the events
+ * concatenate to the exact output; older execd strips the ending and sends a blank line as {@code "\n"}. Which contract
+ * a command's execd follows is read from its events ({@link Endings}), and older execd's lines get their {@code \n}
+ * back. Each line is handed to the sink and captured per stream up to {@code maxCaptureBytes} counted after UTF-8
+ * encoding — the rest is discarded and the stream marked truncated, while the command keeps running to its own end
+ * (docs/design/workspace-sandbox-provider.md §2.4).</li>
  * <li>{@link #kill()} and an {@link #await} past its timeout always send {@code DELETE /command?id=}: a disconnect
  * does not stop a command. A kill before the {@code init} event is latched and sent when the id arrives.</li>
  * <li>A stream that ends without a terminal event is followed by polling {@code /command/status/{id}}, which keeps
@@ -53,12 +54,11 @@ import at.aimon.sandbox.provider.SandboxProviderException;
  * <li>Exit codes come from {@code error.exit_code} (execd {@code release-1.2.0}, upstream #2303), else from
  * {@code error.evalue}; a signal ({@code -1}) becomes {@code 128 + n} from the traceback's signal name.</li>
  * <li>An event line over {@link SseEvents#MAX_LINE_BYTES} stops the reading: the command is killed, both streams are
- * marked truncated, and the exit code is read from the command's status (docs/design/ptc-shell-prerequisites.md
- * S2). The outcome says so in {@link ExecOutcome#killCause()} (S8), unless a timeout or a caller's kill was already on
- * its way.</li>
- * <li>For a {@link ExecSpec#transientOutput() transient} command, execd's spool files of its output are removed once
- * it has ended, before {@link #await} reports it (S1). execd spools them in {@code $TMPDIR/opensandbox-execd/}, taken
- * as {@code /tmp/opensandbox-execd/}: the files API cannot expand an unset variable. (Only execd before
+ * marked truncated, and the exit code is read from the command's status (§4.4). The outcome says so in
+ * {@link ExecOutcome#killCause()}, unless a timeout or a caller's kill was already on its way.</li>
+ * <li>For a {@link ExecSpec#transientOutput() transient} command, execd's spool files of its output are removed once it
+ * has ended, before {@link #await} reports it (§4.5). execd spools them in {@code $TMPDIR/opensandbox-execd/}, taken as
+ * {@code /tmp/opensandbox-execd/}: the files API cannot expand an unset variable. (Only execd before
  * {@code release-1.1.0} spooled in {@code $TMPDIR} itself; the provider requires {@code release-1.2.0}.)</li>
  * </ul>
  */
@@ -99,7 +99,7 @@ final class OpenSandboxRunningCommand implements RunningCommand {
     private volatile String commandId;
     private volatile InputStream stream;
     private volatile boolean signalled;
-    /** Set when this provider ended the command itself (S8); then the outcome is never also timed out. */
+    /** Set when this provider ended the command itself (§4.4); then the outcome is never also timed out. */
     private volatile ExecKillCause killCause;
     private final AtomicBoolean spoolRemoved = new AtomicBoolean();
     private boolean killRequested;
@@ -190,7 +190,7 @@ final class OpenSandboxRunningCommand implements RunningCommand {
                 stdout.truncate();
                 stderr.truncate();
                 synchronized (killLock) {
-                    // The provider ends the command, and says why (S8) — unless a timeout or a caller's kill was
+                    // The provider ends the command, and says why (§4.4) — unless a timeout or a caller's kill was
                     // already on its way: whichever ended the command first is the one reported.
                     if (!killRequested && !endedExit.isDone()) {
                         killCause = ExecKillCause.LINE_LIMIT_EXCEEDED;

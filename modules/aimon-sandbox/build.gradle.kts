@@ -19,7 +19,7 @@ dependencies {
     // source set; this edge is test-only, so there is no cycle in the task graph.
     testImplementation(project(":aimon-sandbox-testkit"))
     // Core's engine contract suite for ExecuteCode: its shell engine runs on this module's environment
-    // (docs/design/ptc-shell-provider.md §5.7).
+    // (docs/design/workspace-sandbox-testing.md §1.5).
     testImplementation(libs.aimon.code.engine.testkit)
 }
 

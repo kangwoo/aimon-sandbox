@@ -38,9 +38,10 @@ import at.aimon.sandbox.workspace.WorkspaceScan;
 import at.aimon.sandbox.workspace.WorkspaceState;
 
 /**
- * Sessions in managed workspaces end to end on the local provider (management design §6.2–§6.4, §9.1): attached turns
- * and their forks, the switch notice, purged and closed targets, a non-owner participant, a SYSTEM routine on an agent
- * default, and the races of options against close and a re-attach.
+ * Sessions in managed workspaces end to end on the local provider (docs/design/workspace-sandbox-management.md §3,
+ * docs/design/workspace-sandbox-binding.md §2, docs/design/workspace-sandbox-notices.md §3): attached turns and their
+ * forks, the switch notice, purged and closed targets, a non-owner participant, a SYSTEM routine on an agent default,
+ * and the races of options against close and a re-attach.
  */
 class ManagedSessionsIT {
 

@@ -8,8 +8,8 @@ import at.aimon.sandbox.provider.ProviderSandboxRef;
 
 /**
  * One slot of a workspace: a name, the profile fixed when it was first created, and the current generation of its
- * sandbox (docs/design/workspace-sandbox.md §5.2). Immutable; {@code with*} and {@link #toBuilder()} return copies, and
- * the store's CAS is what makes a change stick.
+ * sandbox (docs/design/workspace-sandbox-domain.md §2). Immutable; {@code with*} and {@link #toBuilder()} return
+ * copies, and the store's CAS is what makes a change stick.
  *
  * <p>
  * {@link #profileHash()} is the hash of the profile the current generation was created with, so a permanent failure
@@ -148,7 +148,7 @@ public final class SandboxSlot {
     }
 
     /**
-     * Leaves PROVISIONING/RUNNING/PAUSED for TERMINATED, stamping {@code lastActiveAt} (§5.2).
+     * Leaves PROVISIONING/RUNNING/PAUSED for TERMINATED, stamping {@code lastActiveAt} (§2.2).
      *
      * @param now
      *            the transition time

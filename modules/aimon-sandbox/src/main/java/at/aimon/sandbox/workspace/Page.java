@@ -5,7 +5,7 @@ import java.util.Objects;
 import java.util.Optional;
 
 /**
- * One keyset page of a listing (docs/design/workspace-sandbox-management.md §5.4): the items, and the key to pass as
+ * One keyset page of a listing (docs/design/workspace-sandbox-management.md §5): the items, and the key to pass as
  * {@code after} for the next page — absent on the last one.
  *
  * @param <T>

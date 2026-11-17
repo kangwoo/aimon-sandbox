@@ -21,9 +21,9 @@ import at.aimon.core.tools.code.CodeOfferKeys;
 import at.aimon.core.tools.code.shell.ShellCodeExecutionEngine;
 
 /**
- * Core's Python shell engine becomes available on a real OpenSandbox sandbox (docs/design/ptc-shell-provider.md
- * §6.10): the facts core extracts from the environment pass its static availability, and its probe passes — the
- * runtime file system's {@code createDirectories} and {@code writeNew} over execd, the isolated exec that checks
+ * Core's Python shell engine becomes available on a real OpenSandbox sandbox (docs/design/workspace-sandbox-testing.md
+ * §5.10): the facts core extracts from the environment pass its static availability, and its probe passes — the runtime
+ * file system's {@code createDirectories} and {@code writeNew} over execd, the isolated exec that checks
  * {@code python3} and sees the probe file, and the {@code delete} after. And the negative side of the seed's
  * {@code runtime-python3} check: an image without {@code python3} under a profile that declares it is a permanent
  * provisioning failure, and the probe reports the engine unavailable instead of failing.

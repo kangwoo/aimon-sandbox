@@ -7,7 +7,7 @@ import java.util.Optional;
 /**
  * One file or directory as {@link SandboxFiles#stat} and {@link SandboxFiles#list} report it. {@link #modifiedAt()}
  * has at least millisecond resolution, or {@link #etag()} is present — a content change must change one of them
- * (docs/design/workspace-sandbox.md §6.1, core {@code FileMetadata}'s change-detection contract).
+ * (docs/design/workspace-sandbox-provider.md §3.1, core {@code FileMetadata}'s change-detection contract).
  */
 public final class FileStat {
 

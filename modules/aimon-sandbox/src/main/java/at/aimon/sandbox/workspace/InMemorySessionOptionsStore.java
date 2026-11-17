@@ -13,8 +13,8 @@ import at.aimon.core.agent.session.SessionId;
 
 /**
  * The default options store: a map in this JVM. <b>Single node only</b>, like {@link InMemorySandboxWorkspaceStore}
- * (docs/design/workspace-sandbox-management.md §12 Q4): a restart loses every session's attachment, and its turns fall
- * back to the unattached rule.
+ * (docs/design/workspace-sandbox-domain.md §4.4): a restart loses every session's attachment, and its turns fall back
+ * to the unattached rule.
  */
 public final class InMemorySessionOptionsStore implements SessionOptionsStore {
 

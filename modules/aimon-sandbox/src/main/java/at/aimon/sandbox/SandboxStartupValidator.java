@@ -22,8 +22,9 @@ import at.aimon.sandbox.provider.CredentialScope;
 import at.aimon.sandbox.provider.ProviderCapabilities;
 
 /**
- * The startup checks of docs/design/workspace-sandbox.md §13.2 that implementation steps 3 and 4 can make, plus their
- * own refusals. Collects every violation so one failed start lists them all; nothing is started when any is found.
+ * The startup checks of docs/design/workspace-sandbox-configuration.md §3 that implementation steps 3 and 4 can make,
+ * plus their own refusals. Collects every violation so one failed start lists them all; nothing is started when any is
+ * found.
  *
  * <p>
  * Refused, rather than ignored, until the step that can do it: {@code pause-after} (no {@code PAUSE_RESUME} until
@@ -47,7 +48,7 @@ final class SandboxStartupValidator {
      */
     static final int ACTIVITY_WRITES_PER_TERMINATE_AFTER = 3;
 
-    /** Kubernetes label-value rules (§6.3). */
+    /** Kubernetes label-value rules (docs/design/workspace-sandbox-provider.md §4.3). */
     static final Pattern LABEL_SAFE = Pattern.compile("[a-z0-9]([-a-z0-9_.]{0,61}[a-z0-9])?");
 
     private SandboxStartupValidator() {
@@ -107,7 +108,7 @@ final class SandboxStartupValidator {
             violations.add("admission.max-running-per-tenant must be at least 1, or 'unlimited' set explicitly");
         }
         // Session options without a SessionOwnerLookup are refused when they are set, not here: a deployment that
-        // never sets them needs no lookup (management design §6.2).
+        // never sets them needs no lookup (docs/design/workspace-sandbox-management.md §3.1).
         if (settings.maxManagedPerOwner() < 1 && settings.maxManagedPerOwner() != SandboxSettings.UNLIMITED) {
             violations.add("max-managed-per-owner must be at least 1, or 'unlimited' set explicitly");
         }
@@ -138,7 +139,8 @@ final class SandboxStartupValidator {
             }
         });
         // A sandbox whose record write is late must not look like an orphan: provisioning ends within provision-timeout
-        // (a takeover after it), and the grace is measured from the sandbox's creation (§10.4).
+        // (a takeover after it), and the grace is measured from the sandbox's creation
+        // (docs/design/workspace-sandbox-lifecycle.md §6.2).
         if (settings.orphanGrace().compareTo(settings.provisionTimeout()) <= 0) {
             violations.add("orphan-grace " + settings.orphanGrace() + " must exceed provision-timeout "
                     + settings.provisionTimeout() + ", or a slow provisioning's sandbox is reclaimed as an orphan");

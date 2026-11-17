@@ -7,13 +7,14 @@ import java.util.Objects;
 import java.util.Optional;
 
 /**
- * Everything a provider needs to create one sandbox (docs/design/workspace-sandbox.md §6.1, §6.3).
+ * Everything a provider needs to create one sandbox (docs/design/workspace-sandbox-provider.md §1.2, §4).
  *
  * <p>
  * {@link #key()} is {@code "{deployment}/{workspaceId}/{incarnation}/{slot}/{generation}"}; a provider makes
  * {@link SandboxProvider#create} best-effort idempotent on it. {@link #labels()} already carries the encoded
  * {@code aimon.at/*} labels ({@link SandboxLabels}). {@link #egress()} distinguishes absent (no policy requested) from
- * empty (deny everything): a provider must send an empty list as an explicit deny, never omit it (§6.4).
+ * empty (deny everything): a provider must send an empty list as an explicit deny, never omit it
+ * (docs/design/workspace-sandbox-security.md §4).
  */
 public final class CreateSpec {
 

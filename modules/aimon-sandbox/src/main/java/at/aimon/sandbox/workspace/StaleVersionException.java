@@ -6,7 +6,7 @@ import at.aimon.core.agent.session.SessionId;
 
 /**
  * A CAS lost: the record's version was not the expected one, or the record is gone. Every writer re-reads, re-checks
- * its condition and retries (docs/design/workspace-sandbox.md §5.3) — no write is dropped for a conflict.
+ * its condition and retries (docs/design/workspace-sandbox-domain.md §4.3) — no write is dropped for a conflict.
  */
 public class StaleVersionException extends RuntimeException {
 

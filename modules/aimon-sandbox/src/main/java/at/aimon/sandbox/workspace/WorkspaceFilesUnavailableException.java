@@ -5,7 +5,7 @@ import java.util.Objects;
 
 /**
  * A workspace's files cannot be reached through {@code SandboxWorkspaceFiles} right now
- * (docs/design/workspace-sandbox-files.md §6.1). A file explorer shows {@link #reason()}, not the message.
+ * (docs/design/workspace-sandbox-management.md §6.7). A file explorer shows {@link #reason()}, not the message.
  * {@link Reason#NOT_RUNNING} is the ordinary "nothing to show" state of a workspace whose sandbox is not up, never a
  * failure to retry in a loop — the explorer does not provision.
  */

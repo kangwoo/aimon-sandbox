@@ -6,8 +6,9 @@ import java.util.Optional;
 import java.util.regex.Pattern;
 
 /**
- * The slot (and required profile) a fork runs in (docs/design/workspace-sandbox.md §8.1). Workspace, owner and root
- * are not part of it: the environment provider forces those from the parent, so a policy cannot send a fork elsewhere.
+ * The slot (and required profile) a fork runs in (docs/design/workspace-sandbox-binding.md §1). Workspace, owner and
+ * root are not part of it: the environment provider forces those from the parent, so a policy cannot send a fork
+ * elsewhere.
  */
 public final class SlotChoice {
 
@@ -19,7 +20,7 @@ public final class SlotChoice {
 
     /**
      * The definition attribute naming the agent's default workspace: a managed {@code wsm:} id its sessions bind to
-     * unless their options attach them elsewhere (docs/design/workspace-sandbox-management.md §6.3). Writing it is the
+     * unless their options attach them elsewhere (docs/design/workspace-sandbox-binding.md §2). Writing it is the
      * right to redirect every session of the agent; another principal's session only lands there if the workspace is
      * shared. A routine running as a SYSTEM principal passes the gate only through {@code allowed-system-principals},
      * and then needs the workspace owned by that principal or shared ({@code access: tenant}) with its tenant.
@@ -60,8 +61,9 @@ public final class SlotChoice {
     }
 
     /**
-     * The default fork rule (§8.2): {@code sandbox.slot} when the fork's definition sets it, else the parent's slot;
-     * {@code sandbox.profile} when set, else — staying in the parent's slot — the parent's requirement.
+     * The default fork rule (docs/design/workspace-sandbox-binding.md §3): {@code sandbox.slot} when the fork's
+     * definition sets it, else the parent's slot; {@code sandbox.profile} when set, else — staying in the parent's slot
+     * — the parent's requirement.
      *
      * @param attributes
      *            the fork definition's attributes
@@ -81,7 +83,8 @@ public final class SlotChoice {
     /**
      * @param slot
      *            a slot name
-     * @return the name, when it matches {@code ^[a-z][a-z0-9-]{0,30}$} (§3.1)
+     * @return the name, when it matches {@code ^[a-z][a-z0-9-]{0,30}$}
+     *         (docs/design/workspace-sandbox.md §3)
      * @throws BindingRejectedException
      *             otherwise
      */

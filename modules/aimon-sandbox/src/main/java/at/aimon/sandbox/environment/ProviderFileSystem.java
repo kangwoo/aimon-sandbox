@@ -30,7 +30,7 @@ import at.aimon.sandbox.provider.WriteMode;
 
 /**
  * The raw sandbox filesystem: a {@link VirtualFileSystem} over one connection's {@link SandboxFiles}, rooted at
- * {@code /} (docs/design/workspace-sandbox.md §6.6 of the step-3 design). Its working directory is {@code /} so that
+ * {@code /} (docs/design/workspace-sandbox-filesystem.md §3.2). Its working directory is {@code /} so that
  * core's path-rule wrapper, which resolves every path under the delegate's working directory, sees every absolute
  * sandbox path — {@code /workspace/.aimon-staged} and {@code /shared} included. Listings return paths relative to
  * {@code /}, as the VFS contract asks. A listing larger than {@value #LIST_LIMIT} entries fails rather than returning

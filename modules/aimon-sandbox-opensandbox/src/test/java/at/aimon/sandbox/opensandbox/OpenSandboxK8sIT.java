@@ -39,8 +39,8 @@ import at.aimon.sandbox.provider.SandboxConnection;
 import at.aimon.sandbox.provider.SandboxLabels;
 
 /**
- * The Kubernetes-runtime checks of docs/design/workspace-sandbox.md §16 — manual and pre-release, never part of
- * {@code build}: {@code ./gradlew :aimon-sandbox-opensandbox:k8sTest} against a cluster provisioned as in the module
+ * The Kubernetes-runtime checks of docs/design/workspace-sandbox-testing.md §3.3 — manual and pre-release, never part
+ * of {@code build}: {@code ./gradlew :aimon-sandbox-opensandbox:k8sTest} against a cluster provisioned as in the module
  * README (kind + the OpenSandbox chart, the hardened container-level template, the sandbox-isolation NetworkPolicy of
  * {@code spike/opensandbox/k8s/deploy/}), reached through {@code kubectl port-forward} and the server proxy. Every test
  * skips when {@code OPENSANDBOX_K8S_ENDPOINT} is unset.

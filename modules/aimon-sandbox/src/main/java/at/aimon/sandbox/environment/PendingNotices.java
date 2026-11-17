@@ -21,38 +21,36 @@ import at.aimon.sandbox.workspace.SessionSandboxOptions;
 import at.aimon.sandbox.workspace.UnannouncedReset;
 
 /**
- * The environment-level notices of one environment, waiting for core to drain them (docs/design/workspace-sandbox.md
- * §7, kangwoo/aimon-core#254): core calls {@code drainNotices()} after every model-facing tool call — a file tool
- * included — and puts each notice on that call's result. Every call of the environment connects through
- * {@link #connect}, which queues what {@code connect} reports (a reset, a re-creation, a lost sandbox, a slow
- * provisioning) to be delivered once. Duplicates collapse.
+ * The environment-level notices of one environment, waiting for core to drain them
+ * (docs/design/workspace-sandbox-notices.md §1.1, §2, kangwoo/aimon-core#254): core calls {@code drainNotices()} after
+ * every model-facing tool call — a file tool included — and puts each notice on that call's result. Every call of the
+ * environment connects through {@link #connect}, which queues what {@code connect} reports (a reset, a re-creation, a
+ * lost sandbox, a slow provisioning) to be delivered once. Duplicates collapse.
  *
  * <p>
  * One queue per environment instance, never shared with a fork or seeded from a parent (core EE-107): the provider
  * builds a new environment, and so a new queue, for every request.
  *
  * <p>
- * It carries the binding's {@link WorkspaceSwitch} (docs/design/workspace-sandbox-management.md §6.4): the first
- * successful connect queues the switch notice ahead of the connect's own, and the {@link #drain} that returns it has
- * the switch recorded, since core treats what a drain returns as delivered. A silent switch is recorded at that first
- * connect. That record is written asynchronously, under a CAS on the version this instance knows; a reset this
- * instance keeps afterwards writes the switch along, so that its own write cannot make the record lose its CAS
- * (docs/design/workspace-sandbox-unannounced-reset.md §12).
+ * It carries the binding's {@link WorkspaceSwitch} (§3): the first successful connect queues the switch notice ahead of
+ * the connect's own, and the {@link #drain} that returns it has the switch recorded, since core treats what a drain
+ * returns as delivered. A silent switch is recorded at that first connect. That record is written asynchronously, under
+ * a CAS on the version this instance knows; a reset this instance keeps afterwards writes the switch along, so that its
+ * own write cannot make the record lose its CAS (§5.2).
  *
  * <p>
- * It also tracks the slot this instance last connected (docs/design/workspace-sandbox-core-033.md §6.5). When a later
- * connect finds another incarnation or a newer generation and did not itself report the reset, someone else re-created
- * the sandbox in between — a fork of this execution, typically — and the model is told its files are gone. A reset
- * notice that arrives afterwards for the same slot replaces a generation notice still queued for it, so one event is
- * told once.
+ * It also tracks the slot this instance last connected (§4). When a later connect finds another incarnation or a newer
+ * generation and did not itself report the reset, someone else re-created the sandbox in between — a fork of this
+ * execution, typically — and the model is told its files are gone. A reset notice that arrives afterwards for the same
+ * slot replaces a generation notice still queued for it, so one event is told once.
  *
  * <p>
- * A session's root environment keeps its resets durable (docs/design/workspace-sandbox-unannounced-reset.md): a hook, a
- * workflow step or a staging call can connect and reset the slot on a path core never drains, and the instance then
- * dies with the notice. So a connect that reset the slot first writes an {@link UnannouncedReset} to the session's
- * options record — before the notice can be drained — and the drain that returns a notice covering it clears it again.
- * The session's next root environment finds a reset still there in its {@link SessionBookkeeping} and tells it once at
- * its first successful connect of that slot. A fork's queue has no bookkeeping and keeps nothing.
+ * A session's root environment keeps its resets durable (§5): a hook, a workflow step or a staging call can connect and
+ * reset the slot on a path core never drains, and the instance then dies with the notice. So a connect that reset the
+ * slot first writes an {@link UnannouncedReset} to the session's options record — before the notice can be drained —
+ * and the drain that returns a notice covering it clears it again. The session's next root environment finds a reset
+ * still there in its {@link SessionBookkeeping} and tells it once at its first successful connect of that slot. A
+ * fork's queue has no bookkeeping and keeps nothing.
  */
 final class PendingNotices {
 
@@ -114,7 +112,7 @@ final class PendingNotices {
 
     /**
      * The one way this environment's calls connect: {@code manager.connect}, then what it reported is queued. A
-     * failure after a reset (§15) queues the reset's notices too — told on this call's error result when the call is
+     * failure after a reset (§6) queues the reset's notices too — told on this call's error result when the call is
      * model-facing, kept for the next drain otherwise — and reports the bare reason.
      *
      * @param manager

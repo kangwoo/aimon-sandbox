@@ -50,8 +50,8 @@ import at.aimon.sandbox.testkit.FaultInjectingSandboxProvider.Operation;
 import at.aimon.sandbox.workspace.WorkspaceScan;
 
 /**
- * The shell rows of docs/design/workspace-sandbox.md §16 and the wrapper's robustness cases, through the local
- * provider.
+ * The shell rows of docs/design/workspace-sandbox-testing.md §5.1 and §5.2 and the wrapper's robustness cases, through
+ * the local provider.
  */
 class SandboxShellIT {
 
@@ -468,7 +468,8 @@ class SandboxShellIT {
     @DisplayName("STREAMING (contract): isolated(true) alone is not foreground — it streams, takes no lock, keeps no state")
     void isolatedStreamingIsNotForeground() throws Exception {
         // Core's contract: foreground = !background && !hook && !isolated. The PTC shell engine streams with
-        // isolated(true) only — neither background (a command outliving the call) nor hook (docs/design S7).
+        // isolated(true) only — neither background (a command outliving the call) nor hook
+        // (docs/design/workspace-sandbox-shell.md §5.1).
         bash(env, "mkdir -p src && cd src && export SEEN=yes");
         final Future<ShellCommandResult> model = executor
                 .submit(() -> bash(env, ": > /workspace/model-running; sleep 3; echo done"));

@@ -4,7 +4,7 @@ import java.util.List;
 import java.util.Objects;
 
 /**
- * One directory's entries (docs/design/workspace-sandbox-files.md §5.2): directories first, then by name.
+ * One directory's entries (docs/design/workspace-sandbox-management.md §5): directories first, then by name.
  * {@link #truncated()} says the directory holds more than the limit asked for; which entries made the cut is the
  * provider's order, not the sort.
  */

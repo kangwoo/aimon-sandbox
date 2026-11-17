@@ -39,7 +39,10 @@ import at.aimon.sandbox.workspace.CreateWorkspace;
 import at.aimon.sandbox.workspace.SandboxWorkspaceId;
 import at.aimon.sandbox.workspace.WorkspaceScan;
 
-/** {@link SandboxExecutionEnvironmentProvider}: forks (§16 rows 6–8), the declared descriptor, the step-3 guards. */
+/**
+ * {@link SandboxExecutionEnvironmentProvider}: forks (docs/design/workspace-sandbox-testing.md §5.3), the declared
+ * descriptor, the step-3 guards.
+ */
 class SandboxEnvironmentProviderTest {
 
     private final SandboxHarness harness = SandboxHarness.builder()
@@ -437,7 +440,7 @@ class SandboxEnvironmentProviderTest {
     }
 
     // ----------------------------------------------------------------------------------------------------------------
-    // core 0.3.3 seams (docs/design/workspace-sandbox-core-033.md §6.1, §6.5)
+    // core 0.3.3 seams (docs/design/workspace-sandbox-binding.md §3, docs/design/workspace-sandbox-notices.md §4)
     // ----------------------------------------------------------------------------------------------------------------
 
     @Test

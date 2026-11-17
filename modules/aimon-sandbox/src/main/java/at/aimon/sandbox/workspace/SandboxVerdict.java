@@ -1,8 +1,8 @@
 package at.aimon.sandbox.workspace;
 
 /**
- * What the janitor's reconciliation makes of one sandbox the provider lists (docs/design/workspace-sandbox.md §10.4;
- * docs/design/workspace-sandbox-management.md §6.8), before any grace — the classification
+ * What the janitor's reconciliation makes of one sandbox the provider lists (docs/design/workspace-sandbox-lifecycle.md
+ * §6.2; docs/design/workspace-sandbox-management.md §4.4), before any grace — the classification
  * {@code SandboxAdministration.sandboxes()} shows.
  */
 public enum SandboxVerdict {

@@ -46,11 +46,11 @@ import at.aimon.sandbox.provider.VolumeRef;
 import at.aimon.sandbox.provider.WriteMode;
 
 /**
- * The contract every {@link SandboxProvider} must pass (docs/design/workspace-sandbox.md §16): idempotent create,
- * idempotent destroy, separate stdout/stderr with the exit code, cwd and env, per-stream truncation, a
- * {@link RunningCommand#kill()} that ends only its own process group, the files API with its change-detection
- * contract, complete {@code list(labels)} answers, labels on {@code status}, {@link SandboxNotFoundException} for an
- * absent sandbox, volume deletion when {@link Capability#SHARED_VOLUME} is advertised, and nothing unadvertised.
+ * The contract every {@link SandboxProvider} must pass (docs/design/workspace-sandbox-testing.md §1.1): idempotent
+ * create, idempotent destroy, separate stdout/stderr with the exit code, cwd and env, per-stream truncation, a
+ * {@link RunningCommand#kill()} that ends only its own process group, the files API with its change-detection contract,
+ * complete {@code list(labels)} answers, labels on {@code status}, {@link SandboxNotFoundException} for an absent
+ * sandbox, volume deletion when {@link Capability#SHARED_VOLUME} is advertised, and nothing unadvertised.
  *
  * <p>
  * Extend it, implement {@link #createProvider()}, and every test here runs against a fresh provider. Shell state is

@@ -33,8 +33,8 @@ import at.aimon.sandbox.provider.VerificationFailure;
 import at.aimon.sandbox.provider.WriteMode;
 
 /**
- * Wraps any provider and injects faults per {@link Operation} and call number (docs/design/workspace-sandbox.md §16):
- * a delay, a transient or permanent failure, a timeout, "not found", a success whose response is lost, or a
+ * Wraps any provider and injects faults per {@link Operation} and call number (docs/design/workspace-sandbox-testing.md
+ * §2.2): a delay, a transient or permanent failure, a timeout, "not found", a success whose response is lost, or a
  * simulated node crash. Counts every call, so a test can assert how many copies a staging made.
  *
  * <p>

@@ -8,7 +8,8 @@ import java.util.Objects;
 import java.util.Set;
 
 /**
- * Where one credential binding is injected: scheme, host, method and path (docs/design/workspace-sandbox.md §12.1).
+ * Where one credential binding is injected: scheme, host, method and path
+ * (docs/design/workspace-sandbox-security.md §5).
  * The shape is OpenSandbox's vault {@code CredentialMatch} without {@code ports} — deprecated there, the port follows
  * the scheme — so ports are ignored, which makes {@link #overlaps} err towards "overlaps".
  *

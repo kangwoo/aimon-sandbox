@@ -10,10 +10,11 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * The heartbeat of one running command (docs/design/workspace-sandbox.md §5.3): every {@code activityWriteInterval}
- * it records activity and pushes the provider expiry, so a twenty-minute build keeps its sandbox without tool calls.
- * It stops with the command, or with the node — a counter in the record would not. A background command's heartbeat
- * also stops after {@code backgroundHeartbeatLimit}; the command keeps running but no longer keeps the sandbox awake.
+ * The heartbeat of one running command (docs/design/workspace-sandbox-lifecycle.md §5): every
+ * {@code activityWriteInterval} it records activity and pushes the provider expiry, so a twenty-minute build keeps its
+ * sandbox without tool calls. It stops with the command, or with the node — a counter in the record would not. A
+ * background command's heartbeat also stops after {@code backgroundHeartbeatLimit}; the command keeps running but no
+ * longer keeps the sandbox awake.
  */
 final class ActivityHeartbeat implements Heartbeat {
 

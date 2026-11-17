@@ -6,16 +6,16 @@ import java.util.Objects;
 import java.util.Optional;
 
 /**
- * One command for {@link SandboxConnection#run} (docs/design/workspace-sandbox.md §6.1).
+ * One command for {@link SandboxConnection#run} (docs/design/workspace-sandbox-provider.md §1.2).
  *
  * <p>
  * {@link #command()} is a bash script, run as {@code bash -c} in a process group of its own, as the sandbox's execd
  * user. {@link #environment()} is the profile's static {@code env} — a command's own variables are exported by the
- * script (§9); the one other use is staging verification pinning {@code PATH}. {@link #timeout()} is a provider-side
- * backstop: when it passes, the provider kills the process group and reports {@link ExecOutcome#timedOut()}.
- * {@link #maxCaptureBytes()} caps each of stdout and stderr separately; the rest is counted and dropped, never
- * buffered. {@link #transientOutput()} asks the provider to keep no copy of the output in the sandbox once the command
- * has ended.
+ * script (docs/design/workspace-sandbox-shell.md §1.3); the one other use is staging verification pinning {@code PATH}.
+ * {@link #timeout()} is a provider-side backstop: when it passes, the provider kills the process group and reports
+ * {@link ExecOutcome#timedOut()}. {@link #maxCaptureBytes()} caps each of stdout and stderr separately; the rest is
+ * counted and dropped, never buffered. {@link #transientOutput()} asks the provider to keep no copy of the output in
+ * the sandbox once the command has ended.
  */
 public final class ExecSpec {
 

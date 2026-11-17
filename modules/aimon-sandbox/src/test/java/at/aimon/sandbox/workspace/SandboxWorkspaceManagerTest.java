@@ -38,7 +38,10 @@ import at.aimon.sandbox.testkit.FaultInjectingSandboxProvider.Fault;
 import at.aimon.sandbox.testkit.FaultInjectingSandboxProvider.Operation;
 import at.aimon.sandbox.testkit.SandboxTestProfiles;
 
-/** {@link SandboxWorkspaceManager}: failure classification and backoff, labels, seed checks, takeover (§10.1). */
+/**
+ * {@link SandboxWorkspaceManager}: failure classification and backoff, labels, seed checks, takeover
+ * (docs/design/workspace-sandbox-lifecycle.md §2).
+ */
 class SandboxWorkspaceManagerTest {
 
     private SandboxHarness harness = SandboxHarness.standard();

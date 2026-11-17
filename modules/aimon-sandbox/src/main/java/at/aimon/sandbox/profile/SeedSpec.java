@@ -4,9 +4,10 @@ import java.util.Objects;
 import java.util.Optional;
 
 /**
- * Where a profile's {@code /workspace/repo} comes from (docs/design/workspace-sandbox.md §11.3, §13.1): a git remote, a
- * ref, and the name of a read-only seed credential. Implementation step 3 rejects any seed at startup (the git paths
- * arrive with step 5); the type exists so profiles keep one shape across steps.
+ * Where a profile's {@code /workspace/repo} comes from (docs/design/workspace-sandbox-lifecycle.md §3,
+ * docs/design/workspace-sandbox-configuration.md §1.1): a git remote, a ref, and the name of a read-only seed
+ * credential. Implementation step 3 rejects any seed at startup (the git paths arrive with step 5); the type exists so
+ * profiles keep one shape across steps.
  */
 public final class SeedSpec {
 

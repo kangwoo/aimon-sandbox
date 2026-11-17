@@ -7,7 +7,8 @@ import at.aimon.core.agent.session.SessionId;
 import at.aimon.sandbox.provider.SandboxLabels;
 
 /**
- * Which persistent shell state a command continues (docs/design/workspace-sandbox.md §3.1, §9): {@code session:{id}}
+ * Which persistent shell state a command continues (docs/design/workspace-sandbox-binding.md §3,
+ * docs/design/workspace-sandbox-shell.md §1): {@code session:{id}}
  * for a main turn — the cwd survives turns — and {@code exec:{id}} for routines and forks, which must not disturb
  * their parent's shell.
  */

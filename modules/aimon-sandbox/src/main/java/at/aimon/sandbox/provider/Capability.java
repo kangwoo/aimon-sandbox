@@ -1,8 +1,8 @@
 package at.aimon.sandbox.provider;
 
 /**
- * What a {@link SandboxProvider} can do (docs/design/workspace-sandbox.md §6.4). A provider advertises only what it
- * verified; a profile that needs an unadvertised capability is refused at startup rather than run without it.
+ * What a {@link SandboxProvider} can do (docs/design/workspace-sandbox-provider.md §6). A provider advertises only what
+ * it verified; a profile that needs an unadvertised capability is refused at startup rather than run without it.
  */
 public enum Capability {
 

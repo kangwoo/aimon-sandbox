@@ -9,8 +9,8 @@ import java.util.Optional;
 import at.aimon.sandbox.provider.HostPort;
 
 /**
- * The k8s tier's environment (docs/design/workspace-sandbox.md §16; module README): the forwarded server, the image
- * and the declarations every class of the tier builds its provider from. Nothing here provisions anything.
+ * The k8s tier's environment (docs/design/workspace-sandbox-testing.md §3.3; module README): the forwarded server, the
+ * image and the declarations every class of the tier builds its provider from. Nothing here provisions anything.
  */
 final class K8sTier {
 

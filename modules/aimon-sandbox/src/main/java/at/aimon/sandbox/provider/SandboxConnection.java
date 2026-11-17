@@ -1,8 +1,8 @@
 package at.aimon.sandbox.provider;
 
 /**
- * A node-local handle on one sandbox (docs/design/workspace-sandbox.md §6.1). Cached per {@link ProviderSandboxRef}
- * by {@link SandboxConnectionCache}; never stored in the workspace record.
+ * A node-local handle on one sandbox (docs/design/workspace-sandbox-provider.md §1). Cached per
+ * {@link ProviderSandboxRef} by {@link SandboxConnectionCache}; never stored in the workspace record.
  */
 public interface SandboxConnection extends AutoCloseable {
 

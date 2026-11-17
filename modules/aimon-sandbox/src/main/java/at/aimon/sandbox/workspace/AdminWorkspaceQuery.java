@@ -6,8 +6,8 @@ import java.util.Optional;
 import java.util.Set;
 
 /**
- * An operator's listing of every workspace (docs/design/workspace-sandbox-management.md §5.4): the owner-facing
- * filters of {@link WorkspaceQuery} plus tenant and owner, and a keyset page ordered by id.
+ * An operator's listing of every workspace (docs/design/workspace-sandbox-management.md §5): the owner-facing filters
+ * of {@link WorkspaceQuery} plus tenant and owner, and a keyset page ordered by id.
  */
 public final class AdminWorkspaceQuery {
 

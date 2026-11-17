@@ -24,7 +24,7 @@ import at.aimon.sandbox.workspace.SessionSandboxOptions;
 import at.aimon.sandbox.workspace.UnannouncedReset;
 
 /**
- * One execution's view of its sandbox (docs/design/workspace-sandbox.md §7): a {@link SandboxBinding} plus the file
+ * One execution's view of its sandbox (docs/design/workspace-sandbox.md §6.1): a {@link SandboxBinding} plus the file
  * system, shell, staging and content search that act on it. It holds no remote resource — core's contract makes an
  * environment a view with nothing to close — and provisions nothing until the first file or shell call.
  *
@@ -34,7 +34,7 @@ import at.aimon.sandbox.workspace.UnannouncedReset;
  * has one queue of its own, never shared with a fork (core EE-107). A session's root environment also keeps a reset on
  * the session's options record until a drain delivers it, so a reset that a hook, a workflow step or a staging call
  * caused reaches the model on the session's next tool result, a turn later if need be
- * (docs/design/workspace-sandbox-unannounced-reset.md). Facts about one command — it was killed, its working directory
+ * (docs/design/workspace-sandbox-notices.md §5). Facts about one command — it was killed, its working directory
  * was gone — stay on that command's result.
  */
 public final class SandboxExecutionEnvironment implements ExecutionEnvironment {
@@ -56,10 +56,10 @@ public final class SandboxExecutionEnvironment implements ExecutionEnvironment {
         this.descriptor = Objects.requireNonNull(descriptor, "descriptor must not be null");
         this.backgroundCommandTimeout = Objects.requireNonNull(backgroundCommandTimeout,
                 "backgroundCommandTimeout must not be null");
-        // §6.4 of the management design: the switch is announced after the first successful connect, and recorded
-        // once core drained the notice. A reset is kept on the session's record before its notice is queued, and
-        // cleared once core drained it (docs/design/workspace-sandbox-unannounced-reset.md §6). The drain's writes go
-        // to the manager's background executor: a drain must not wait on the options store.
+        // docs/design/workspace-sandbox-notices.md §3: the switch is announced after the first successful connect, and
+        // recorded once core drained the notice. A reset is kept on the session's record before its notice is queued,
+        // and cleared once core drained it (docs/design/workspace-sandbox-notices.md §5.2). The drain's writes go to
+        // the manager's background executor: a drain must not wait on the options store.
         this.pending = new PendingNotices(binding.workspaceSwitch().orElse(null),
                 binding.sessionBookkeeping().orElse(null), new NoticeLedger() {
                     @Override
@@ -104,7 +104,7 @@ public final class SandboxExecutionEnvironment implements ExecutionEnvironment {
 
     /**
      * @return the framework's own file access — outside the file tools' path rules, never handed to a model tool, and
-     *         confined to {@code /workspace} (docs/design/ptc-shell-prerequisites.md S5); always present, and
+     *         confined to {@code /workspace} (docs/design/workspace-sandbox-shell-engine.md §3); always present, and
      *         provisions nothing until its first call
      */
     @Override
@@ -112,13 +112,16 @@ public final class SandboxExecutionEnvironment implements ExecutionEnvironment {
         return Optional.of(runtimeFileSystem);
     }
 
-    /** @return the profile's declared values, never read from the image (§7) */
+    /** @return the profile's declared values, never read from the image (§6.2) */
     @Override
     public EnvironmentDescriptor descriptor() {
         return descriptor;
     }
 
-    /** @return {@code false}: {@code /workspace} dies with the sandbox, so core copies artifacts out (§11.5) */
+    /**
+     * @return {@code false}: {@code /workspace} dies with the sandbox, so core copies artifacts out
+     *         (docs/design/workspace-sandbox-filesystem.md §6)
+     */
     @Override
     public boolean durable() {
         return false;
@@ -131,7 +134,7 @@ public final class SandboxExecutionEnvironment implements ExecutionEnvironment {
 
     /**
      * @return empty: implementation step 3 has no sandbox worktrees, so core refuses a workflow isolation branch
-     *         (step 7 adds them, §11.2)
+     *         (step 7 adds them, docs/design/workspace-sandbox-filesystem.md §7)
      */
     @Override
     public Optional<ExecutionEnvironment> isolate(String branchKey) {
@@ -145,7 +148,7 @@ public final class SandboxExecutionEnvironment implements ExecutionEnvironment {
 
     /**
      * @return the declared profile's {@code backgroundCommandTimeout}, always present (24 hours unless the profile
-     *         configures one, §5.3)
+     *         configures one, docs/design/workspace-sandbox-shell.md §7.2)
      */
     @Override
     public Optional<Duration> backgroundCommandTimeout() {

@@ -168,7 +168,7 @@ opensandbox-server:
   그 watchdog 은 샌드박스의 PID 1(또는 가장 가까운 subreaper)에게 넘어가 거기서 거둬져야 한다. 이 설정이 있으면 execd 가
   템플릿 모드에서는 PID 1(`execd --init`), 풀(`Pool`) 모드에서는 task-executor 아래의 subreaper 가 되어 거둔다.
   템플릿 모드는 이 설정 없이도 bootstrap 셸이 PID 1 로 거두지만, 풀 파드의 PID 1 이 task-executor 이면 아무도 거두지
-  않아 실행마다 좀비가 쌓인다(실측: [`ptc-shell-provider.md`](../design/ptc-shell-provider.md) §9 "K8s tier, measured").
+  않아 실행마다 좀비가 쌓인다([`workspace-sandbox-shell-engine.md`](../design/workspace-sandbox-shell-engine.md) §7).
   `scripts/k8s-tier.sh` 도 이 설정으로 서버를 띄우고, 풀 모드 테스트는 PID 1 이 task-executor 인데 `execd --init` 이 없으면
   그 원인을 이름으로 대며 실패한다
 - 컨트롤러의 `snapshot.*` 은 pause/resume 용이다. aimon-sandbox 는 아직 pause 를 쓰지 않으므로 스냅숏 레지스트리
@@ -451,7 +451,7 @@ OpenSandboxProvider provider = new OpenSandboxProvider(OpenSandboxProviderConfig
   재시도하고, 프로비저닝 실패는 `failure-backoff` 로 다시 시도한다
 - **AIMON 노드는 아직 하나만 둔다.** 저장소가 InMemory 라 여러 노드가 같은 `deployment` 를 쓰면 서로의 샌드박스를 고아로
   지운다([사용자 가이드 §8.3](user-guide.md#83-여러-노드))
-- 실측에서 드러난 OpenSandbox 의 동작과 업스트림 이슈는 [`docs/design/opensandbox-spike.md`](../design/opensandbox-spike.md),
+- 실측에서 드러난 OpenSandbox 의 동작과 업스트림 이슈는 [`docs/design/workspace-sandbox-opensandbox.md`](../design/workspace-sandbox-opensandbox.md) §3 · §6,
   [`spike/opensandbox/upstream-issues.md`](../../spike/opensandbox/upstream-issues.md) 에 있다
 
 ---

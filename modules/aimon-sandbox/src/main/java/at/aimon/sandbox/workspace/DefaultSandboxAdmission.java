@@ -8,9 +8,9 @@ import at.aimon.sandbox.profile.SandboxProfile;
 
 /**
  * The default admission: counts the tenant's RUNNING and PROVISIONING slots with a store scan and refuses once
- * {@code max-running-per-tenant} is reached (docs/design/workspace-sandbox.md §12.2). The count is not CAS-protected,
- * so concurrent starts can overshoot a little — a best-effort cap; an application that needs an exact one implements
- * {@link SandboxAdmission} on its own store.
+ * {@code max-running-per-tenant} is reached (docs/design/workspace-sandbox-security.md §8). The count is not
+ * CAS-protected, so concurrent starts can overshoot a little — a best-effort cap; an application that needs an exact
+ * one implements {@link SandboxAdmission} on its own store.
  */
 public final class DefaultSandboxAdmission implements SandboxAdmission {
 

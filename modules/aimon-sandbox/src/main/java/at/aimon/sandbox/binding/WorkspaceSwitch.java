@@ -9,8 +9,8 @@ import at.aimon.sandbox.workspace.SandboxWorkspaceId;
 
 /**
  * A session's root binding landed in another workspace than the one it last connected to
- * (docs/design/workspace-sandbox-management.md §6.4): attached, re-attached, cleared, its agent default changed, or
- * a request attribute redirected this execution (docs/design/workspace-sandbox-core-033.md §6.4). The environment
+ * (docs/design/workspace-sandbox-notices.md §3): attached, re-attached, cleared, its agent default changed, or a
+ * request attribute redirected this execution. The environment
  * queues the notice at its first successful connect, core delivers it with the next tool result of any kind
  * ({@code drainNotices()}), and the drain that returns it has {@link #to()} recorded as the session's
  * {@code lastWorkspaceId}. A {@linkplain #isSilent() silent} switch is only recorded: nothing moved.

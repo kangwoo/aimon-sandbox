@@ -18,7 +18,7 @@ import at.aimon.sandbox.workspace.WorkspaceOwner;
 
 /**
  * Resolves a root request through its request attributes, session options and the agent default before the configured
- * policy (docs/design/workspace-sandbox-management.md §6.3, docs/design/workspace-sandbox-core-033.md §5.1, §6.1).
+ * policy (docs/design/workspace-sandbox-binding.md §2).
  * {@code WorkspaceSandbox} wraps whatever policy the host configured in it, so "only a policy makes bindings" still
  * holds. The first row that applies wins:
  *
@@ -44,7 +44,7 @@ import at.aimon.sandbox.workspace.WorkspaceOwner;
  * back to {@code per-session}, which would put an attached session in a different workspace — also when row 0
  * applies, since the switch notice needs the record. A session that lands in another workspace than it last connected
  * to carries a {@link WorkspaceSwitch}, and every session's binding the {@link SessionBookkeeping} of the record it
- * read — no second read (docs/design/workspace-sandbox-unannounced-reset.md §3.2). Forks are unchanged: they inherit
+ * read — no second read (docs/design/workspace-sandbox-notices.md §5.2). Forks are unchanged: they inherit
  * their parent's binding, row 0 included, and never reach this policy's {@code bind}.
  */
 public final class SessionOptionsBindingPolicy implements SandboxBindingPolicy {
@@ -224,17 +224,17 @@ public final class SessionOptionsBindingPolicy implements SandboxBindingPolicy {
     }
 
     /**
-     * §6.4: a session that lands somewhere else than it last connected carries a switch. Without an options record
-     * only a request-attribute redirect does — otherwise the session never moved — and its notice uses the from-absent
-     * wording; the recorder then creates the record. A record that never attached the session
-     * ({@code lastWorkspaceId} and {@code workspace} both empty — it only set a rule) is recorded silently when
-     * rows 1–3 bound it: the session ran where it runs now, under the delegate or the agent default, before the record
-     * existed. Row 0 with no {@code lastWorkspaceId} is always announced (core-033 design §6.4).
+     * Workspace-switch notice (docs/design/workspace-sandbox-notices.md §3): a session that lands somewhere else than
+     * it last connected carries a switch. Without an options record only a request-attribute redirect does — otherwise
+     * the session never moved — and its notice uses the from-absent wording; the recorder then creates the record. A
+     * record that never attached the session ({@code lastWorkspaceId} and {@code workspace} both empty — it only set a
+     * rule) is recorded silently when rows 1–3 bound it: the session ran where it runs now, under the delegate or the
+     * agent default, before the record existed. Row 0 with no {@code lastWorkspaceId} is always announced.
      *
      * <p>
      * A record holding nothing but an unannounced reset counts as none here: the environment created it as bookkeeping
      * for a derived-workspace session that never moved, which must not turn into a switch, nor leave a
-     * {@code lastWorkspaceId} record behind (docs/design/workspace-sandbox-unannounced-reset.md §3.2).
+     * {@code lastWorkspaceId} record behind (docs/design/workspace-sandbox-notices.md §3).
      */
     private static SandboxBinding withSwitch(SandboxBinding binding, SessionId session,
             Optional<SessionSandboxOptions> record, boolean requested) {

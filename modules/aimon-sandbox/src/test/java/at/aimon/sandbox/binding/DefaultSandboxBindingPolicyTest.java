@@ -25,7 +25,10 @@ import at.aimon.sandbox.testkit.SandboxTestProfiles;
 import at.aimon.sandbox.workspace.TenantId;
 import at.aimon.sandbox.workspace.WorkspaceOwner;
 
-/** The default binding rules (§8.2) and the principal gate (§8.3, §16 row 27). */
+/**
+ * The default binding rules (docs/design/workspace-sandbox-binding.md §3) and the principal gate
+ * (docs/design/workspace-sandbox-binding.md §4, docs/design/workspace-sandbox-testing.md §5.7).
+ */
 class DefaultSandboxBindingPolicyTest {
 
     private static final AgentRuntimeId RUNTIME = AgentRuntimeId.fromName("agent");

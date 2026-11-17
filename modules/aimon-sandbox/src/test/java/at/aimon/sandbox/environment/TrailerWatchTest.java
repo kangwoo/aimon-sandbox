@@ -9,7 +9,7 @@ import org.junit.jupiter.api.Test;
 
 import at.aimon.sandbox.provider.OutputSink.Stream;
 
-/** The stream run's trailer, watched while the exec streams (docs/design/workspace-sandbox.md §9). */
+/** The stream run's trailer, watched while the exec streams (docs/design/workspace-sandbox-shell.md §4.1, §9.5). */
 class TrailerWatchTest {
 
     private static final String NONCE = "AIMON-0123abcd";

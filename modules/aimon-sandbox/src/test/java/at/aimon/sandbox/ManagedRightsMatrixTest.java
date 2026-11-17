@@ -29,11 +29,12 @@ import at.aimon.sandbox.workspace.TenantId;
 import at.aimon.sandbox.workspace.WorkspaceState;
 
 /**
- * The rights matrix of management design §9.1: {setSessionOptions, clearSessionOptions, sessionOptions, describe,
- * provision, connect, a turn and a routine placed by request attribute (core-033 §6.1), close, reopen, purge} ×
- * {owner, tenant-mate, other tenant, anonymous} × deployment {principal, tenant} × record access {absent, principal,
- * tenant}. The expectations are the rules of §6.2 and §6.5 restated, not read back from the code: use follows the
- * effective access, manage and the right over a session are the owner principal's.
+ * The rights matrix of docs/design/workspace-sandbox-testing.md §5.7: {setSessionOptions, clearSessionOptions,
+ * sessionOptions, describe, provision, connect, a turn and a routine placed by request attribute
+ * (docs/design/workspace-sandbox-binding.md §2), close, reopen, purge} × {owner, tenant-mate, other tenant, anonymous}
+ * × deployment {principal, tenant} × record access {absent, principal, tenant}. The expectations are the rules of
+ * docs/design/workspace-sandbox-binding.md §5 restated, not read back from the code: use follows the effective access,
+ * manage and the right over a session are the owner principal's.
  */
 class ManagedRightsMatrixTest {
 
@@ -56,7 +57,7 @@ class ManagedRightsMatrixTest {
     private enum Operation {
         // the right over a session
         SET_SESSION_OPTIONS, CLEAR_SESSION_OPTIONS, SESSION_OPTIONS,
-        // use: directly, and placed by request attribute (core-033 §6.1)
+        // use: directly, and placed by request attribute (docs/design/workspace-sandbox-binding.md §2)
         DESCRIBE, PROVISION, CONNECT, REQUESTED_TURN, REQUESTED_ROUTINE,
         // manage
         CLOSE, REOPEN, PURGE
@@ -110,15 +111,15 @@ class ManagedRightsMatrixTest {
         }
     }
 
-    /** §6.2 and §6.5, restated. */
+    /** docs/design/workspace-sandbox-binding.md §5, restated. */
     private static boolean permitted(Operation operation, Caller caller, WorkspaceAccess deployment,
             Optional<WorkspaceAccess> access) {
         switch (operation) {
             case DESCRIBE :
             case PROVISION :
             case CONNECT :
-                // A request attribute redirects only its own execution: the use right is the whole right (core-033
-                // §6.1).
+                // A request attribute redirects only its own execution: the use right is the whole right
+                // (docs/design/workspace-sandbox-binding.md §5).
             case REQUESTED_TURN :
             case REQUESTED_ROUTINE :
                 final boolean sameTenant = caller == Caller.OWNER || caller == Caller.TENANT_MATE;
@@ -140,7 +141,8 @@ class ManagedRightsMatrixTest {
             return workspaces.describe(id, caller).isPresent();
         }
         if (operation == Operation.CONNECT) {
-            // A session of the owner's, attached by the owner; the turn runs as the caller (§6.2).
+            // A session of the owner's, attached by the owner; the turn runs as the caller
+            // (docs/design/workspace-sandbox-binding.md §5).
             final SessionId attached = SessionId.generate();
             workspaces.setSessionOptions(attached, SessionSandboxOptions.Update.attach(id), ALICE);
             final Throwable refused = catchThrowable(

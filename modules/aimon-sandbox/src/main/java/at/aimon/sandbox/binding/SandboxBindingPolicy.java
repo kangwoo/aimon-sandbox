@@ -3,7 +3,7 @@ package at.aimon.sandbox.binding;
 import at.aimon.core.environment.ForkDefinition;
 
 /**
- * Decides which workspace and slot an execution uses (docs/design/workspace-sandbox.md §8.1). The only maker of
+ * Decides which workspace and slot an execution uses (docs/design/workspace-sandbox-binding.md §1). The only maker of
  * {@link SandboxBinding}s; an application injects its own to map, say, a ticket's sessions to one workspace.
  */
 public interface SandboxBindingPolicy {
@@ -11,7 +11,8 @@ public interface SandboxBindingPolicy {
     /**
      * Binds a root request (main turn or routine). The returned {@link SandboxBinding#caller()} is not trusted: the
      * environment provider replaces it with the request's principal through the assembly's principal gate, so the
-     * manager's owner check always sees who is actually executing (§8.3). Any non-null caller satisfies the builder.
+     * manager's owner check always sees who is actually executing (docs/design/workspace-sandbox-binding.md §1). Any
+     * non-null caller satisfies the builder.
      *
      * @param context
      *            the request

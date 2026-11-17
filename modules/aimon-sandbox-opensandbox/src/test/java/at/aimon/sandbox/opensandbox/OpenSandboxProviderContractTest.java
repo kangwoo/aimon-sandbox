@@ -9,10 +9,11 @@ import at.aimon.sandbox.provider.SandboxProvider;
 import at.aimon.sandbox.testkit.SandboxProviderContract;
 
 /**
- * The provider contract suite against a real OpenSandbox server on the Docker runtime (docs/design/workspace-sandbox.md
- * §16): label acceptance by the real server, idempotent create by key, the files API, kill and truncation. It runs
- * {@code @Isolated}, as {@link OpenSandboxEgressIT} does: a create's port-conflict retry reads the shared server's log
- * since a mark ({@link OpenSandboxTestServer#logSince}), which must be this class's calls alone.
+ * The provider contract suite against a real OpenSandbox server on the Docker runtime
+ * (docs/design/workspace-sandbox-testing.md §1.1, §3.2): label acceptance by the real server, idempotent create by key,
+ * the files API, kill and truncation. It runs {@code @Isolated}, as {@link OpenSandboxEgressIT} does: a create's
+ * port-conflict retry reads the shared server's log since a mark ({@link OpenSandboxTestServer#logSince}), which must
+ * be this class's calls alone.
  */
 @Tag("docker")
 @Isolated("a failed create reads the shared server's log since a mark: no other class may call that server meanwhile")

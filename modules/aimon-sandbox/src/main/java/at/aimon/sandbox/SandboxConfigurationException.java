@@ -4,8 +4,8 @@ import java.io.Serial;
 import java.util.List;
 
 /**
- * The sandbox configuration violates a startup rule (docs/design/workspace-sandbox.md §13.2). Carries every violation
- * found, not just the first, so one failed start shows the whole list; nothing is started.
+ * The sandbox configuration violates a startup rule (docs/design/workspace-sandbox-configuration.md §3). Carries every
+ * violation found, not just the first, so one failed start shows the whole list; nothing is started.
  */
 public class SandboxConfigurationException extends RuntimeException {
 

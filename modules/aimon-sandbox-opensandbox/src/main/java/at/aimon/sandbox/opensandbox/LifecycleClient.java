@@ -26,7 +26,9 @@ import at.aimon.sandbox.provider.SandboxProviderException;
  */
 final class LifecycleClient {
 
-    /** The page size {@code list} asks for: the server's maximum (docs/design/opensandbox-spike.md §2). */
+    /**
+     * The page size {@code list} asks for: the server's maximum (docs/design/workspace-sandbox-opensandbox.md §3.1).
+     */
     static final int PAGE_SIZE = 200;
 
     /** Where a sandbox's port is reached: a base URI and the headers to send with every call. */
@@ -112,7 +114,7 @@ final class LifecycleClient {
 
     /**
      * The metadata filter is ONE parameter holding {@code k=v&k=v} (repeating the parameter keeps only the last one),
-     * each key and value URL-encoded inside it (B §a).
+     * each key and value URL-encoded inside it (docs/design/workspace-sandbox-opensandbox.md §3.1).
      */
     static String metadataFilter(Map<String, String> labels) {
         final StringJoiner filter = new StringJoiner("&");

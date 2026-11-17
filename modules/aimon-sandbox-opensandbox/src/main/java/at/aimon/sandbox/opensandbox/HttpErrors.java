@@ -12,8 +12,9 @@ import at.aimon.sandbox.provider.SandboxProviderException;
 
 /**
  * Classifies a failed call by its HTTP status, never by the server's error code — codes carry a runtime prefix
- * ({@code DOCKER::…}) that differs between runtimes and even appears on the wrong one (docs/design/opensandbox-spike.md
- * §2). 404 is the caller's to interpret (sandbox gone, file missing, success on destroy).
+ * ({@code DOCKER::…}) that differs between runtimes and even appears on the wrong one
+ * (docs/design/workspace-sandbox-opensandbox.md §4.7). 404 is the caller's to interpret (sandbox gone, file missing,
+ * success on destroy).
  */
 final class HttpErrors {
 
@@ -68,7 +69,7 @@ final class HttpErrors {
         throw failure(status, what, message);
     }
 
-    /** @return the exception a failed status maps to (§8.1 of the step-4 design) */
+    /** @return the exception a failed status maps to (docs/design/workspace-sandbox-opensandbox.md §4.7) */
     static SandboxProviderException failure(int status, String what, String message) {
         final String text = what + " failed (HTTP " + status + "): " + message;
         if (status == 400 || status == 422) {

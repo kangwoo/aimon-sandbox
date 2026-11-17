@@ -15,14 +15,15 @@ import java.util.Set;
  *
  * <p>
  * Everything here is declared configuration the manager reads once at startup; the SPI is the only place it can see
- * it (docs/design/workspace-sandbox.md §13.2):
+ * it (docs/design/workspace-sandbox-provider.md §1.3):
  * <ul>
  * <li>{@link #maxExpiry()} — every profile's {@code terminateAfter} is compared against it (OpenSandbox's
  * {@code max_sandbox_timeout_seconds});</li>
  * <li>{@link #runtimeClass()} — the runtime class the server uses; a profile's {@code runtimeClass} must equal it;</li>
  * <li>{@link #credentialScopes()} — the credential bindings the provider can inject, by name, without secrets; the
- * startup overlap check reads them (§12.1);</li>
- * <li>{@link #controlPlaneEndpoints()} — what a sandbox must not reach; the seed probes them (§11.3).</li>
+ * startup overlap check reads them (docs/design/workspace-sandbox-security.md §5);</li>
+ * <li>{@link #controlPlaneEndpoints()} — what a sandbox must not reach; the seed probes them
+ * (docs/design/workspace-sandbox-lifecycle.md §3).</li>
  * </ul>
  */
 public final class ProviderCapabilities {

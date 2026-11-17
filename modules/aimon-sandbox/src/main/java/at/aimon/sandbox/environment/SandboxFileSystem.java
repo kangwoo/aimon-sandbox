@@ -22,7 +22,7 @@ import at.aimon.sandbox.workspace.ConnectedSlot;
 import at.aimon.sandbox.workspace.SandboxWorkspaceManager;
 
 /**
- * The file tools' view of a sandbox (docs/design/workspace-sandbox.md §7, §11.1). Three layers, so core's public
+ * The file tools' view of a sandbox (docs/design/workspace-sandbox-filesystem.md §3). Three layers, so core's public
  * path-rule factory is reused unchanged:
  *
  * <ol>
@@ -43,7 +43,7 @@ final class SandboxFileSystem implements VirtualFileSystem {
 
     /**
      * The read-only areas and the hidden one, relative to {@code /}. {@code .aimon-ptc} holds core's programmatic tool
-     * calling replies (docs/design/ptc-shell-prerequisites.md S9): hidden from the file tools, not from the shell —
+     * calling replies (§3.3): hidden from the file tools, not from the shell —
      * the replies are authenticated, not secret from the sandbox.
      */
     static final List<PathRule> RULES = List.of(PathRule.readOnly("workspace/.aimon-staged"),
@@ -71,7 +71,7 @@ final class SandboxFileSystem implements VirtualFileSystem {
     /**
      * {@link #RULES}, and the same deny for {@code .aimon-ptc} under the root: core's shell engine places its runs
      * under the descriptor's working directory, which is the binding's root ({@code /workspace/repo} by default), not
-     * {@code /workspace} (docs/design/ptc-shell-provider.md F5).
+     * {@code /workspace} (§3.3).
      */
     static List<PathRule> rules(String root) {
         if (!root.startsWith("/") || "/".equals(root) || "/workspace".equals(root)) {
@@ -256,7 +256,7 @@ final class SandboxFileSystem implements VirtualFileSystem {
         return BackendStatus.unknown(ProviderFileSystem.SANDBOX);
     }
 
-    /** Nothing to release: the environment is a view (§3.2). */
+    /** Nothing to release: the environment is a view (docs/design/workspace-sandbox.md §4). */
     @Override
     public void close() {
         // Nothing is held between calls.

@@ -10,7 +10,10 @@ import java.util.Set;
 
 import org.junit.jupiter.api.Test;
 
-/** {@link CredentialScope}'s overlap rule (§13.2), and the value types that carry provider declarations. */
+/**
+ * {@link CredentialScope}'s overlap rule (docs/design/workspace-sandbox-security.md §5), and the value types that carry
+ * provider declarations.
+ */
 class CredentialScopeTest {
 
     private static CredentialScope scope(String host, String method, String path) {

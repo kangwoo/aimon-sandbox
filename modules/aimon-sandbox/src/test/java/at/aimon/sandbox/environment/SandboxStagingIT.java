@@ -35,7 +35,10 @@ import at.aimon.sandbox.testkit.FaultInjectingSandboxProvider.Fault;
 import at.aimon.sandbox.testkit.FaultInjectingSandboxProvider.Operation;
 import at.aimon.sandbox.workspace.WorkspaceScan;
 
-/** Staging into the sandbox (§7, §11.1): verification in the sandbox, §16 row 18, concurrency, core parity. */
+/**
+ * Staging into the sandbox (docs/design/workspace-sandbox-filesystem.md §4): verification in the sandbox
+ * (docs/design/workspace-sandbox-testing.md §5.4), concurrency, core parity.
+ */
 class SandboxStagingIT {
 
     @TempDir

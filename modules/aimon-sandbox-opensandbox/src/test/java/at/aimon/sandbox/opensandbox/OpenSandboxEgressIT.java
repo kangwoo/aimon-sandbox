@@ -29,11 +29,12 @@ import at.aimon.sandbox.provider.SandboxConnection;
 import at.aimon.sandbox.provider.SandboxLabels;
 
 /**
- * Egress on the real server (docs/design/workspace-sandbox.md §12.1, §16): {@code dns+nft} with a deny default blocks
- * names, addresses, the metadata address and direct DNS; {@code verify} confirms the mode the server applied, and
- * notices a server that runs {@code dns} while the provider declares {@code dns+nft}; the vault receives the named
- * bindings without the secret reaching the sandbox. Rows that need the internet are assumption-gated on an
- * unrestricted sandbox reaching it first — without that control, "blocked" would prove nothing.
+ * Egress on the real server (docs/design/workspace-sandbox-security.md §4, docs/design/workspace-sandbox-testing.md
+ * §3.2): {@code dns+nft} with a deny default blocks names, addresses, the metadata address and direct DNS;
+ * {@code verify} confirms the mode the server applied, and notices a server that runs {@code dns} while the provider
+ * declares {@code dns+nft}; the vault receives the named bindings without the secret reaching the sandbox. Rows that
+ * need the internet are assumption-gated on an unrestricted sandbox reaching it first — without that control, "blocked"
+ * would prove nothing.
  */
 @Tag("docker")
 @Isolated("a failed create reads the shared server's log since a mark: no other class may call that server meanwhile")
@@ -56,7 +57,7 @@ class OpenSandboxEgressIT {
         return provider;
     }
 
-    /** Creates a sandbox on {@code server}, retried once on the server's own host-port conflict (§16). */
+    /** Creates a sandbox on {@code server}, retried once on the server's own host-port conflict. */
     private ProviderSandboxRef create(OpenSandboxTestServer server, OpenSandboxProvider provider, List<String> egress,
             List<String> credentials) {
         return server.retryOnPortConflict(OpenSandboxEgressIT.class, () -> createOnce(provider, egress, credentials));

@@ -13,9 +13,10 @@ import java.util.Objects;
 import java.util.regex.Pattern;
 
 /**
- * Builds the bash script that runs one model command with persistent shell state (docs/design/workspace-sandbox.md
- * §9). One {@code run} per command, in {@code /workspace} (it exists while the sandbox does: a command that removes
- * the working root does not make the next exec fail); the script is two bash processes:
+ * Builds the bash script that runs one model command with persistent shell state
+ * (docs/design/workspace-sandbox-shell.md §2.2). One {@code run} per command, in {@code /workspace} (it exists while
+ * the sandbox does: a command that removes the working root does not make the next exec fail); the script is two bash
+ * processes:
  *
  * <ul>
  * <li>the <b>outer</b> wrapper owns the exec's stdout/stderr (never redirected), the {@code flock} on the shell's lock
@@ -67,13 +68,13 @@ import java.util.regex.Pattern;
  * reserved</b>. Variables with it are neither saved nor restored. The save calls builtins and {@code command -p mv},
  * so a command's {@code PATH} (even unset) or its functions named like a tool do not break it; a command that
  * redefines {@code __aimon_save}, {@code builtin} or {@code command}, or resets the traps, can still defeat the save —
- * shell state is best-effort (§9). Under {@code set -v} the one-line EXIT trap is echoed to the command's stderr.
+ * shell state is best-effort (§2.4). Under {@code set -v} the one-line EXIT trap is echoed to the command's stderr.
  *
  * <p>
  * The timeout or cancellation kill is best-effort: the watchdog — or, for a cancellation, the provider's kill — ends
  * the wrapper's process group, and a job the command put in a group of its own ({@code set -m}, {@code setsid})
  * outlives it until the sandbox goes. Killing by session or cgroup needs the exec server's help, which it does not
- * offer (docs/design/opensandbox-spike.md §3).
+ * offer (§6.1).
  *
  * <p>
  * A command that finishes just as its timeout expires can still be reported as timed out: when the watchdog's sleep
@@ -88,8 +89,9 @@ import java.util.regex.Pattern;
  * that — and the inner bash raises its own to {@value #COMMAND_OOM_SCORE_ADJ}, which everything the command starts
  * inherits. execd shares the sandbox's memory cgroup at {@code 0}; without this, the kernel's second OOM kill of one
  * command (a pipeline's writer, charged for its pipe after the reader was killed but before that memory was returned)
- * can choose execd, the largest process left, and the sandbox stops answering (the §12.2 test on CI). Raising the value
- * needs no privilege; a sandbox without {@code /proc} keeps its default, silently.
+ * can choose execd, the largest process left, and the sandbox stops answering (seen in a CI test;
+ * docs/design/workspace-sandbox-security.md §9). Raising the value needs no privilege; a sandbox without {@code /proc}
+ * keeps its default, silently.
  *
  * <p>
  * The script is bash 3.2 compatible and needs {@code flock}, {@code head}, {@code wc}, {@code sleep}, {@code kill},
@@ -169,9 +171,9 @@ final class ShellWrapper {
      * with notice {@code 2}, which is as true for an isolated command as for a new shell. A cwd fallback writes
      * {@code 1} (ran in the root) or {@code 2} (the root is gone too: ran in {@code /workspace}) to {@code $2.cwd}.
      * When the exec environment names a CA bundle in {@code SSL_CERT_FILE} — OpenSandbox's execd does, for the egress
-     * proxy that injects credentials (§12.1) — git is pointed at it too: a git built on GnuTLS (Debian's) does not read
-     * that variable and would fail verification. An explicit {@code GIT_SSL_CAINFO} wins, and the export is part of the
-     * base environment, so it is not saved as shell state.
+     * proxy that injects credentials (docs/design/workspace-sandbox-security.md §5) — git is pointed at it too: a git
+     * built on GnuTLS (Debian's) does not read that variable and would fail verification. An explicit
+     * {@code GIT_SSL_CAINFO} wins, and the export is part of the base environment, so it is not saved as shell state.
      */
     static final String INNER = "{ echo " + COMMAND_OOM_SCORE_ADJ + " > /proc/self/oom_score_adj; } 2>/dev/null\n" + """
             if [ -n "${SSL_CERT_FILE-}" ] && [ -z "${GIT_SSL_CAINFO+x}" ]; then

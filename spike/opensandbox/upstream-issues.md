@@ -1,6 +1,6 @@
 # Upstream issue drafts — opensandbox-group/OpenSandbox
 
-Drafts of the issues listed in [`docs/design/opensandbox-spike.md`](../../docs/design/opensandbox-spike.md) §10, and one found later (5).
+Drafts of the issues listed in [`docs/design/workspace-sandbox-opensandbox.md`](../../docs/design/workspace-sandbox-opensandbox.md) §6, and one found later (5).
 **Not filed yet.** A duplicate search (2026-09-30: "renew paused", "renew-expiration", "proxy api key",
 "create-namespace", "Namespace helm chart") found nothing matching. All four were observed on OpenSandbox `3738975`
 (2026-09-29 main); evidence paths are relative to this directory.

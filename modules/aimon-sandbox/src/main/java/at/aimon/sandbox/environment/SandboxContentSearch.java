@@ -31,12 +31,12 @@ import at.aimon.sandbox.workspace.ConnectedSlot;
 import at.aimon.sandbox.workspace.SandboxWorkspaceManager;
 
 /**
- * {@code Grep} inside the sandbox: one {@code rg --json} exec (docs/design/workspace-sandbox.md §7) — the reason the
- * image contract requires ripgrep (§13.3). Matches core's local search: hidden files and ignored files are searched,
- * paths come back relative to the binding's root. A failure (rg missing, exit 2) throws, and core's {@code GrepTool}
- * then walks the filesystem instead; a multiline query is left to that walk too. The search path is normalised before
- * rg sees it, so results use the same spelling as a listing of that path; a {@linkplain ContentQuery#isCancelled()
- * cancelled} query kills rg and throws.
+ * {@code Grep} inside the sandbox: one {@code rg --json} exec (docs/design/workspace-sandbox-filesystem.md §3.4) — the
+ * reason the image contract requires ripgrep (docs/design/workspace-sandbox-configuration.md §4). Matches core's local
+ * search: hidden files and ignored files are searched, paths come back relative to the binding's root. A failure (rg
+ * missing, exit 2) throws, and core's {@code GrepTool} then walks the filesystem instead; a multiline query is left to
+ * that walk too. The search path is normalised before rg sees it, so results use the same spelling as a listing of that
+ * path; a {@linkplain ContentQuery#isCancelled() cancelled} query kills rg and throws.
  */
 final class SandboxContentSearch implements ContentSearch {
 

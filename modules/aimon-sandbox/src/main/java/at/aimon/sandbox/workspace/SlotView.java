@@ -5,8 +5,9 @@ import java.util.Objects;
 import java.util.Optional;
 
 /**
- * What an owner or operator sees of one slot (docs/design/workspace-sandbox-management.md §5.4): state and generation,
- * never the provider's sandbox id — with network reach, that id is root in the sandbox (WS §13.3).
+ * What an owner or operator sees of one slot (docs/design/workspace-sandbox-management.md §5): state and generation,
+ * never the provider's sandbox id — with network reach, that id is root in the sandbox
+ * (docs/design/workspace-sandbox-security.md §7).
  */
 public final class SlotView {
 

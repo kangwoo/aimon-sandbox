@@ -37,8 +37,8 @@ import at.aimon.sandbox.provider.SandboxProviderException;
 import at.aimon.sandbox.provider.WriteMode;
 
 /**
- * The files API over execd (docs/design/opensandbox-spike.md §3–4, B §e), with the exception semantics of the local
- * provider, which the shared contract tests pin:
+ * The files API over execd (docs/design/workspace-sandbox-opensandbox.md §3.3, §4.6), with the exception semantics of
+ * the local provider, which the shared contract tests pin:
  * <ul>
  * <li>{@code write} uploads to a temporary name in the target's directory, then renames with {@code mv -f}
  * ({@code CREATE_OR_REPLACE}) or links with {@code ln} ({@code CREATE_NEW}: link(2) refuses an existing target
@@ -152,7 +152,10 @@ final class OpenSandboxFiles implements SandboxFiles {
         }
     }
 
-    /** {@code POST /files/upload}: {@code metadata} must be a file part with a filename (B §e); parents are created. */
+    /**
+     * {@code POST /files/upload}: {@code metadata} must be a file part with a filename
+     * (docs/design/workspace-sandbox-opensandbox.md §3.3); parents are created.
+     */
     private void upload(String path, byte[] bytes) {
         final String boundary = "aimon-" + UUID.randomUUID();
         final ObjectNode metadata = execd.transport().json.createObjectNode().put("path", path).put("mode", FILE_MODE);
@@ -327,7 +330,8 @@ final class OpenSandboxFiles implements SandboxFiles {
         } catch (HttpErrors.NotFound e) {
             throw execd.notFound(e, () -> new FileNotFoundException(from));
         } catch (SandboxProviderException e) {
-            // "Already exists" is only told apart by the message: the code is a generic RUNTIME_ERROR (B §e).
+            // "Already exists" is only told apart by the message: the code is a generic RUNTIME_ERROR
+            // (docs/design/workspace-sandbox-opensandbox.md §3.3).
             if (e.getMessage().contains("already exists")) {
                 throw new FileAlreadyExistsException(to);
             }

@@ -30,8 +30,8 @@ import at.aimon.core.shell.exception.ShellExecutionException;
 
 /**
  * The contract of a workspace sandbox environment's {@link RuntimeFileSystem} — core's framework-only file access, on
- * which core's {@code ExecuteCode} shell engine writes its reply files (docs/design/ptc-shell-provider.md §6.2). Core
- * publishes no contract suite for it, so this is the one a sandbox environment over any provider must pass: atomic
+ * which core's {@code ExecuteCode} shell engine writes its reply files (docs/design/workspace-sandbox-testing.md §1.4).
+ * Core publishes no contract suite for it, so this is the one a sandbox environment over any provider must pass: atomic
  * create-only writes that refuse anything existing, reads that never follow a link and are bounded, deletes that remove
  * a link rather than its target, and confinement to {@code /workspace}.
  *

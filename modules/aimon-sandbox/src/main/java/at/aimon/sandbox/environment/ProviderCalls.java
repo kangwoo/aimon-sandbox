@@ -10,7 +10,7 @@ import at.aimon.sandbox.workspace.SandboxWorkspaceManager;
 
 /**
  * Turns provider failures during a file, staging or search call into what core's tools report
- * (docs/design/workspace-sandbox.md §15): a sandbox found gone marks its slot lost and fails with the "lost"
+ * (docs/design/workspace-sandbox.md §7): a sandbox found gone marks its slot lost and fails with the "lost"
  * message, so the next call recreates it; any other provider failure is "unavailable". Neither reaches a tool as a
  * raw provider exception.
  */
