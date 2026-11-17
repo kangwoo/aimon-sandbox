@@ -332,12 +332,14 @@ class OpenSandboxProviderTest {
         }
 
         @Test
-        void extendExpiryRefusesAPausedSandboxAndReportsAGoneOne() {
+        void extendExpiryRenewsAPausedSandboxAndReportsAGoneOne() {
             final ProviderSandboxRef ref = created();
             server.sandboxes.get(ref.sandboxId()).state = "Paused";
+            final Instant until = Instant.now().plusSeconds(3600).truncatedTo(ChronoUnit.MICROS);
 
-            assertThatThrownBy(() -> provider.extendExpiry(ref, Instant.now().plusSeconds(3600)))
-                    .hasMessageContaining("paused");
+            provider.extendExpiry(ref, until);
+
+            assertThat(server.sandboxes.get(ref.sandboxId()).expiresAt).isEqualTo(until);
             server.sandboxes.clear();
             assertThatThrownBy(() -> provider.extendExpiry(ref, Instant.now().plusSeconds(3600)))
                     .isInstanceOf(SandboxNotFoundException.class);
