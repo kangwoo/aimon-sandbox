@@ -114,9 +114,9 @@ path(glob)로 정의한다. port 는 범위에 넣지 않는다 — port 는 sch
    접미사가 다른 쪽 접미사로 끝나는 두 와일드카드), 어떤 path 쌍이 겹치는(같은 정확 경로, prefix `p*` 와 `p` 로 시작하는 정확 경로,
    한쪽이 다른 쪽으로 시작하는 두 prefix) 것이다
 3. 모든 바인딩 host 를 프로파일의 `egress` 가 **명시적으로** 허용하는가. vault 는 egress 정책이 허용하지 않는 host 의 바인딩을
-   거부하고 `defaultAction: allow` 는 허용으로 치지 않는다. 그래서 `credentials` 가 있는데 `egress` 가 없는 프로파일은 거부한다.
-   덮는 규칙은 같은 항목, 또는 `*.s` 가 `h.s` 를 덮는 것이다. `*.s` 는 `s` 를 덮지 않는다(vault 에 대고 egress 사이드카 v1.1.7 에서
-   잼 — 1.2.0 미확인)
+   거부한다. 1.1.x 의 vault 는 `defaultAction: allow` 를 허용으로 치지 않았지만, 1.2.0 의 vault 는 허용으로 치고 경고만 남긴다(1.2.0
+   소스로 확인). 그래서 `credentials` 가 있는데 `egress` 가 없는 프로파일은 거부한다(확인 필요: 이 규칙의 이유를 1.2.0 vault 에 맞춰
+   다시 적을지). 덮는 규칙은 같은 항목, 또는 `*.s` 가 `h.s` 를 덮는 것이다. `*.s` 는 `s` 를 덮지 않는다(1.2.0 소스로 확인)
 
 기동 검사 목록 전체는 [설정 §3](workspace-sandbox-configuration.md), vault 의 서버 쪽 동작은
 [OpenSandbox §3.5](workspace-sandbox-opensandbox.md) 가 소유한다.
@@ -176,8 +176,8 @@ execd 도 토큰을 검사하지 않는다([OpenSandbox §3](workspace-sandbox-o
 HARDENED_SECURITY_CONTEXT]` 를 적어야 돈다.
 
 **API 키가 신뢰 경계다.** API 키를 가진 누구든 샌드박스의 라벨(`aimon.at/*`)을 고칠 수 있으므로, 생성 때의 라벨 대조는 인코딩 버그와
-충돌을 막는 장치이지 변조 방지가 아니다([프로바이더 §4](workspace-sandbox-provider.md)). 라벨을 고칠 수 있다는 사실은 1.1.x 에서
-잰 사실이다(확인 필요: 1.2.0 에서도 API 키로 라벨을 고칠 수 있는가).
+충돌을 막는 장치이지 변조 방지가 아니다([프로바이더 §4](workspace-sandbox-provider.md)). API 키로 라벨을 고칠 수 있다는 사실은
+1.2.0 소스로 확인했다(`PATCH /sandboxes/{id}/metadata`).
 
 ## 8. 쿼터와 admission
 

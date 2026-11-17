@@ -54,11 +54,11 @@ OpenSandbox 를 어떻게 부르고, 서버가 실제로 어떻게 동작하며,
   (`DOCKER::SANDBOX_NOT_FOUND`), 다른 런타임에서도 그 접두어가 나온다 — 그래서 프로바이더는 HTTP 상태로 분류한다(§4.7).
 - **생성.** K8s 런타임의 생성은 블로킹이다. 파드가 Running 이 되고 IP 를 받을 때까지 최대 60초 붙잡고, 넘으면
   `504 KUBERNETES::POD_READY_TIMEOUT` 과 함께 BatchSandbox 를 지운다(롤백). Docker 런타임은 `Pending` 상태로 곧바로 돌아온다.
-  K8s 는 `resourceLimits` 가 없는 요청을 422 로 거부한다(1.1.x 에서 잼, 1.2.0 미확인) — 프로바이더는 늘 보낸다(§4.1).
+  `resourceLimits` 가 없는 요청은 런타임과 상관없이(풀 모드 제외) 422 로 거부된다(1.2.0 소스로 확인) — 프로바이더는 늘 보낸다(§4.1).
 - **라벨.** `aimon.at/*` 키를 받아들이고 `opensandbox.io/` 는 예약이다. 값은 K8s 라벨 규칙으로 검사한다(`:` · `/` · 64자 →
   400 `SANDBOX::INVALID_METADATA_LABEL`). [프로바이더 §4.3](workspace-sandbox-provider.md) 의 32자 base32 는 통과한다. 목록
   필터는 대소문자를 구분하므로 소문자로 보낸다. K8s 에서 `PATCH /metadata` 는 CR 의 라벨만 바꾸고 pause 중에는 파드가 없다 —
-  그래서 조정은 파드가 아니라 API 를 본다(1.1.x 에서 잼, 1.2.0 미확인).
+  그래서 조정은 파드가 아니라 API 를 본다(1.2.0 소스로 확인).
 - **목록.** 필터는 `metadata` 파라미터 **하나**에 `k=v&k=v` 를 담는다(반복하면 마지막 것만 쓰인다). 조건은 AND 다. 페이지 번호
   방식(한 페이지 최대 200, 커서 없음, 최신순)이라 목록 도중의 생성이 페이지를 민다 — 조정은 중복과 누락을 견딘다
   ([수명 §6.2](workspace-sandbox-lifecycle.md)). K8s 런타임은 지운 샌드박스를 파드가 사라질 때까지 `Stopping` 으로 나열한다.
@@ -66,17 +66,20 @@ OpenSandbox 를 어떻게 부르고, 서버가 실제로 어떻게 동작하며,
   ([프로바이더 §4.2](workspace-sandbox-provider.md)).
 - **삭제.** 없는 샌드박스의 `DELETE` 는 404 다.
 - **만료.** 만료에 이른 샌드박스는 상태를 남기지 않고 즉시 지워진다(CR 과 파드가 초 단위로). `timeout` 을 빼면 샌드박스는
-  만료되지 않는다. 서버가 내려가 있던 사이의 만료는 재기동 때 집행된다(1.1.x 에서 잼, 1.2.0 미확인). 서버는 만료 시각을
+  만료되지 않는다. Docker 런타임에서 서버가 내려가 있던 사이의 만료는 재기동 때 집행된다. K8s 런타임에서는 컨트롤러가 집행한다
+  (1.2.0 소스로 확인). 서버는 만료 시각을
   마이크로초까지만 저장한다.
 - **renew.** `renew-expiration` 은 절대 시각을 받아 미래인지만 보고, 만료를 줄이거나 서버 상한을 넘기는 요청도 받으며
-  (상한은 생성 때만 검사), 상한을 알려 주는 API 가 없다(1.1.x 에서 잼, 1.2.0 미확인). 그래서 프로바이더가 앞으로만 · 상한을
+  (상한은 생성 때만 검사), 상한을 알려 주는 API 가 없다(1.2.0 소스로 확인). 그래서 프로바이더가 앞으로만 · 상한을
   지킨다(§4.3).
 - **pause (계획 — 구현 단계 7).** 두 런타임 모두 일시 정지 중에도 만료 시각이 흐른다. Docker 는 컨테이너 동결(프로세스와
   파일이 남는다)이다. K8s 는 루트 파일 시스템을 레지스트리 이미지로 커밋하고 파드를 지웠다가, resume 때 같은 이름 · 새 IP 의 새
-  파드로 띄운다 — 파일은 남고 프로세스는 사라지며, 스냅숏 레지스트리가 필요하다. K8s 에서 멈춘 샌드박스를 renew 하면
-  컨트롤러가 원래 이미지로 파드를 다시 만들어 샌드박스가 `Failed` 가 되고 resume 은 409 다(업스트림 버그). Docker 에서 pause 중의
-  execd 호출은 실패하지 않고 멈춘다. (모두 1.1.x 에서 잼, 1.2.0 미확인.) 이 사실에서 나온 규칙 — pause 전에 만료를 민다, 멈춘
-  샌드박스에 `extendExpiry` 를 부르지 않는다 — 은 [수명 §5](workspace-sandbox-lifecycle.md)가 소유한다.
+  파드로 띄운다 — 파일은 남고 프로세스는 사라지며, 스냅숏 레지스트리가 필요하다(여기까지 1.2.0 소스로 확인). 1.1.x 의 K8s 에서는
+  멈춘 샌드박스를 renew 하면 컨트롤러가 원래 이미지로 파드를 다시 만들어 샌드박스가 `Failed` 가 되고 resume 은 409 였다(업스트림
+  버그). 1.2.0 의 컨트롤러는 `Paused` 인 샌드박스의 renew 를 새 pause 요청으로 보지 않고 파드도 만들지 않는다(1.2.0 소스로 확인).
+  Docker 에서 pause 중의 execd 호출은 실패하지 않고 멈춘다(1.1.x 에서 잼, 1.2.0 미확인). 이 사실에서 나온 규칙 — pause 전에 만료를
+  민다, 멈춘 샌드박스에 `extendExpiry` 를 부르지 않는다 — 은 [수명 §5](workspace-sandbox-lifecycle.md)가 소유한다(확인 필요: 1.2.0
+  에서 멈춘 샌드박스의 renew 가 파드를 다시 만들지 않으므로 두 규칙을 다시 볼지).
 
 ### 3.2 명령 실행
 
@@ -84,7 +87,7 @@ OpenSandbox 를 어떻게 부르고, 서버가 실제로 어떻게 동작하며,
   클러스터 밖에서는 `?use_server_proxy=true` 로 서버 프록시를 거친다. K8s 에서 resume 뒤에는 주소가 바뀐다 — 연결은 주소를
   캐시하되 연결 실패 한 번에 다시 해석한다(§4.4).
 - **명령.** 명령 문자열은 `bash -c` 의 인자 하나로 돈다. 인자 하나의 한도와 그에 맞춘 래퍼의 경계는
-  [셸 §2](workspace-sandbox-shell.md)가 다룬다. 없는 작업 디렉터리는 400 이다(1.1.x 에서 잼, 1.2.0 미확인).
+  [셸 §2](workspace-sandbox-shell.md)가 다룬다. 없는 작업 디렉터리는 400 이다(1.2.0 소스로 확인).
 - **출력 이벤트.** 출력은 줄 하나에 이벤트 하나로 온다. 1.2.0 의 execd 는 이벤트에 그 줄의 줄 끝(`\n`, `\r`, 또는 명령이 끝맺지
   않은 마지막 줄이면 없음)을 그대로 실으므로, 이벤트를 이어 붙이면 **바이트 그대로의 출력**이다. 진행 표시의 `\r` 도 남는다.
   옛 execd 는 줄 끝을 떼어 보내고 빈 줄을 `"\n"` 이벤트로 보냈다. 프로바이더는 어느 쪽인지 이벤트에서 읽어 옛 execd 의 줄에는
@@ -100,20 +103,22 @@ OpenSandbox 를 어떻게 부르고, 서버가 실제로 어떻게 동작하며,
   경로의 `$VAR` 를 펼치지만 정의되지 않은 변수는 거절하므로, 프로바이더는 `$TMPDIR` 을 `/tmp` 로 가정한다. execd 를 `TMPDIR`
   없이 띄우는 것은 배포 계약이다([설정 §4](workspace-sandbox-configuration.md)).
 - **kill.** `DELETE /command?id={init 이벤트의 id}` 가 프로세스 그룹에 SIGTERM 을, 3초 뒤 SIGKILL 을 보낸다. 명령의 `timeout` 은
-  곧바로 SIGKILL 이다(신호 순서와 3초는 1.1.x 에서 잼, 1.2.0 미확인). execd 는 프로세스 그룹까지만 끝내고 세션이나 cgroup
+  곧바로 SIGKILL 이다(1.2.0 소스로 확인). execd 는 프로세스 그룹까지만 끝내고 세션이나 cgroup
   단위로 끝내지 않는다 — 그룹 밖 자손의 처리는 [셸 §6](workspace-sandbox-shell.md).
 - **연결을 끊어도 명령은 죽지 않는다.** 명령의 수명이 HTTP 요청과 무관하다. 그래서 프로바이더의 `kill()` 과 `await` 초과는 반드시
   `DELETE` 를 보낸다(§4.4). 스트림이 도중에 끊기면 `GET /command/status/{id}` 로 종료 코드를 읽는다. status 는 종료 코드를 24시간
-  보존한다(1.1.x 에서 잼, 1.2.0 미확인).
+  보존한다(1.2.0 소스로 확인).
 - **종료 코드.** 0 이면 `execution_complete` 이벤트만 온다. 그 밖에는 `error` 이벤트다. 1.2.0 의 execd 는 숫자
-  `error.exit_code` 를 싣는다. 옛 execd 는 문자열 `error.evalue` 만 실었고, 신호로 끝나면 `-1` 이었다. 1.2.0 이 신호로 끝난 명령을
-  어떻게 보고하는지는 확인하지 않았다(확인 필요: 1.2.0 의 신호 종료 보고 모양).
+  `error.exit_code` 를 싣는다. 옛 execd 는 문자열 `error.evalue` 만 실었고, 신호로 끝나면 `-1` 이었다. 1.2.0 의 execd 도 신호로
+  끝난 명령의 `error.exit_code` 를 `-1` 로 싣는다 — 신호 이름은 `traceback` 의 `signal: killed` 같은 문구에만 남는다(1.2.0 소스로
+  확인).
 - **백그라운드 모드는 쓰지 않는다.** `/command` 의 백그라운드 모드는 stdout 과 stderr 를 합친다. 셸의 백그라운드 명령도
   포그라운드 `/command` 로 돈다.
 - **실행 uid.** 명령과 files API 는 execd 프로세스의 사용자로 돈다. files API 에 uid 인자가 없던 execd v1.1.0 에서는 `/command` 의
   uid 로 돈 명령이 files API 가 쓴 파일에 쓰지 못했다. 그래서 프로바이더는 `/command` 의 uid 인자를 쓰지 않는다 — 결정과 이유,
-  "uid 1000 으로 돈다" 를 지키는 방법은 [설정 §4](workspace-sandbox-configuration.md)(확인 필요: 1.2.0 files API 의 uid 지원 여부.
-  1.1.1 부터 files API 에 uid 경로가 있다는 기록은 [보안 §10](workspace-sandbox-security.md)).
+  "uid 1000 으로 돈다" 를 지키는 방법은 [설정 §4](workspace-sandbox-configuration.md). 1.2.0 의 execd 는 `/v1/filesystem/{uid}/{gid}/…`
+  경로로 files API 도 지정한 uid 로 돌린다(1.2.0 소스로 확인. 1.1.1 부터라는 기록은 [보안 §10](workspace-sandbox-security.md)) —
+  그래서 이 결정의 이유는 1.2.0 에서 약해졌다(확인 필요: 결정을 다시 볼지).
 
 ### 3.3 파일
 
@@ -121,24 +126,26 @@ OpenSandbox 를 어떻게 부르고, 서버가 실제로 어떻게 동작하며,
 - **`/files/mv` 는 덮어쓰지 않지만 원자적이지 않다.** "이미 있음" 을 stat 한 뒤 rename 으로 검사한다. "이미 있음" 은 500
   `RUNTIME_ERROR` 의 메시지로만 구분된다.
 - **`stat`** 의 mtime 은 나노초이고 해시 · etag 는 없다.
-- **업로드**는 multipart 이고, `metadata` 파트를 파일 파트(filename 포함)로 보내야 한다(아니면 400 — 1.1.x 에서 잼, 1.2.0
-  미확인).
-- **다운로드**는 `GET /files/download` 에 `Range` 헤더로 범위를 받는다. 디렉터리를 다운로드하면 연결이 끊기므로(1.1.x 에서 잼, 1.2.0 미확인) 먼저 stat 한다.
+- **업로드**는 multipart 이고, `metadata` 파트를 파일 파트(filename 포함)로 보내야 한다(아니면 400 — 1.2.0 소스로
+  확인).
+- **다운로드**는 `GET /files/download` 에 `Range` 헤더로 범위를 받는다. 디렉터리를 다운로드하면 연결이 끊기므로(1.2.0 소스로 확인) 먼저 stat 한다.
 - **재귀 목록**(`/directories/list`)은 깊이 `-1` 을 거부한다. 그래서 프로바이더는 깊이 64 로 묻고, 그보다 깊은 항목은 재귀 목록에
   나오지 않는다.
-- 파일을 지나는 경로(`a.txt/b`, `ENOTDIR`)의 stat 에 execd 가 어떤 상태로 답하는지는 확인하지 않았다(확인 필요: `ENOTDIR` 경로에
-  execd 가 답하는 상태 코드). 프로바이더는 404 만 "없음" 으로 본다.
+- 파일을 지나는 경로(`a.txt/b`, `ENOTDIR`)의 stat 에 execd 는 404 가 아니라 500 `RUNTIME_ERROR` 로 답한다(1.2.0 소스로 확인).
+  프로바이더는 404 만 "없음" 으로 본다.
 
 이 사실들에 대한 프로바이더의 대응은 §4.6 이다. 계약 스위트의 파일 검사가 1.2.0 docker 계층에서 돈다.
 
 ### 3.4 볼륨
 
-(계획 — 구현 단계 5. 아래는 모두 1.1.x 에서 잼, 1.2.0 미확인.)
+(계획 — 구현 단계 5. 서버가 정하는 것은 1.2.0 소스로 확인했다. Docker · K8s 가 정하는 삭제 동작(마지막 항목)은 1.1.x 에서 잼,
+1.2.0 미확인.)
 
 - 생성은 `volumes[].pvc{claimName, createIfNotExists, storageClass, storage, accessModes}` 와 마운트마다의 `readOnly` 다.
   `claimName` 은 DNS 라벨 규칙을 따른다 — [프로바이더 §5](workspace-sandbox-provider.md) 의 이름 규칙이 맞는다.
 - Docker 런타임에서 `pvc` 는 named volume 이 되고, 한쪽 `rw` · 다른 쪽 `readOnly` 가 명령과 files API 모두에 걸린다. 크기 ·
-  class · access mode 는 무시된다. K8s 런타임은 RWX StorageClass 가 있으면 된다. 만들어진 PVC 에는 라벨도 ownerRef 도 없다.
+  class · access mode 는 무시된다. K8s 런타임은 RWX StorageClass 가 있으면 된다. `deleteOnSandboxTermination` 을 켜지 않으면
+  만들어진 PVC 에는 라벨도 ownerRef 도 없다.
 - **삭제 경로는 우리 몫이다.** Docker 는 `docker volume rm` 이고 마운트 중이면 "volume is in use" 다(`VolumeInUseException`).
   K8s 는 PVC 삭제이고, 마운트 중이면 `pvc-protection` 이 마지막 마운트가 사라질 때까지 붙잡는다 — 그동안 그 PVC 를 쓰는 새
   샌드박스는 60초 뒤 504 다. 그래서 K8s 의 `VolumeReclaimer` 는 `Terminating` 인 PVC 를 "마운트 중" 으로 본다. 이 규칙의 쓰임은
@@ -155,10 +162,11 @@ OpenSandbox 를 어떻게 부르고, 서버가 실제로 어떻게 동작하며,
   iptables nat 테이블이 없기 때문이다.
 - **Docker 의 `network_mode`.** Docker 런타임의 서버는 `[docker] network_mode = "bridge"` 일 때만 `networkPolicy` 를 받는다. 기본값
   `host` 와 사용자 정의 네트워크에서는 400 이다. 프로바이더는 이 서버 설정을 볼 수 없다([설정 §5](workspace-sandbox-configuration.md)).
-- **샌드박스는 자기 정책을 바꿀 수 없다.** 사이드카 API 가 토큰을 요구한다(401)(1.1.x 에서 잼, 1.2.0 미확인).
-- **사이드카는 샌드박스보다 늦게 뜬다.** `Running` 직후 잠시 `GET /networkpolicy` 와 vault 가 서버 프록시를 통해 500 으로
-  답한다(1.1.x 에서 잼, 1.2.0 미확인). egress 가 있으면 execd 의 bootstrap 이 사이드카의 CA 를 기다린 뒤에 execd 를 띄우므로,
-  `Running` 직후의 첫 명령이 502 를 받을 수 있다(1.1.x 에서 잼, 1.2.0 미확인). 프로바이더는 둘 다 기다린다(§4.1). 그 CA 를 git 이
+- **샌드박스는 자기 정책을 바꿀 수 없다.** 사이드카 API 가 토큰을 요구한다(401)(1.2.0 소스로 확인).
+- **사이드카는 샌드박스보다 늦게 뜬다.** `Running` 직후 잠시 `GET /networkpolicy` 와 vault 가 서버 프록시를 통해 실패한다(1.1.x
+  에서 500 으로 잼, 1.2.0 미확인). 1.2.0 서버의 프록시는 사이드카에 연결하지 못하면 502 로 답한다(1.2.0 소스로 확인). 자격 증명
+  프록시(`credentialProxy.enabled`)를 켜면 execd 의 bootstrap 이 사이드카의 CA 를 기다린 뒤에 execd 를 띄우므로(1.2.0 소스로 확인),
+  `Running` 직후의 첫 명령이 502 를 받을 수 있다. 프로바이더는 둘 다 기다린다(§4.1). 그 CA 를 git 이
   신뢰하게 하는 방법은 [셸 §10](workspace-sandbox-shell.md).
 - **vault.** 1.2.0 서버는 `/v1/sandboxes/{id}/credential-vault` 경로를 연다. Docker 와 K8s 런타임에서 서버가 사이드카 자신의
   `/credential-vault`(포트 18080)를 사이드카의 인증 토큰과 함께 프록시하므로 의미는 사이드카의 것이다. 프로바이더는 사이드카의
@@ -172,7 +180,8 @@ OpenSandbox 를 어떻게 부르고, 서버가 실제로 어떻게 동작하며,
   [설정 §5](workspace-sandbox-configuration.md), 정책 원문은 [가이드 §6](../guide/opensandbox-kubernetes.md).
 - **Docker.** OpenSandbox 안에는 막을 방법이 없다. execd 가 토큰 없이 모든 인터페이스에 열리고, 옆 샌드박스에서 root 명령을
   실행할 수 있었다. egress 정책은 나가는 쪽만 막고 들어오는 명령은 그대로다. 모든 샌드박스에 deny 정책을 걸고 `publish_host` 를
-  루프백으로 묶고 호스트 방화벽을 거는 조합이 있지만, AIMON 은 그것을 확인할 수 없다. (1.1.x 에서 잼, 1.2.0 미확인.) 그래서
+  루프백으로 묶고 호스트 방화벽을 거는 조합이 있지만, AIMON 은 그것을 확인할 수 없다. (execd 에 토큰이 없고 포트가 기본
+  `0.0.0.0` 에 열리는 것은 1.2.0 소스로 확인.) 그래서
   Docker 런타임은 `NETWORK_ISOLATION` 을 선언할 수 없다 — 설정 오류다(§5).
 - **인증 경계.** execd 는 토큰을 검사하지 않는다. 단일 테넌트 모드의 서버 프록시 경로 `/v1/sandboxes/{id}/proxy/{port}` 는 API
   키를 검사하지 않는다. 서버나 execd 포트에 닿는 누구든 샌드박스 id 만 알면 명령을 실행한다. 1.2.0 K8s 런타임에서 확인했고,
@@ -188,7 +197,7 @@ OpenSandbox 를 어떻게 부르고, 서버가 실제로 어떻게 동작하며,
   `capabilities.drop` 을 `[NET_ADMIN]` 으로 덮어쓴다(템플릿의 `[ALL]` 이 사라진다). 템플릿 원문은
   [가이드 §5](../guide/opensandbox-kubernetes.md).
 - **Docker.** 샌드박스는 root 로 돌고, 루트 파일 시스템이 쓰기 가능하며, 요청에 user 필드가 없다(모르는 필드는 조용히 무시한다).
-  서버 설정의 cap drop · no-new-privileges · seccomp · pids 는 걸린다(1.1.x 에서 잼, 1.2.0 미확인). 그래서 Docker 런타임은
+  서버 설정의 cap drop · no-new-privileges · seccomp · pids 는 걸린다(1.2.0 소스로 확인). 그래서 Docker 런타임은
   `HARDENED_SECURITY_CONTEXT` 를 선언할 수 없고 `insecureAllow` 로만 쓴다.
 - execd 는 OpenSandbox 가 넣는다 — Docker 에서는 컨테이너에 복사되고 K8s 에서는 init 컨테이너가 넣는다. 그래서 샌드박스 이미지에
   execd 가 필요 없다([설정 §4](workspace-sandbox-configuration.md)).
@@ -202,9 +211,9 @@ SPI 는 풀을 요청하지 않는다([프로바이더 §7](workspace-sandbox-pr
 `OpenSandboxProviderConfig` 의 공개 설정이 아니고, k8s 테스트 계층의 풀 모드 시험만 패키지 안에서 생성 본문의 `extensions` 를
 채운다.
 
-- 서버는 생성 본문의 `extensions.poolRef` 로 풀 모드를 고른다. 풀 모드에서는 `networkPolicy` 와 `volumes` 를 거부하고, `image` ·
-  `resourceLimits` 를 무시하며(이미지는 `Pool` CR 의 것), 라벨은 BatchSandbox 메타데이터에 붙는다(확인 필요: 업스트림 소스로 읽은
-  사실, 1.2.0 미확인). 그래서 풀은 egress 정책 · 공유 볼륨 · 자격 증명이 없는 프로파일에만 쓸 수 있다.
+- 서버는 생성 본문의 `extensions.poolRef` 로 풀 모드를 고른다. 풀 모드에서는 `networkPolicy` · `credentialProxy` · `volumes` 를
+  거부하고, `image` · `resourceLimits` 를 무시하며(이미지는 `Pool` CR 의 것), 라벨은 BatchSandbox 메타데이터에 붙는다(1.2.0
+  소스로 확인). 그래서 풀은 egress 정책 · 공유 볼륨 · 자격 증명이 없는 프로파일에만 쓸 수 있다.
 - 풀 파드의 PID 1 은 task-executor 이고, task-executor 는 자기 자식만 기다리며 고아를 거두지 않는다. PID 1 이 아닌
   `execd --init` 은 subreaper 가 되어 고아를 거둔다. 이 사실에서 나온 운영자 요구(`execd_run_as_init = true`)는
   [설정 §5](workspace-sandbox-configuration.md), 셸 엔진에 대한 귀결은 [셸 엔진 §7](workspace-sandbox-shell-engine.md).
@@ -321,8 +330,9 @@ execd 가 성공으로 답하므로 이미 지워졌으면 해가 없다.
   하나가 나머지를 남기지 않게.
 - **처리되지 않은 호출은 다시 부르지 않는다.** 전송 실패 · 요청 타임아웃 · 502 · 503 · 504 는 execd 가 경로를 하나도 시도하지 않은
   경우다. 502 는 서버 프록시가 execd 에 연결하지 못했을 때의 답이고(연결 거절이면 곧바로, 연결 타임아웃이면 프록시의 타임아웃 —
-  180초 — 뒤에), 503 · 504 는 런타임 초기화 전의 execd 나 앞단 게이트웨이의 답이다(프록시 응답의 세부는 1.1.x 서버 소스에서 읽음,
-  1.2.0 미확인). 다시 불러도 첫 호출을 받지 못한 같은 execd 에 닿을 뿐이다. 일시적 오류 한 번에 그 실행의 스풀이 남을 수 있지만,
+  180초 — 뒤에), 503 · 504 는 런타임 초기화 전의 execd 나 앞단 게이트웨이의 답이다. 1.2.0 서버의 프록시는 응답 도중 연결이 끊겨도
+  502 로, 읽기 · 쓰기가 180초를 넘어도 504 로 답하며, 이때는 execd 가 호출을 받았을 수 있다(1.2.0 소스로 확인. 확인 필요: 이 두
+  경우를 처리되지 않은 호출로 묶는 이유를 다시 볼지). 다시 불러도 첫 호출을 받지 못한 같은 execd 에 닿을 뿐이다. 일시적 오류 한 번에 그 실행의 스풀이 남을 수 있지만,
   execd 가 정말 답하지 않을 때 실행마다 기다림이 배로 느는 쪽보다 낫다고 본다. 스풀 삭제는 best effort 이고 실패는 경고 로그다.
 - **시점.** 종료 이벤트를 받았거나 끊긴 스트림 뒤 status 로 종료 코드를 읽었을 때, `await` 가 결과를 돌려주기 **전에** 지운다.
   그래서 `await` 가 끝나면 스풀도 없다. `await` 가 답 없는 명령을 포기한 경우에는 결과가 먼저 나가고, 리더가 스트림을 닫은 뒤
@@ -437,7 +447,7 @@ port-forward 처럼 AIMON 이 보는 서버 주소와 요청의 `Host` 가 다�
 `networkIsolation` 을 Kubernetes 에서 선언하면서 `controlPlaneProbes` 를 유도된 기본값으로 두면 경고를 남긴다. AIMON 이 서버에
 NAT 나 port-forward 로 닿으면 JVM 이 보는 주소가 샌드박스가 보는 주소와 다르므로, 서버의 클러스터 안 주소를 직접 적어야 한다.
 
-`defaultResources` 가 있는 이유: K8s 는 `resourceLimits` 가 없는 생성을 거부한다(§3.1, 1.1.x 에서 잼, 1.2.0 미확인).
+`defaultResources` 가 있는 이유: 서버는 `resourceLimits` 가 없는 생성을 거부한다(§3.1, 1.2.0 소스로 확인).
 
 운영자가 서버 쪽에서 준비할 것(egress 모드, `network_mode`, NetworkPolicy, 강화 템플릿, `execd_run_as_init`)은
 [설정 §5](workspace-sandbox-configuration.md)와 [가이드](../guide/opensandbox-kubernetes.md).
@@ -453,4 +463,4 @@ NAT 나 port-forward 로 닿으면 JVM 이 보는 주소가 샌드박스가 보�
 - 문서의 umbrella 차트 설치 명령(`--create-namespace`)이 base 차트가 렌더링하는 Namespace 와 충돌한다. 1.2.0 에서도 충돌한다
   ([가이드 §4.1](../guide/opensandbox-kubernetes.md)).
 
-(확인 필요: 넷을 실제로 올렸는지, 1.2.0 이후 어느 것이 고쳐졌는지.) 프로바이더의 앞 두 대응(§4.3)은 서버가 고쳐져도 해가 없다.
+(확인 필요: 넷을 실제로 올렸는지. 1.2.0 소스로 보면 첫째는 고쳐졌고, 둘째는 API 문서가 의도된 동작으로 적는다.) 프로바이더의 앞 두 대응(§4.3)은 서버가 고쳐져도 해가 없다.
