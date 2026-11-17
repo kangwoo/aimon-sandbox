@@ -9,9 +9,9 @@ import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * The default store: a map in this JVM. <b>Single node only</b> (docs/design/workspace-sandbox-domain.md §4.4) — a
- * restart loses every record, tombstones included, and the sandboxes those records owned are left to provider expiry
- * until orphan reconciliation arrives (implementation step 4). Multi-node deployments need a persistent store
- * ({@code aimon-sandbox-store-jdbc}, step 6).
+ * restart loses every record, tombstones included; the janitor's reconciliation then destroys the sandboxes those
+ * records owned as orphans after {@code orphanGrace} (docs/design/workspace-sandbox-lifecycle.md §6.2). Multi-node
+ * deployments need a persistent store ({@code aimon-sandbox-store-jdbc}, planned for implementation step 6).
  */
 public final class InMemorySandboxWorkspaceStore implements SandboxWorkspaceStore {
 
