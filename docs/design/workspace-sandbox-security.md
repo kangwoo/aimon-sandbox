@@ -115,8 +115,8 @@ path(glob)로 정의한다. port 는 범위에 넣지 않는다 — port 는 sch
    한쪽이 다른 쪽으로 시작하는 두 prefix) 것이다
 3. 모든 바인딩 host 를 프로파일의 `egress` 가 **명시적으로** 허용하는가. vault 는 egress 정책이 허용하지 않는 host 의 바인딩을
    거부한다. 1.1.x 의 vault 는 `defaultAction: allow` 를 허용으로 치지 않았지만, 1.2.0 의 vault 는 허용으로 치고 경고만 남긴다(1.2.0
-   소스로 확인). 그래서 `credentials` 가 있는데 `egress` 가 없는 프로파일은 거부한다(확인 필요: 이 규칙의 이유를 1.2.0 vault 에 맞춰
-   다시 적을지). 덮는 규칙은 같은 항목, 또는 `*.s` 가 `h.s` 를 덮는 것이다. `*.s` 는 `s` 를 덮지 않는다(1.2.0 소스로 확인)
+   소스로 확인). 이 모듈은 vault 보다 엄격하게, 바인딩 host 를 egress 허용 목록에 명시하도록 요구한다 — 그러면 vault 가 어느
+   버전이든 받아들이는 바인딩만 기동을 통과한다. 그래서 `credentials` 가 있는데 `egress` 가 없는 프로파일은 거부한다. 덮는 규칙은 같은 항목, 또는 `*.s` 가 `h.s` 를 덮는 것이다. `*.s` 는 `s` 를 덮지 않는다(1.2.0 소스로 확인)
 
 기동 검사 목록 전체는 [설정 §3](workspace-sandbox-configuration.md), vault 의 서버 쪽 동작은
 [OpenSandbox §3.5](workspace-sandbox-opensandbox.md) 가 소유한다.

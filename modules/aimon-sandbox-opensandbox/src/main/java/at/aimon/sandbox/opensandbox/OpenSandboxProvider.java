@@ -52,7 +52,7 @@ import at.aimon.sandbox.provider.VolumeMount;
  * <p>
  * It enforces what the server does not (docs/design/workspace-sandbox-opensandbox.md §4): {@code create} always sends
  * {@code timeout} (without one a sandbox lives forever); {@link #extendExpiry} reads the current expiry, ignores a move
- * backwards, clamps to {@code max-expiry} and refuses a paused sandbox; {@link #destroy} treats 404 as success; errors
+ * backwards and clamps to {@code max-expiry}; {@link #destroy} treats 404 as success; errors
  * are classified by HTTP status. {@code create} is best-effort idempotent on the {@code sandbox-key} label (the server
  * has no idempotency key): a sandbox already carrying it is returned — the oldest when a takeover race made several,
  * the rest are left to reconciliation as duplicates. A sandbox that does not become {@code Running} in time is
@@ -446,18 +446,15 @@ public final class OpenSandboxProvider implements SandboxProvider {
     /**
      * Forward only and at most {@code max-expiry} from now — the server enforces neither on renew
      * (docs/design/workspace-sandbox-opensandbox.md §3.1, §4.3). Two nodes extending at once may race (read, then
-     * renew); both write about {@code now + terminateAfter}. A paused sandbox is refused: on Kubernetes renewing one
-     * breaks it (docs/design/workspace-sandbox-opensandbox.md §3.1). The target is rounded up to a whole microsecond:
+     * renew); both write about {@code now + terminateAfter}. A paused sandbox is extended like any other: 1.2.0 renews
+     * one without touching its pod (docs/design/workspace-sandbox-opensandbox.md §3.1). The target is rounded up to a
+     * whole microsecond:
      * the server keeps microseconds and drops the rest, so a nanosecond clock (Linux) would otherwise get an expiry
      * just before the one asked for.
      */
     @Override
     public void extendExpiry(ProviderSandboxRef ref, Instant until) {
         final ProviderSandbox current = status(ref).orElseThrow(() -> new SandboxNotFoundException(ref));
-        if (current.state() == ProviderSandboxState.PAUSED) {
-            throw new SandboxProviderException("cannot extend the expiry of a paused sandbox",
-                    SandboxProviderException.Kind.PERMANENT, null);
-        }
         final Instant now = clock.instant();
         final Instant cap = now.plus(config.maxExpiry()).truncatedTo(ChronoUnit.MICROS);
         final Instant wanted = ceilToMicros(until);

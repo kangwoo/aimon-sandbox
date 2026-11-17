@@ -6,6 +6,14 @@ behaviour; each such release lists what to change under "Upgrading".
 
 ## [Unreleased]
 
+### Changed
+
+- `OpenSandboxProvider.extendExpiry` extends a paused sandbox like any other instead of refusing it with a permanent
+  error. The refusal guarded against a Kubernetes bug in OpenSandbox 1.1.x (renewing a paused sandbox recreated its pod
+  and left it `Failed`) that 1.2.0 fixes. Nothing pauses a sandbox yet — `PAUSE_RESUME` arrives with implementation
+  step 7 — so no running deployment sees the difference
+  ([design](docs/design/workspace-sandbox-lifecycle.md) §4.1).
+
 ## [0.1.1] - 2026-11-16
 
 Requires **aimon-core 0.3.4** and **OpenSandbox 1.2.0** (server, execd and egress sidecar), and Java 17.
