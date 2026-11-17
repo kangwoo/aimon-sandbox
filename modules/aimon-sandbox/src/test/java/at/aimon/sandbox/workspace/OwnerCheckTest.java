@@ -49,7 +49,7 @@ class OwnerCheckTest {
     }
 
     @Test
-    @DisplayName("§16: another tenant's principal is refused at connect, close and reopen")
+    @DisplayName("another tenant's principal is refused at connect, close and reopen")
     void otherTenantIsRejectedAtEveryEntryPoint() throws Exception {
         final SandboxHarness h = harness(SandboxSettings.WorkspaceAccess.TENANT);
         final SessionId session = SessionId.generate();
@@ -65,7 +65,7 @@ class OwnerCheckTest {
     }
 
     @Test
-    @DisplayName("§16: same tenant, other user, workspace-access principal — refused")
+    @DisplayName("same tenant, other user, workspace-access principal — refused")
     void sameTenantOtherUserIsRejectedUnderPrincipalAccess() throws Exception {
         final SandboxHarness h = harness(SandboxSettings.WorkspaceAccess.PRINCIPAL);
         final SessionId session = SessionId.generate();
@@ -85,7 +85,7 @@ class OwnerCheckTest {
     }
 
     @Test
-    @DisplayName("§16: record lost, a non-owner connects first — the owner is still the session's owner")
+    @DisplayName("record lost, a non-owner connects first — the owner is still the session's owner")
     void ownerComesFromSessionOwnerNotFirstCaller() throws Exception {
         final SessionId session = SessionId.generate();
         harness = SandboxHarness.builder().tenantResolver(BY_PREFIX)
@@ -118,7 +118,7 @@ class OwnerCheckTest {
     }
 
     @Test
-    @DisplayName("§8.3: a USER and a GROUP with the same id are different owners, both ways")
+    @DisplayName("a USER and a GROUP with the same id are different owners, both ways")
     void aUserAndAGroupWithTheSameIdAreDifferentOwners() throws Exception {
         final SandboxHarness h = harness(SandboxSettings.WorkspaceAccess.PRINCIPAL);
         final Principal user = Principal.user("t1-eng");
@@ -138,7 +138,7 @@ class OwnerCheckTest {
     }
 
     @Test
-    @DisplayName("§8.3: a USER named like an allowed system principal does not pass that principal's owner check")
+    @DisplayName("a USER named like an allowed system principal does not pass that principal's owner check")
     void aUserNamedLikeASystemPrincipalIsNotThatPrincipal() throws Exception {
         harness = SandboxHarness.builder().settings(s -> s.workspaceAccess(SandboxSettings.WorkspaceAccess.PRINCIPAL))
                 .build();
@@ -151,7 +151,7 @@ class OwnerCheckTest {
     }
 
     @Test
-    @DisplayName("§8.3: a USER named anonymous is not the owner of principal-less executions, both ways")
+    @DisplayName("a USER named anonymous is not the owner of principal-less executions, both ways")
     void aUserNamedAnonymousIsNotAPrincipalLessExecution() throws Exception {
         harness = SandboxHarness.builder().settings(s -> s.workspaceAccess(SandboxSettings.WorkspaceAccess.PRINCIPAL))
                 .build();
@@ -177,7 +177,7 @@ class OwnerCheckTest {
     }
 
     @Test
-    @DisplayName("management §6.5: a record's own access overrides workspace-access for the use right, both ways")
+    @DisplayName("a record's own access overrides workspace-access for the use right, both ways")
     void aRecordsAccessDecidesTheUseRight() {
         final SandboxHarness h = harness(SandboxSettings.WorkspaceAccess.PRINCIPAL);
         final SandboxWorkspaceManager manager = h.sandbox.manager();
@@ -197,7 +197,7 @@ class OwnerCheckTest {
     }
 
     @Test
-    @DisplayName("management §6.5: only the owner principal manages a MANAGED record, whatever its access")
+    @DisplayName("only the owner principal manages a MANAGED record, whatever its access")
     void manageOfAManagedRecordNeedsTheOwnerPrincipal() {
         final SandboxHarness h = harness(SandboxSettings.WorkspaceAccess.TENANT);
         final SandboxWorkspace shared = managed(h, ALICE, SandboxSettings.WorkspaceAccess.TENANT);

@@ -98,7 +98,7 @@ class UnannouncedResetIT {
     }
 
     @Test
-    @DisplayName("#28: idle past closeAfter, a Stop-hook-only turn resets — the next tool result hears it exactly once")
+    @DisplayName("idle past closeAfter, a Stop-hook-only turn resets — the next tool result hears it exactly once")
     void aHookOnlyTurnsResetIsToldOnTheNextTurnOnce() throws Exception {
         assertThat(modelFacingTurn("echo before > " + KEPT)).isEmpty();
         idleClose();
@@ -122,7 +122,7 @@ class UnannouncedResetIT {
     }
 
     @Test
-    @DisplayName("§9: a staging call after the last tool result resets — the next turn hears it once")
+    @DisplayName("a staging call after the last tool result resets — the next turn hears it once")
     void aStagingCallsResetIsToldOnTheNextTurn() throws Exception {
         Files.createDirectories(source.resolve("demo"));
         Files.writeString(source.resolve("demo/run.sh"), "echo hi\n");
@@ -137,7 +137,7 @@ class UnannouncedResetIT {
     }
 
     @Test
-    @DisplayName("§6.3: the hook's re-provisioning fails after the reset — the next turn still hears the reset once")
+    @DisplayName("the hook's re-provisioning fails after the reset — the next turn still hears the reset once")
     void aHooksFailedRecreateKeepsTheReset() throws Exception {
         modelFacingTurn("true");
         idleClose();
@@ -154,7 +154,7 @@ class UnannouncedResetIT {
     }
 
     @Test
-    @DisplayName("§7: the ordinary path — a reset drained in its own turn is never told again")
+    @DisplayName("the ordinary path — a reset drained in its own turn is never told again")
     void aResetDrainedInItsTurnIsNotRepeated() throws Exception {
         modelFacingTurn("true");
         idleClose();
@@ -165,7 +165,7 @@ class UnannouncedResetIT {
     }
 
     @Test
-    @DisplayName("§7: an acknowledgement still queued at the next turn's bind repeats the reset once — the bounded window")
+    @DisplayName("an acknowledgement still queued at the next turn's bind repeats the reset once — the bounded window")
     void aDelayedAcknowledgementRepeatsTheResetOnce() throws Exception {
         final QueueingExecutor background = new QueueingExecutor();
         harness.close();
@@ -184,7 +184,7 @@ class UnannouncedResetIT {
     }
 
     @Test
-    @DisplayName("§12: a reset after the drain that delivered a switch does not make its queued acknowledgement lose")
+    @DisplayName("a reset after the drain that delivered a switch does not make its queued acknowledgement lose")
     void aResetAfterADeliveredSwitchKeepsTheSwitchRecorded() throws Exception {
         final QueueingExecutor background = new QueueingExecutor();
         harness.close();
@@ -209,7 +209,7 @@ class UnannouncedResetIT {
     }
 
     @Test
-    @DisplayName("§2.2: a fork's reset is told to the fork only and never kept on the session's record")
+    @DisplayName("a fork's reset is told to the fork only and never kept on the session's record")
     void aForksResetIsNeverKept() throws Exception {
         final ExecutionEnvironment parent = harness.mainTurn(session, ALICE);
         bash(parent, "true");
@@ -228,7 +228,7 @@ class UnannouncedResetIT {
     }
 
     @Test
-    @DisplayName("§3.1 (c), (d): setting and clearing a session's options keep its unannounced reset")
+    @DisplayName("setting and clearing a session's options keep its unannounced reset")
     void setAndClearKeepTheReset() throws Exception {
         modelFacingTurn("true");
         idleClose();
@@ -247,7 +247,7 @@ class UnannouncedResetIT {
     }
 
     @Test
-    @DisplayName("§5.3: the acknowledgement clears only the value it delivered; the switch part keeps its strict CAS")
+    @DisplayName("the acknowledgement clears only the value it delivered; the switch part keeps its strict CAS")
     void theAcknowledgementComparesTheValue() {
         final SandboxWorkspaceManager manager = harness.sandbox.manager();
         final UnannouncedReset older = UnannouncedReset.of(derived(), "primary", Instant.parse("2026-01-01T00:00:00Z"));
@@ -267,7 +267,7 @@ class UnannouncedResetIT {
     }
 
     @Test
-    @DisplayName("§12: the mark writes a pending switch along only at the version its acknowledgement expects")
+    @DisplayName("the mark writes a pending switch along only at the version its acknowledgement expects")
     void theMarkWritesTheSwitchOnlyAtItsVersion() {
         final SandboxWorkspaceManager manager = harness.sandbox.manager();
         final SandboxWorkspaceId elsewhere = SandboxWorkspaceId.of("wsm:elsewhere");
@@ -292,7 +292,7 @@ class UnannouncedResetIT {
     }
 
     @Test
-    @DisplayName("§3.1 (a): the mark retries a lost CAS")
+    @DisplayName("the mark retries a lost CAS")
     void theMarkRetriesALostCas() throws Exception {
         final int[] conflicts = {1};
         harness.close();

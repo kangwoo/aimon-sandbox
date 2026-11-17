@@ -49,7 +49,7 @@ class SandboxFileSystemTest {
     }
 
     @Test
-    @DisplayName("§16: Write into .aimon-staged / .aimon-shell is Access denied; Bash can write there")
+    @DisplayName("Write into .aimon-staged / .aimon-shell is Access denied; Bash can write there")
     void stagingAndShellAreasAreReadOnlyToFileToolsButShellCanWrite() throws Exception {
         assertThatThrownBy(() -> fs.write("/workspace/.aimon-staged/skill/key/run.sh", "echo planted"))
                 .isInstanceOf(FileAccessDeniedException.class).hasMessageContaining("Access denied");
@@ -70,7 +70,7 @@ class SandboxFileSystemTest {
     }
 
     @Test
-    @DisplayName("S9: .aimon-ptc is hidden from the file tools; Bash still sees it")
+    @DisplayName(".aimon-ptc is hidden from the file tools; Bash still sees it")
     void theProgrammaticToolCallingAreaIsHiddenFromFileTools() throws Exception {
         assertThat(bash(env, "mkdir -p /workspace/.aimon-ptc/run/r && echo reply > /workspace/.aimon-ptc/run/r/1 && "
                 + "cat /workspace/.aimon-ptc/run/r/1").stdout()).isEqualTo("reply\n");
@@ -201,7 +201,7 @@ class SandboxFileSystemTest {
     }
 
     @Test
-    @DisplayName("S9: .aimon-ptc under the binding root, where core's shell engine puts it, is hidden too")
+    @DisplayName(".aimon-ptc under the binding root, where core's shell engine puts it, is hidden too")
     void theProgrammaticToolCallingAreaUnderTheRootIsHidden() throws Exception {
         assertThat(bash(env,
                 "mkdir -p /workspace/repo/.aimon-ptc/run/r && echo reply > "

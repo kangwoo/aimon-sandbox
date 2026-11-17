@@ -91,7 +91,7 @@ class SandboxWorkspacesTest {
     // ----------------------------------------------------------------------------------------------------------------
 
     @Test
-    @DisplayName("§6.1: create provisions primary before returning and records what it was asked for")
+    @DisplayName("create provisions primary before returning and records what it was asked for")
     void createProvisionsAndReturnsRunning() {
         final WorkspaceView view = workspaces().create(CreateWorkspace.named("ticket 4711"), ALICE);
 
@@ -121,7 +121,7 @@ class SandboxWorkspacesTest {
     }
 
     @Test
-    @DisplayName("§6.1: max-managed-per-owner refuses before any write, per owner")
+    @DisplayName("max-managed-per-owner refuses before any write, per owner")
     void maxManagedPerOwnerRefusesBeforeAnyWrite() {
         harness.close();
         harness = owned(s -> s.maxManagedPerOwner(2));
@@ -136,7 +136,7 @@ class SandboxWorkspacesTest {
     }
 
     @Test
-    @DisplayName("§6.1: an admission refusal keeps the record, slot absent, and it counts toward the limit")
+    @DisplayName("an admission refusal keeps the record, slot absent, and it counts toward the limit")
     void anAdmissionRefusalKeepsTheRecordAndCounts() throws Exception {
         harness.close();
         harness = owned(s -> s.maxRunningPerTenant(1).maxManagedPerOwner(1));
@@ -153,7 +153,7 @@ class SandboxWorkspacesTest {
     }
 
     @Test
-    @DisplayName("§6.1: a failed provisioning keeps the record FAILED; provision retries after the backoff")
+    @DisplayName("a failed provisioning keeps the record FAILED; provision retries after the backoff")
     void aFailedProvisioningIsRetriedByProvision() {
         harness.faults.injectOnce(Operation.CREATE, Fault.fail(SandboxProviderException.Kind.TRANSIENT));
 
@@ -173,7 +173,7 @@ class SandboxWorkspacesTest {
     }
 
     @Test
-    @DisplayName("§6.1: the requested profile survives a refused first provisioning")
+    @DisplayName("the requested profile survives a refused first provisioning")
     void theRequestedProfileIsKeptWhenNoSlotExistsYet() {
         harness.close();
         harness = SandboxHarness.builder().profile(SandboxTestProfiles.local("standard").build())
@@ -204,7 +204,7 @@ class SandboxWorkspacesTest {
     }
 
     @Test
-    @DisplayName("§6.5: access tenant needs the opt-in in a principal deployment, and nothing in a tenant one")
+    @DisplayName("access tenant needs the opt-in in a principal deployment, and nothing in a tenant one")
     void tenantAccessIsAllowedWithTheOptInOrInATenantDeployment() {
         final CreateWorkspace shared = CreateWorkspace.builder().name("shared")
                 .access(SandboxSettings.WorkspaceAccess.TENANT).build();
@@ -225,7 +225,7 @@ class SandboxWorkspacesTest {
     // ----------------------------------------------------------------------------------------------------------------
 
     @Test
-    @DisplayName("§6.6: purge deletes the record, then the sessions' attachments")
+    @DisplayName("purge deletes the record, then the sessions' attachments")
     void purgeDeletesTheRecordThenTheOptions() {
         final WorkspaceView view = workspaces().create(CreateWorkspace.named("doomed"), ALICE);
         workspaces().setSessionOptions(session, SessionSandboxOptions.Update.of(view.id(), UnattachedRule.REJECT),
@@ -245,7 +245,7 @@ class SandboxWorkspacesTest {
     }
 
     @Test
-    @DisplayName("§6.6: a DERIVED workspace cannot be purged — its tombstone guards its session")
+    @DisplayName("a DERIVED workspace cannot be purged — its tombstone guards its session")
     void aDerivedWorkspaceCannotBePurged() throws Exception {
         final SessionId derived = SessionId.generate();
         SandboxHarness.bash(harness.mainTurn(derived, ALICE), "true");
@@ -257,7 +257,7 @@ class SandboxWorkspacesTest {
     }
 
     @Test
-    @DisplayName("§6.6: an idle-closed managed workspace reopens on use; an explicit close needs reopen, which provisions")
+    @DisplayName("an idle-closed managed workspace reopens on use; an explicit close needs reopen, which provisions")
     void closedManagedWorkspacesComeBack() {
         final WorkspaceView view = workspaces().create(CreateWorkspace.named("idle"), ALICE);
         harness.clock.advance(Duration.ofHours(2));
@@ -277,7 +277,7 @@ class SandboxWorkspacesTest {
     }
 
     @Test
-    @DisplayName("§7: purge racing a reopen — the delete's CAS fails, the workspace stays, purge says so")
+    @DisplayName("purge racing a reopen — the delete's CAS fails, the workspace stays, purge says so")
     void purgeRacingAReopenKeepsTheWorkspace() {
         final SandboxWorkspaceManager[] manager = new SandboxWorkspaceManager[1];
         harness.close();
@@ -338,7 +338,7 @@ class SandboxWorkspacesTest {
     }
 
     @Test
-    @DisplayName("§5.4: no view carries the provider's sandbox id")
+    @DisplayName("no view carries the provider's sandbox id")
     void viewsCarryNoProviderSandboxId() {
         final WorkspaceView view = workspaces().create(CreateWorkspace.named("secret"), ALICE);
         final String sandboxId = record(view.id()).slot("primary").orElseThrow().providerRef().orElseThrow()
@@ -353,7 +353,7 @@ class SandboxWorkspacesTest {
     // ----------------------------------------------------------------------------------------------------------------
 
     @Test
-    @DisplayName("§6.2: the session's owner attaches it; clear keeps where it last ran; events carry session and actor")
+    @DisplayName("the session's owner attaches it; clear keeps where it last ran; events carry session and actor")
     void setAndClearSessionOptions() {
         final WorkspaceView view = workspaces().create(CreateWorkspace.named("attach"), ALICE);
 
@@ -388,7 +388,7 @@ class SandboxWorkspacesTest {
     }
 
     @Test
-    @DisplayName("§7: session options are refused without a lookup, for an unknown session and for a non-owner")
+    @DisplayName("session options are refused without a lookup, for an unknown session and for a non-owner")
     void sessionOptionsAreARightOverTheSession() {
         final WorkspaceView view = workspaces().create(CreateWorkspace.named("x"), ALICE);
         final SessionSandboxOptions.Update attach = SessionSandboxOptions.Update.attach(view.id());
@@ -406,7 +406,7 @@ class SandboxWorkspacesTest {
     }
 
     @Test
-    @DisplayName("§7: the target must be a usable, OPEN or idle-closed managed workspace")
+    @DisplayName("the target must be a usable, OPEN or idle-closed managed workspace")
     void theAttachmentTargetIsChecked() throws Exception {
         final WorkspaceView bobs = workspaces().create(CreateWorkspace.named("bob's"), BOB);
         final WorkspaceView closed = workspaces().create(CreateWorkspace.named("closed"), ALICE);
@@ -430,7 +430,7 @@ class SandboxWorkspacesTest {
     }
 
     @Test
-    @DisplayName("§7: two setSessionOptions race — the loser re-reads and re-applies, the last writer wins, both emit")
+    @DisplayName("two setSessionOptions race — the loser re-reads and re-applies, the last writer wins, both emit")
     void twoSetSessionOptionsRace() {
         final WorkspaceView first = workspaces().create(CreateWorkspace.named("first"), ALICE);
         final WorkspaceView second = workspaces().create(CreateWorkspace.named("second"), ALICE);
@@ -561,7 +561,7 @@ class SandboxWorkspacesTest {
     }
 
     @Test
-    @DisplayName("core-033 §6.3: the session lifecycle listener removes the record, lastWorkspaceId and all")
+    @DisplayName("the session lifecycle listener removes the record, lastWorkspaceId and all")
     void theLifecycleListenerRemovesTheRecord() {
         final WorkspaceView view = workspaces().create(CreateWorkspace.named("forget"), ALICE);
         workspaces().setSessionOptions(session, SessionSandboxOptions.Update.attach(view.id()), ALICE);

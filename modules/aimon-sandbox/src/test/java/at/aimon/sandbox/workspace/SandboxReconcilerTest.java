@@ -182,7 +182,7 @@ class SandboxReconcilerTest {
     }
 
     @Nested
-    @DisplayName("scenarios (§16, step 4)")
+    @DisplayName("scenarios")
     class Scenarios {
 
         private PhantomProvider phantom;

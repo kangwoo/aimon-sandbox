@@ -86,7 +86,7 @@ class OpenSandboxEgressIT {
     }
 
     @Test
-    @DisplayName("§12.1: dns+nft deny-all blocks names, addresses, the metadata address and direct DNS")
+    @DisplayName("dns+nft deny-all blocks names, addresses, the metadata address and direct DNS")
     void denyAllBlocksEverything() throws Exception {
         final OpenSandboxTestServer server = OpenSandboxTestServer.dnsNft();
         final OpenSandboxProvider provider = provider(server.config().build());
@@ -109,7 +109,7 @@ class OpenSandboxEgressIT {
     }
 
     @Test
-    @DisplayName("§12.1: an allowed name is reachable, an address it did not resolve to is not")
+    @DisplayName("an allowed name is reachable, an address it did not resolve to is not")
     void anAllowedNameIsReachableAndNothingElse() throws Exception {
         final OpenSandboxTestServer server = OpenSandboxTestServer.dnsNft();
         final OpenSandboxProvider provider = provider(server.config().build());
@@ -125,7 +125,7 @@ class OpenSandboxEgressIT {
     }
 
     @Test
-    @DisplayName("§6.4: a server enforcing dns while the provider declares dns+nft fails verification (step egress)")
+    @DisplayName("a server enforcing dns while the provider declares dns+nft fails verification (step egress)")
     void verifyNoticesAServerThatOnlyFiltersDns() {
         final OpenSandboxTestServer server = OpenSandboxTestServer.dnsOnly();
         final OpenSandboxProvider provider = provider(server.config().build());
@@ -138,7 +138,7 @@ class OpenSandboxEgressIT {
     }
 
     @Test
-    @DisplayName("§12.1: the vault receives the profile's bindings; the secret never reaches the sandbox")
+    @DisplayName("the vault receives the profile's bindings; the secret never reaches the sandbox")
     void credentialBindingsReachTheVaultNotTheSandbox() throws Exception {
         final String secret = "s3cr3t-" + UUID.randomUUID();
         final OpenSandboxTestServer server = OpenSandboxTestServer.dnsNft();

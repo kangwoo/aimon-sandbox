@@ -61,7 +61,7 @@ class AdminSandboxesTest {
     }
 
     @Test
-    @DisplayName("§6.8: a running slot's own sandbox is OK, resolved to its workspace, slot and generation")
+    @DisplayName("a running slot's own sandbox is OK, resolved to its workspace, slot and generation")
     void theRecordsCurrentSandboxIsOk() throws Exception {
         final SessionId session = started();
         final SandboxSlot slot = harness.primary(session);
@@ -77,7 +77,7 @@ class AdminSandboxesTest {
     }
 
     @Test
-    @DisplayName("§6.8: a newer generation and a PROVISIONING generation are IN_FLIGHT")
+    @DisplayName("a newer generation and a PROVISIONING generation are IN_FLIGHT")
     void inFlightSandboxes() throws Exception {
         final SessionId session = started();
         final ProviderSandbox ahead = phantom.add("ws:" + session.value(), harness.record(session).incarnation(), 5,
@@ -99,7 +99,7 @@ class AdminSandboxesTest {
     }
 
     @Test
-    @DisplayName("§6.8: another incarnation or no record is ORPHAN; pastGrace only when the provider reports createdAt")
+    @DisplayName("another incarnation or no record is ORPHAN; pastGrace only when the provider reports createdAt")
     void orphansAndTheirGrace() throws Exception {
         final SessionId session = started();
         final ProviderSandbox mismatch = phantom.add("ws:" + session.value(), "otherinc", 1,
@@ -117,7 +117,7 @@ class AdminSandboxesTest {
     }
 
     @Test
-    @DisplayName("§6.8: an older generation than the record's is STALE")
+    @DisplayName("an older generation than the record's is STALE")
     void anOlderGenerationIsStale() throws Exception {
         final SessionId session = started();
         final ProviderSandbox older = phantom.add("ws:" + session.value(), harness.record(session).incarnation(), 1,
@@ -131,7 +131,7 @@ class AdminSandboxesTest {
     }
 
     @Test
-    @DisplayName("§6.8: unparseable labels and a failed label comparison are SKIP")
+    @DisplayName("unparseable labels and a failed label comparison are SKIP")
     void labelProblemsAreSkipped() throws Exception {
         final SessionId session = started();
         final Map<String, String> broken = new HashMap<>(SandboxLabels.labels(harness.sandbox.settings().deployment(),
@@ -154,7 +154,7 @@ class AdminSandboxesTest {
     }
 
     @Test
-    @DisplayName("§5.4: no sandbox view carries a raw provider sandbox id")
+    @DisplayName("no sandbox view carries a raw provider sandbox id")
     void noViewCarriesARawSandboxId() throws Exception {
         final SessionId session = started();
         phantom.add("ws:gone", "inc00001", 1, null);
@@ -168,7 +168,7 @@ class AdminSandboxesTest {
     }
 
     @Test
-    @DisplayName("§6.8: a failing provider listing fails the call — no partial view")
+    @DisplayName("a failing provider listing fails the call — no partial view")
     void aFailingListingFailsTheCall() throws Exception {
         started();
         harness.faults.inject(Operation.LIST, Fault.fail(SandboxProviderException.Kind.TRANSIENT));

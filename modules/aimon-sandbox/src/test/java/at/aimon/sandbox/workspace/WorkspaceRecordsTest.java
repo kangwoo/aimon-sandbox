@@ -137,7 +137,7 @@ class WorkspaceRecordsTest {
     }
 
     @Test
-    @DisplayName("§8.3: an owner is tenant + principal type + id; a principal-less owner has no type")
+    @DisplayName("an owner is tenant + principal type + id; a principal-less owner has no type")
     void ownersCarryThePrincipalType() {
         final TenantId t = TenantId.of("t");
 

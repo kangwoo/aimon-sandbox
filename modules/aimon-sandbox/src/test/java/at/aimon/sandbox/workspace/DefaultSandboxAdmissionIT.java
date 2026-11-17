@@ -31,7 +31,7 @@ class DefaultSandboxAdmissionIT {
     }
 
     @Test
-    @DisplayName("§16: a tenant over max-running-per-tenant is refused, naming the limit")
+    @DisplayName("a tenant over max-running-per-tenant is refused, naming the limit")
     void tenantOverRunningLimitIsRejected() throws Exception {
         final SessionId first = SessionId.generate();
         bash(harness.mainTurn(first, ALICE), "true");

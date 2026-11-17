@@ -100,7 +100,7 @@ class SandboxStagingIT {
     }
 
     @Test
-    @DisplayName("§16: a script and marker planted in the staged directory fail the check and are recopied")
+    @DisplayName("a script and marker planted in the staged directory fail the check and are recopied")
     void plantedContentFailsKeyCheckAndIsRecopied() throws Exception {
         env.stage(skill);
         bash(env, "echo planted > " + target() + "/run.sh; echo extra > " + target() + "/extra.sh");
@@ -135,7 +135,7 @@ class SandboxStagingIT {
     }
 
     @Test
-    @DisplayName("§16 rows 1, 18: two executions of one slot stage one skill at once; both get the complete copy")
+    @DisplayName("two executions of one slot stage one skill at once; both get the complete copy")
     void concurrentStageOfSameResourceReturnsCompleteCopyToBoth() throws Exception {
         final ExecutionEnvironment fork = harness.fork(env, ALICE);
         bash(fork, "true");

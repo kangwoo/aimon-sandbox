@@ -140,7 +140,7 @@ class SandboxShellIT {
     }
 
     @Test
-    @DisplayName("§16: A export FOO=A → B echo $FOO is empty (shell state is per shell key)")
+    @DisplayName("A export FOO=A → B echo $FOO is empty (shell state is per shell key)")
     void shellStateIsIsolatedPerShellKey() throws Exception {
         final ExecutionEnvironment fork = harness.fork(env, ALICE);
 
@@ -153,7 +153,7 @@ class SandboxShellIT {
     }
 
     @Test
-    @DisplayName("§16: cd src && export X=1 → next Bash has cwd src, X=1, no unexported variable")
+    @DisplayName("cd src && export X=1 → next Bash has cwd src, X=1, no unexported variable")
     void cwdAndExportedVariablesPersistButPlainVariablesDoNot() throws Exception {
         bash(env, "mkdir -p src && cd src && export X=1; PLAIN=2");
 
@@ -163,7 +163,7 @@ class SandboxShellIT {
     }
 
     @Test
-    @DisplayName("§12.1: git is pointed at the exec environment's CA bundle unless the command names its own")
+    @DisplayName("git is pointed at the exec environment's CA bundle unless the command names its own")
     void gitFollowsTheExecEnvironmentsCaBundle() throws Exception {
         try (SandboxHarness withBundle = SandboxHarness.builder().profile(at.aimon.sandbox.testkit.SandboxTestProfiles
                 .local("standard").environment(Map.of("SSL_CERT_FILE", "/opt/ca/merged.pem")).build()).build()) {
@@ -179,7 +179,7 @@ class SandboxShellIT {
     }
 
     @Test
-    @DisplayName("§16: timeout kill → the next command runs with the state from before, with a notice")
+    @DisplayName("timeout kill → the next command runs with the state from before, with a notice")
     void killedCommandLeavesPreviousStateAndNotice() throws Exception {
         bash(env, "cd /workspace && export KEEP=kept");
 
@@ -192,7 +192,7 @@ class SandboxShellIT {
     }
 
     @Test
-    @DisplayName("§16: a command leaving `sleep 600 &` behind does not hold the next command")
+    @DisplayName("a command leaving `sleep 600 &` behind does not hold the next command")
     void leftoverDescendantDoesNotHoldTheLock() throws Exception {
         // No redirection: the leftover keeps every descriptor the command gave it — the hazard itself. The sandbox's
         // destroy (the harness's close) ends it.
@@ -208,7 +208,7 @@ class SandboxShellIT {
     }
 
     @Test
-    @DisplayName("§16: time waiting for the shell lock is not counted in the command timeout")
+    @DisplayName("time waiting for the shell lock is not counted in the command timeout")
     void lockWaitIsNotCountedInCommandTimeout() throws Exception {
         // The holder is not a command of this node: it takes the in-sandbox lock directly, so the only thing that
         // makes the next command wait is the wrapper's `flock -w`, never the node-local lock.
@@ -229,7 +229,7 @@ class SandboxShellIT {
     }
 
     @Test
-    @DisplayName("§16: a running background command does not make the next Bash wait")
+    @DisplayName("a running background command does not make the next Bash wait")
     void backgroundCommandTakesNoLock() throws Exception {
         final Future<ShellCommandResult> background = executor.submit(() -> bash(env, "sleep 3; echo done",
                 ExecutionOptions.builder().timeout(Duration.ofSeconds(20)).background(true).build()));
@@ -257,7 +257,7 @@ class SandboxShellIT {
     }
 
     @Test
-    @DisplayName("§12.1: a hook's command runs while the session's shell is busy, without waiting for its lock")
+    @DisplayName("a hook's command runs while the session's shell is busy, without waiting for its lock")
     void hookCommandTakesNoLock() throws Exception {
         final Future<ShellCommandResult> model = executor
                 .submit(() -> bash(env, ": > /workspace/model-running; sleep 3; echo done"));
@@ -274,7 +274,7 @@ class SandboxShellIT {
     }
 
     @Test
-    @DisplayName("§12.1: a hook's command sees the session's cwd and exports, and its own cd/export do not persist")
+    @DisplayName("a hook's command sees the session's cwd and exports, and its own cd/export do not persist")
     void hookCommandReadsStateButDoesNotSaveIt() throws Exception {
         bash(env, "mkdir -p src && cd src && export SEEN=yes");
 
@@ -373,7 +373,7 @@ class SandboxShellIT {
     }
 
     @Test
-    @DisplayName("§12.1: a hook's command ends at its own timeout, not at the exec's backstop seconds later")
+    @DisplayName("a hook's command ends at its own timeout, not at the exec's backstop seconds later")
     void hookCommandEndsAtItsTimeout() {
         final long started = System.nanoTime();
 
@@ -390,7 +390,7 @@ class SandboxShellIT {
     }
 
     @Test
-    @DisplayName("§9: an isolated command sees no cd/export of the session, and saves none of its own")
+    @DisplayName("an isolated command sees no cd/export of the session, and saves none of its own")
     void isolatedCommandNeitherReadsNorSavesTheSessionsState() throws Exception {
         bash(env, "mkdir -p src && cd src && export SEEN=yes BASH_ENV=/workspace/repo/evil PATH=/nowhere:$PATH");
 
@@ -406,7 +406,7 @@ class SandboxShellIT {
     }
 
     @Test
-    @DisplayName("§9: an isolated command starts in the root wherever the session's shell is, or in its own directory")
+    @DisplayName("an isolated command starts in the root wherever the session's shell is, or in its own directory")
     void isolatedCommandStartsInTheRootOrItsOwnWorkingDirectory() throws Exception {
         bash(env, "mkdir -p /workspace/repo/sub && cd /workspace");
 
@@ -421,7 +421,7 @@ class SandboxShellIT {
     }
 
     @Test
-    @DisplayName("§9: an isolated command runs while the session's shell is busy, without waiting for its lock")
+    @DisplayName("an isolated command runs while the session's shell is busy, without waiting for its lock")
     void isolatedCommandTakesNoLock() throws Exception {
         final Future<ShellCommandResult> model = executor
                 .submit(() -> bash(env, ": > /workspace/model-running; sleep 3; echo done"));
@@ -437,7 +437,7 @@ class SandboxShellIT {
     }
 
     @Test
-    @DisplayName("§9: isolation alone, without hook(true), still takes no lock and saves nothing")
+    @DisplayName("isolation alone, without hook(true), still takes no lock and saves nothing")
     void isolationAloneTakesNoLockAndSavesNothing() throws Exception {
         final Future<ShellCommandResult> model = executor
                 .submit(() -> bash(env, ": > /workspace/model-running; sleep 3; echo done"));
@@ -454,7 +454,7 @@ class SandboxShellIT {
     }
 
     @Test
-    @DisplayName("§9: an isolated command ends at its own timeout, like a hook's")
+    @DisplayName("an isolated command ends at its own timeout, like a hook's")
     void isolatedCommandEndsAtItsTimeout() {
         final long started = System.nanoTime();
 
@@ -534,7 +534,7 @@ class SandboxShellIT {
     }
 
     @Test
-    @DisplayName("S1: hook, isolated and streamed execs ask the provider to drop its output copy; model commands do not")
+    @DisplayName("hook, isolated and streamed execs ask the provider to drop its output copy; model commands do not")
     void streamRunsAreTransientAndModelCommandsAreNot() throws Exception {
         final RecordingProvider[] recording = new RecordingProvider[1];
         try (SandboxHarness recorded = SandboxHarness.builder()
@@ -983,7 +983,7 @@ class SandboxShellIT {
     }
 
     @Test
-    @DisplayName("§16: cancelling a running background command kills it and its children, with the output so far")
+    @DisplayName("cancelling a running background command kills it and its children, with the output so far")
     void cancellingARunningBackgroundCommandKillsItAndThrowsCancelled() throws Exception {
         final ShellCancellationSource source = ShellCancellationSource.create();
         final Future<ShellCommandResult> background = executor.submit(() -> bash(env,
@@ -1007,7 +1007,7 @@ class SandboxShellIT {
     }
 
     @Test
-    @DisplayName("§16: cancelling a foreground command leaves the state from before and frees the shell")
+    @DisplayName("cancelling a foreground command leaves the state from before and frees the shell")
     void cancellingARunningForegroundCommandKeepsThePreviousState() throws Exception {
         bash(env, "cd /workspace && export KEEP=kept");
         final ShellCancellationSource source = ShellCancellationSource.create();
@@ -1046,7 +1046,7 @@ class SandboxShellIT {
     }
 
     @Test
-    @DisplayName("§16: a signal tripped before execute starts nothing — no sandbox, no record, no exec")
+    @DisplayName("a signal tripped before execute starts nothing — no sandbox, no record, no exec")
     void aSignalTrippedBeforeExecuteStartsNothing() {
         final RecordingProvider[] recording = new RecordingProvider[1];
         try (SandboxHarness recorded = SandboxHarness.builder()
@@ -1066,7 +1066,7 @@ class SandboxShellIT {
     }
 
     @Test
-    @DisplayName("§16: a signal tripped while waiting for the shell lock starts nothing and uploads nothing")
+    @DisplayName("a signal tripped while waiting for the shell lock starts nothing and uploads nothing")
     void aSignalTrippedWhileWaitingForTheLockStartsNothing() throws Exception {
         final RecordingProvider[] recording = new RecordingProvider[1];
         final List<String> written = new CopyOnWriteArrayList<>();
@@ -1125,7 +1125,7 @@ class SandboxShellIT {
     }
 
     @Test
-    @DisplayName("§16: a cancel racing the command's own end returns the result when the trailer arrived")
+    @DisplayName("a cancel racing the command's own end returns the result when the trailer arrived")
     void cancelRacingCompletionReturnsTheResultWhenTheTrailerArrived() throws Exception {
         final RecordingProvider[] recording = new RecordingProvider[1];
         try (SandboxHarness recorded = SandboxHarness.builder()
@@ -1156,7 +1156,7 @@ class SandboxShellIT {
     }
 
     @Test
-    @DisplayName("§16: a cancelled command that ends at its timeout — the kill request failed — is cancelled, not "
+    @DisplayName("a cancelled command that ends at its timeout — the kill request failed — is cancelled, not "
             + "timed out")
     void aCancelWhoseKillFailedIsStillCancelledWhenTheTimeoutEndsTheCommand() throws Exception {
         final RecordingProvider[] recording = new RecordingProvider[1];
@@ -1227,7 +1227,7 @@ class SandboxShellIT {
     }
 
     @Test
-    @DisplayName("§16: a signal tripped while a background command's sandbox is provisioned starts no exec")
+    @DisplayName("a signal tripped while a background command's sandbox is provisioned starts no exec")
     void aSignalTrippedWhileProvisioningABackgroundCommandStartsNothing() throws Exception {
         final CountDownLatch creating = new CountDownLatch(1);
         final CountDownLatch release = new CountDownLatch(1);
@@ -1266,7 +1266,7 @@ class SandboxShellIT {
     }
 
     @Test
-    @DisplayName("§16: a signal tripped as the exec starts — before the shell holds the command — still kills it")
+    @DisplayName("a signal tripped as the exec starts — before the shell holds the command — still kills it")
     void aSignalTrippedAsTheExecStartsKillsTheCommand() throws Exception {
         final RecordingProvider[] recording = new RecordingProvider[1];
         try (SandboxHarness recorded = SandboxHarness.builder()
@@ -1292,7 +1292,7 @@ class SandboxShellIT {
     }
 
     @Test
-    @DisplayName("§16: a cancelled background command whose kill failed is cancelled, not timed out, at the backstop")
+    @DisplayName("a cancelled background command whose kill failed is cancelled, not timed out, at the backstop")
     void aCancelledBackgroundCommandWhoseKillFailedIsCancelledAtTheBackstop() throws Exception {
         final RecordingProvider[] recording = new RecordingProvider[1];
         try (SandboxHarness recorded = SandboxHarness.builder()
@@ -1327,7 +1327,7 @@ class SandboxShellIT {
     }
 
     @Test
-    @DisplayName("§16: an interrupt after a cancel whose kill failed is the cancellation, with the interrupt kept")
+    @DisplayName("an interrupt after a cancel whose kill failed is the cancellation, with the interrupt kept")
     void anInterruptAfterACancelWhoseKillFailedIsStillCancelled() throws Exception {
         final RecordingProvider[] recording = new RecordingProvider[1];
         try (SandboxHarness recorded = SandboxHarness.builder()
@@ -1429,7 +1429,7 @@ class SandboxShellIT {
     }
 
     @Test
-    @DisplayName("§16: a background command given the environment's ceiling as its timeout ends there")
+    @DisplayName("a background command given the environment's ceiling as its timeout ends there")
     void aBackgroundCommandEndsAtTheCeilingItIsGiven() throws Exception {
         try (SandboxHarness capped = SandboxHarness.builder().profile(at.aimon.sandbox.testkit.SandboxTestProfiles
                 .local("standard").backgroundCommandTimeout(Duration.ofSeconds(1)).build()).build()) {
@@ -1448,7 +1448,7 @@ class SandboxShellIT {
     }
 
     @Test
-    @DisplayName("§16: closing a runtime binding stops no command and releases nothing another runtime uses")
+    @DisplayName("closing a runtime binding stops no command and releases nothing another runtime uses")
     void closingARuntimeBindingLeavesRunningCommandsAlone() throws Exception {
         final RecordingProvider[] recording = new RecordingProvider[1];
         try (SandboxHarness recorded = SandboxHarness.builder()

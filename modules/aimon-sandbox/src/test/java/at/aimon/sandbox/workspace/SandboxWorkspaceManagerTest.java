@@ -155,7 +155,7 @@ class SandboxWorkspaceManagerTest {
     }
 
     @Test
-    @DisplayName("§13.3: a sandbox whose /workspace lock cannot be opened is FAILED(permanent), not retried as busy")
+    @DisplayName("a sandbox whose /workspace lock cannot be opened is FAILED(permanent), not retried as busy")
     void anUnusableWorkspaceIsAPermanentSeedFailure() {
         harness.close();
         harness = SandboxHarness.builder().decorate((provider, clock) -> new DelegatingProvider(provider) {
@@ -303,7 +303,7 @@ class SandboxWorkspaceManagerTest {
     }
 
     @Test
-    @DisplayName("unannounced-reset §6.3: in the environment, the error is the bare reason and the reset a drained notice")
+    @DisplayName("in the environment, the error is the bare reason and the reset a drained notice")
     void anEnvironmentsFailedRecreateAfterAnIdleCloseQueuesTheReset() throws Exception {
         final SessionId session = SessionId.generate();
         bash(harness.mainTurn(session, ALICE), "true");
@@ -462,7 +462,7 @@ class SandboxWorkspaceManagerTest {
     }
 
     @Test
-    @DisplayName("management §5.3: a mustExist binding on a missing record answers 'does not exist' and writes nothing")
+    @DisplayName("a mustExist binding on a missing record answers 'does not exist' and writes nothing")
     void connectWithMustExistOnMissingRecordCreatesNothing() {
         final SandboxWorkspaceId id = SandboxWorkspaceId.of("wsm:purged");
         final WorkspaceOwner alice = WorkspaceOwner.of(TenantId.DEFAULT, ALICE);

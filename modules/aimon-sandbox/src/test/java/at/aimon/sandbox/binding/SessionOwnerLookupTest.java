@@ -28,7 +28,7 @@ class SessionOwnerLookupTest {
     private final InMemorySessionRecordStore records = new InMemorySessionRecordStore();
 
     @Test
-    @DisplayName("core-033 §5.2: the owner core recorded at provisioning; empty without one or without a record")
+    @DisplayName("the owner core recorded at provisioning; empty without one or without a record")
     void recordedAnswersTheProvisionedOwner() {
         final SessionId owned = SessionId.generate();
         final SessionId ownerless = SessionId.generate();

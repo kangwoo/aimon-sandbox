@@ -275,7 +275,7 @@ class SandboxJanitorTest {
     }
 
     @Test
-    @DisplayName("management §6.6: the janitor never deletes a MANAGED CLOSED record; a DERIVED one expires")
+    @DisplayName("the janitor never deletes a MANAGED CLOSED record; a DERIVED one expires")
     void aManagedTombstoneIsKeptPastClosedRetention() {
         final SandboxWorkspace managed = closedRecord("wsm:kept", WorkspaceOrigin.MANAGED);
         final SandboxWorkspace derived = closedRecord("ws:expires", WorkspaceOrigin.DERIVED);
@@ -288,7 +288,7 @@ class SandboxJanitorTest {
     }
 
     @Test
-    @DisplayName("management §6.6: the sweep clears options attached to a workspace whose record is gone")
+    @DisplayName("the sweep clears options attached to a workspace whose record is gone")
     void theSweepClearsTheOptionsOfAPurgedWorkspace() {
         final SandboxWorkspace kept = closedRecord("wsm:kept", WorkspaceOrigin.MANAGED);
         final SessionId attachedToKept = SessionId.generate();
