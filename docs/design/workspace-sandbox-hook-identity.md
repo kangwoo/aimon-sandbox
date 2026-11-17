@@ -38,7 +38,7 @@ EE-113 named two triggers. The second, *OpenSandbox's files API gains a uid argu
   - `release-1.1.0` and later skip the switch when the requested identity is execd's own (#1809, for #1802). The
     `docker/execd/v1.1.0` tag predates that fix.
 
-What this unblocks is §7 condition 4 of core's design, the file-tool owner mismatch of `workspace-sandbox.md` §13.3.
+What this unblocks is §7 condition 4 of core's design, the file-tool owner mismatch of [`workspace-sandbox-opensandbox.md`](workspace-sandbox-opensandbox.md) §3.2.
 The model's file tools can act as A and run-directory uploads as H, with no rewrite of the file tools into execs.
 
 The first trigger (an operator who runs `hooks.json` guards against an untrusted agent in a sandbox) has not happened.
@@ -91,7 +91,7 @@ starts with root's `HOME`.
 
 ## 4. Image contract and seed checks (draft)
 
-This adds to `workspace-sandbox.md` §13.3. It applies only to a profile that declares a hook identity, so existing
+This adds to [`workspace-sandbox-configuration.md`](workspace-sandbox-configuration.md) §4. It applies only to a profile that declares a hook identity, so existing
 images stay valid.
 
 - A user **H** with its own uid and primary group. The name is declared by the profile; the suggestion is
@@ -203,7 +203,7 @@ These are notes for whoever picks the work up, not a plan.
   the seed passed both checks, and the provider supports identity routes. With the flag set, it runs as H, places the run
   directory under `/opt/aimon/hooks`, and uploads as H. Every other command runs as A, with `HOME`/`USER`/`LOGNAME` set
   by the wrapper.
-- Docs: `workspace-sandbox.md` §6.1 (the uid sentence), §12.1, §13.3 (the contract) and §16 (tests). Tests against a
+- Docs: [`workspace-sandbox-opensandbox.md`](workspace-sandbox-opensandbox.md) §3.2 (the uid sentence), [`workspace-sandbox-security.md`](workspace-sandbox-security.md) §6, [`workspace-sandbox-configuration.md`](workspace-sandbox-configuration.md) §4 (the contract) and [`workspace-sandbox-testing.md`](workspace-sandbox-testing.md) (tests). Tests against a
   real execd in the docker tier must cover: A cannot write the hook directory; A cannot signal or read
   `/proc/<pid>/fd` of a running hook; a run-directory upload as H; and Q1's token checks.
 
@@ -211,6 +211,6 @@ These are notes for whoever picks the work up, not a plan.
 
 - Core design: `docs/design/tool/execution-environment-ee109-hook-tamper-narrowing.md` §7, and EE-113 in
   `docs/backlog/execution-environment-open-items.md` (aimon-core).
-- [`workspace-sandbox-run-directory.md`](workspace-sandbox-run-directory.md) — the narrowing (#33) this would turn into
+- [`workspace-sandbox-shell.md`](workspace-sandbox-shell.md) §9 — the narrowing (#33) this would turn into
   a boundary.
-- [`opensandbox-spike.md`](opensandbox-spike.md) — execd's uid and token behaviour at `v1.1.0`.
+- [`workspace-sandbox-opensandbox.md`](workspace-sandbox-opensandbox.md) §3.2 — execd's uid and token behaviour at `v1.1.0`.

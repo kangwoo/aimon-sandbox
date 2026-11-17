@@ -6,8 +6,8 @@ aimon-sandbox 를 aimon-core 애플리케이션에 끼우는 방법을 다룬다
 
 - OpenSandbox 서버 준비는 [OpenSandbox 를 Kubernetes 에 설치하기](opensandbox-kubernetes.md)
 - 설정 키와 동작은 [사용자 가이드](user-guide.md)
-- 설계 근거는 [`workspace-sandbox.md`](../design/workspace-sandbox.md) §7(코어 통합),
-  [`workspace-sandbox-core-033.md`](../design/workspace-sandbox-core-033.md)(core 0.3.3 을 따르는 법)
+- 설계 근거는 [`workspace-sandbox.md`](../design/workspace-sandbox.md) §6(코어 통합, 쓰는 코어 기능은 §6.3),
+  [`workspace-sandbox-management.md`](../design/workspace-sandbox-management.md)(호스트 배선)
 
 ---
 
@@ -198,7 +198,7 @@ class SandboxConfiguration {
 - 세션 저장소가 애플리케이션 빈(예: Postgres `SessionRecordStore`)이면 `stack.getObject().sessionRecordStore()` 대신
   그 빈을 바로 넘겨도 된다
 - 설정값은 `@ConfigurationProperties` 로 받아 빌더에 옮긴다. 이 저장소에는 `aimon.sandbox.*` 바인딩이 없다(키 이름은
-  설계 §13.2 의 제안을 따르면 된다)
+  [`workspace-sandbox-configuration.md`](../design/workspace-sandbox-configuration.md) §2.3 의 제안을 따르면 된다)
 - starter 의 `aimon.environment.*`(`control-writable`, `background-command-timeout` 등)는 로컬 provider 에만
   적용된다. 샌드박스에서는 프로파일의 값이 쓰인다
 

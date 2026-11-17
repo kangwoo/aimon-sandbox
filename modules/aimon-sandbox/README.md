@@ -7,7 +7,7 @@
 ## 현재 상태
 
 **3단계(도메인과 로컬 경로)의 코드가 있다 — 그러나 아직 운영에 쓸 수 없다.** 운영용 프로바이더
-(`aimon-sandbox-opensandbox`)는 4단계에서 들어오고, 두 단계는 한 릴리스로 낸다(설계 §18-4). 지금 이 모듈과 함께 돌 수 있는
+(`aimon-sandbox-opensandbox`)는 4단계에서 들어오고, 두 단계는 한 릴리스로 낸다. 지금 이 모듈과 함께 돌 수 있는
 프로바이더는 테스트 전용인 `aimon-sandbox-testkit` 의 `LocalProcessSandboxProvider` 뿐이다.
 
 들어 있는 것:
@@ -33,19 +33,19 @@
   모두 `actor` 를 남긴다). 호스트의 운영자 인가 뒤에만 둔다
 
 아직 없는 것: `primary` 밖의 슬롯 · 공유 볼륨 · seed · 오케스트레이터 도구(5단계), 영속
-저장소(6단계), pause/resume · worktree 격리(7단계). 그런 설정은 조용히 무시하지 않고 기동 시 거부한다. 구현 설계와 설계에서
-벗어난 점은 [`workspace-sandbox-step3.md`](../../docs/design/workspace-sandbox-step3.md) 에 있다.
+저장소(6단계), pause/resume · worktree 격리(7단계). 그런 설정은 조용히 무시하지 않고 기동 시 거부한다. 남은 단계와 거부되는 설정은
+[`workspace-sandbox.md`](../../docs/design/workspace-sandbox.md) §8 에 있다.
 
 aimon-core `0.3.4` 가 필요하다 — 훅 표시 `ExecutionOptions.isHook()`(0.3.2)와
 `hooks.json` 명령의 격리 실행 `isIsolated()` 에 더해, 실행 하나를 옮기는 요청 속성(`SandboxRequestAttributes`), 코어가
 기록한 세션 소유자(`WorkspaceSandbox.Builder.sessionRecords`)와 세션 삭제 리스너(`WorkspaceSandbox.sessionLifecycleListener()`),
 모든 도구 결과에 실리는 환경 notice(`drainNotices()`), 그리고 0.3.4 의 스트리밍(`ShellFeature.STREAMING`)과 Python
 `ExecuteCode` 셸 엔진의 샌드박스 SPI(`RuntimeFileSystem` 등)를 쓴다
-([`workspace-sandbox-core-033.md`](../../docs/design/workspace-sandbox-core-033.md)). 코어가 꺼내지 않는 훅 · 워크플로 단계 ·
+([`workspace-sandbox.md`](../../docs/design/workspace-sandbox.md) §6.3). 코어가 꺼내지 않는 훅 · 워크플로 단계 ·
 스테이징이 일으킨 초기화는 세션 옵션에 남겨 세션의 다음 도구 결과에 알린다
-([`workspace-sandbox-unannounced-reset.md`](../../docs/design/workspace-sandbox-unannounced-reset.md)). 코어의
+([`workspace-sandbox-notices.md`](../../docs/design/workspace-sandbox-notices.md) §5). 코어의
 `ShellFeature.RUN_DIRECTORY` 를 선언해 훅의 파일(`AIMON_HOOK_DIR` · `AIMON_SKILL_DIR`)을 실행마다 비공개 디렉터리에 놓고
 다이제스트로 확인하며, 훅과 격리 실행은 셸 디렉터리에 run 파일을 두지 않는다
-([`workspace-sandbox-run-directory.md`](../../docs/design/workspace-sandbox-run-directory.md)).
+([`workspace-sandbox-shell.md`](../../docs/design/workspace-sandbox-shell.md) §9).
 
 옛 구현이 필요하면 `at.aimon.core:aimon-sandbox{,-docker,-kubernetes}:0.2.4` 가 Maven Central 에 그대로 있다.

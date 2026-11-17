@@ -213,7 +213,7 @@ sandbox.janitor().start();
 | `SandboxProfile` | 샌드박스 하나의 모양: 이미지, 자원, egress, 자격 증명, idle 시간 |
 | `OpenSandboxProviderConfig` | OpenSandbox 서버와의 연결과, 서버가 실제로 무엇을 집행하는지에 대한 운영자의 선언 |
 
-> 이 저장소에는 Spring 속성 바인딩이 없다. 설계 문서 §13.2 의 `aimon.sandbox.*` YAML 키는 **제안된 이름**이고, 각
+> 이 저장소에는 Spring 속성 바인딩이 없다. [`workspace-sandbox-configuration.md`](../design/workspace-sandbox-configuration.md) §2.3 의 `aimon.sandbox.*` YAML 키는 **제안된 이름**이고, 각
 > 빌더 메서드가 그 키에 대응한다(`provision-timeout` → `provisionTimeout(...)`). Spring 에서 쓰려면 직접
 > `@ConfigurationProperties` 로 받아 빌더에 옮긴다.
 
@@ -385,7 +385,7 @@ files.delete(ws.id(), "repo/tmp", true, alice);
 ```
 
 사람이 쓰는 파일 탐색기의 백엔드다. 실행 중인 `primary` 샌드박스의 `/workspace` 아래를 보고 고친다
-([설계](../design/workspace-sandbox-files.md)).
+([설계](../design/workspace-sandbox-management.md) §6).
 
 - **샌드박스를 띄우지 않는다.** RUNNING 이 아니면 `WorkspaceFilesUnavailableException` 이 나오고 `reason()` 이
   `NOT_RUNNING` · `CLOSED` · `CLOSING` · `NOT_FOUND` · `UNREACHABLE` 중 하나다. 앞의 넷은 화면에 "실행 중인 샌드박스
@@ -515,7 +515,7 @@ admin.terminateSlot(workspaceId, "primary", operator);   // 다음 사용 때 �
 ### 8.2 이벤트와 관측
 
 `WorkspaceSandbox.builder().eventListener(...)` 로 수명 이벤트(`SandboxEvent`)를 받는다. 감사 로그와 지표를 여기서
-만든다. 설계 §14 의 tracing span · 속성(`aimon.sandbox.workspace` 등)은 아직 구현되지 않았다.
+만든다. tracing span · 메트릭은 두지 않는다([`workspace-sandbox-management.md`](../design/workspace-sandbox-management.md) §7.4).
 
 ### 8.3 여러 노드
 

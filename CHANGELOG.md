@@ -54,7 +54,7 @@ by default, so a mixed-version cluster must pin `v1`, kangwoo/aimon-core#286 —
 
 ### Added
 
-- **Managed workspaces** ([design](docs/design/workspace-sandbox-management.md)). `WorkspaceSandbox.workspaces()`
+- **Managed workspaces** ([design](https://github.com/kangwoo/aimon-sandbox/blob/v0.1.1/docs/design/workspace-sandbox-management.md)). `WorkspaceSandbox.workspaces()`
   creates, provisions, describes, lists, closes, reopens and purges workspaces under `wsm:` ids, with their own
   `access` rule. **Session options** attach a session to one and set its unattached rule, stored in the new
   `SessionOptionsStore` SPI (`InMemorySessionOptionsStore`, single node). Binding takes the session's options, then the
@@ -71,22 +71,22 @@ by default, so a mixed-version cluster must pin `v1`, kangwoo/aimon-core#286 —
   its `ws:{sessionId}` workspace in the background (`Builder.backgroundExecutor(...)`). Once any owner source is wired,
   a session with no known owner gets no sandbox. A deleted session's workspace cannot be reopened while it is being
   removed.
-- **Workspace files for a file explorer** (`SandboxWorkspaceFiles`, [design](docs/design/workspace-sandbox-files.md)):
+- **Workspace files for a file explorer** (`SandboxWorkspaceFiles`, [design](https://github.com/kangwoo/aimon-sandbox/blob/v0.1.1/docs/design/workspace-sandbox-files.md)):
   stat, list, ranged read, name search, write, mkdir, move and delete under `/workspace` of a running sandbox, without
   provisioning it. Changes publish `FILES_CHANGED`.
 - **Isolated execution for `hooks.json` commands** (`ShellFeature.ISOLATED_EXECUTION`, kangwoo/aimon-core#273): an
   operator's hook runs in the sandbox from a fresh shell, never from the model's `cd` and exports.
 - **Run directories for hooks** (`ShellFeature.RUN_DIRECTORY`, kangwoo/aimon-core#275,
-  [design](docs/design/workspace-sandbox-run-directory.md)): a hook's files are placed in a private per-run
+  [design](https://github.com/kangwoo/aimon-sandbox/blob/v0.1.1/docs/design/workspace-sandbox-run-directory.md)): a hook's files are placed in a private per-run
   directory, digest-checked (`RunDirectoryIntegrityException` on a mismatch) and removed after the run.
 - **Streaming shell output** (`ShellFeature.STREAMING`): stdout and stderr reach a `ShellLineListener` line by line,
   which core's background `Monitor` needs in a sandbox.
 - **The sandbox half of core's Python `ExecuteCode` shell engine**
-  ([design](docs/design/ptc-shell-provider.md)): `SandboxProfile.runtimes(Set.of("python3"))`, checked by the seed;
+  ([design](https://github.com/kangwoo/aimon-sandbox/blob/v0.1.1/docs/design/ptc-shell-provider.md)): `SandboxProfile.runtimes(Set.of("python3"))`, checked by the seed;
   `SandboxExecutionEnvironment.runtimeFileSystem()`; the descriptor declares `SANDBOXED` isolation; the provider SPI's
   `ExecKillCause` says why a command was ended. A timed-out or cancelled run leaves nothing running in the sandbox
   (with core 0.3.4). Verified on the docker tier and on Kubernetes in template and pool mode
-  ([how](docs/design/ptc-shell-verification.md); [results](docs/design/ptc-shell-provider.md) §9).
+  ([how](https://github.com/kangwoo/aimon-sandbox/blob/v0.1.1/docs/design/ptc-shell-verification.md); [results](https://github.com/kangwoo/aimon-sandbox/blob/v0.1.1/docs/design/ptc-shell-provider.md) §9).
 - **Testkit:** `RuntimeFileSystemContract`, and updated store contracts.
 
 ### Changed
@@ -97,7 +97,7 @@ by default, so a mixed-version cluster must pin `v1`, kangwoo/aimon-core#286 —
 - **Environment notices reach every tool result** (kangwoo/aimon-core#254), not just the next `Bash` result — a
   reset, a re-created or lost sandbox, a workspace switch. A reset caused by a hook or a workflow step is kept on the
   session's options record and told on its next tool result, even a turn later
-  ([design](docs/design/workspace-sandbox-unannounced-reset.md)).
+  ([design](https://github.com/kangwoo/aimon-sandbox/blob/v0.1.1/docs/design/workspace-sandbox-unannounced-reset.md)).
 - **Hook and isolated runs keep nothing in the shell directory**: the command, stdin and output travel in the exec, so
   the model's shell cannot rewrite a policy hook's verdict. This narrows tampering; it is not a privilege boundary.
 - **One output line is bounded** at 256 KiB for hook, isolated and streamed commands (the command is killed), and their
@@ -110,7 +110,7 @@ by default, so a mixed-version cluster must pin `v1`, kangwoo/aimon-core#286 —
 
 - **An out-of-memory command no longer takes execd with it.** The shell wrapper raises the command's
   `oom_score_adj`, so the kernel kills the command, not execd; the sandbox and the next command go on
-  (`docs/design/workspace-sandbox.md` §12.2).
+  ([`docs/design/workspace-sandbox.md` §12.2](https://github.com/kangwoo/aimon-sandbox/blob/v0.1.1/docs/design/workspace-sandbox.md)).
 - **A skill's shell hook no longer waits for the model's shell** (#9): it takes no shell lock and ends at its own
   timeout. The 0.1.0 notes were wrong that a hook's `cd` and `export` persisted into the model's shell; they never did.
 - **An owned provider is closed when `WorkspaceSandbox.Builder.build()` fails.**
@@ -125,7 +125,7 @@ and fixes for several flaky tests; the details are in the design records linked 
 ## [0.1.0] - 2026-10-05
 
 The first release under the `at.aimon.sandbox` group: the **workspace sandbox**
-([`docs/design/workspace-sandbox.md`](docs/design/workspace-sandbox.md)). An agent keeps using aimon-core's `Bash`,
+([`docs/design/workspace-sandbox.md`](https://github.com/kangwoo/aimon-sandbox/blob/v0.1.0/docs/design/workspace-sandbox.md)). An agent keeps using aimon-core's `Bash`,
 `Read`, `Write`, `Edit` and `Grep`; with sandboxing on, they run inside an
 [OpenSandbox](https://github.com/alibaba/OpenSandbox) environment that the platform — not the model — picks,
 provisions and retires. Requires **aimon-core 0.3.1** and Java 17.

@@ -1,20 +1,20 @@
 # AIMON Sandbox Testkit
 
 워크스페이스 샌드박스의 구현을 검증하는 도구 모음이다. 설계는
-[`docs/design/workspace-sandbox.md`](../../docs/design/workspace-sandbox.md) §16 에 있다.
+[`docs/design/workspace-sandbox-testing.md`](../../docs/design/workspace-sandbox-testing.md) 에 있다.
 
 - **`SandboxProviderContract`** — 모든 `SandboxProvider` 가 통과해야 하는 계약 스위트(JUnit 5 추상 클래스).
   `createProvider()` 만 구현하면 된다. 이 저장소 밖의 프로바이더도 이것을 통과해야 한다. 출력은 줄로 정규화될 수 있으므로
-  (WS §6.1) 줄바꿈으로 끝나는 출력으로 비교한다. 공유 서버에 대고 돌 때는 `deployment()` 를 실행마다 다른 값으로 바꾼다
+  (`docs/design/workspace-sandbox-provider.md` §2.3) 줄바꿈으로 끝나는 출력으로 비교한다. 공유 서버에 대고 돌 때는 `deployment()` 를 실행마다 다른 값으로 바꾼다
   (`aimon-sandbox-opensandbox` 의 docker 계층은 `ci-{uuid}`).
 - **`SandboxWorkspaceStoreContract`** — 모든 `SandboxWorkspaceStore` 의 계약 스위트. `InMemory` 가 통과하고, JDBC 저장소
   (6단계)도 같은 스위트를 통과해야 한다.
-- **`SessionOptionsStoreContract`** — 모든 `SessionOptionsStore` 의 계약 스위트(관리 설계 §4.5). 만들기 전용 · CAS put,
+- **`SessionOptionsStoreContract`** — 모든 `SessionOptionsStore` 의 계약 스위트(`docs/design/workspace-sandbox-domain.md` §5). 만들기 전용 · CAS put,
   지운 뒤 version 재사용 없음, `byWorkspace` · `workspaces` 페이징, 멱등 `deleteByWorkspace`.
 - **`RuntimeFileSystemContract`** — 샌드박스 실행 환경의 `runtimeFileSystem()`(코어 PTC 셸 엔진의 응답 파일을 쓰는 프레임워크
   전용 파일 접근)이 지켜야 하는 계약 스위트. `environment()` 만 구현하면 된다. 이미 있는 것 · 끊긴 링크를 거절하는 원자적
   `writeNew`, 링크를 따라가지 않는 상한 있는 `read`, 링크 자체를 지우는 `delete`, `/workspace` 가둠, 셸 가시성을 본다. 코어가
-  이런 스위트를 발행하지 않아 여기에 둔다([`ptc-shell-provider.md`](../../docs/design/ptc-shell-provider.md) §6.2).
+  이런 스위트를 발행하지 않아 여기에 둔다([`workspace-sandbox-testing.md`](../../docs/design/workspace-sandbox-testing.md) §1.4).
 - **`LocalProcessSandboxProvider`** — 임시 디렉터리와 로컬 프로세스로 만든 프로바이더. **격리가 없으므로 테스트
   전용이다. 운영에 쓰지 않는다.** `/workspace` 경로를 글자로 바꿔 흉내 내며, 호스트에 `flock`·`rg` 가 없으면 자기
   `PATH` 에만 대역을 둔다(`rg` 대역은 검색하지 않고 실패한다 — `hostHasRipgrep()` 으로 건너뛸 수 있다). 실제 exec 서버처럼
