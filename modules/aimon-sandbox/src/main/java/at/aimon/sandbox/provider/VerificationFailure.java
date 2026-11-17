@@ -4,7 +4,7 @@ import java.util.Objects;
 
 /**
  * One check {@link SandboxProvider#verify} found failed on a live sandbox. The manager records it as a permanent
- * failure of the slot with {@link #step()} as the failure step (docs/design/workspace-sandbox.md §11.3).
+ * failure of the slot with {@link #step()} as the failure step (docs/design/workspace-sandbox-lifecycle.md §3).
  */
 public final class VerificationFailure {
 

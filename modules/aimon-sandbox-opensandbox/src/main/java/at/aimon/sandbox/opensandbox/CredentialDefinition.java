@@ -6,10 +6,10 @@ import java.util.function.Supplier;
 import at.aimon.sandbox.provider.CredentialScope;
 
 /**
- * One credential binding of the egress sidecar's vault (docs/design/workspace-sandbox.md §12.1): where it is injected
- * ({@link #scope()}), how ({@link #auth()}), and the secret. The secret is read from its supplier when a sandbox is
- * created, so a rotation takes effect with the next generation; it is sent only to the vault and never logged —
- * {@link #toString()} leaves it out.
+ * One credential binding of the egress sidecar's vault (docs/design/workspace-sandbox-security.md §5): where it is
+ * injected ({@link #scope()}), how ({@link #auth()}), and the secret. The secret is read from its supplier when a
+ * sandbox is created, so a rotation takes effect with the next generation; it is sent only to the vault and never
+ * logged — {@link #toString()} leaves it out.
  */
 public final class CredentialDefinition {
 

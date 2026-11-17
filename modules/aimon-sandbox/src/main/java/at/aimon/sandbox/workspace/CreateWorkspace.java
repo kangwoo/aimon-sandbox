@@ -6,7 +6,7 @@ import java.util.Optional;
 import at.aimon.sandbox.SandboxSettings;
 
 /**
- * A request to create a managed workspace (docs/design/workspace-sandbox-management.md §5.1). Its id is generated —
+ * A request to create a managed workspace (docs/design/workspace-sandbox-management.md §2.1). Its id is generated —
  * never chosen — so the {@link #name()} is only for people: it need not be unique and never reaches the model.
  */
 public final class CreateWorkspace {

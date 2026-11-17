@@ -10,7 +10,7 @@ import at.aimon.sandbox.workspace.WorkspaceOwner;
 
 /**
  * Turns a principal into the {@link WorkspaceOwner} it acts as, applying the principal gate
- * (docs/design/workspace-sandbox.md §8.3). Shared by the default binding policy and the manager's
+ * (docs/design/workspace-sandbox-binding.md §4). Shared by the default binding policy and the manager's
  * {@code close}/{@code reopen}, so every entry point applies the same gate.
  *
  * <p>

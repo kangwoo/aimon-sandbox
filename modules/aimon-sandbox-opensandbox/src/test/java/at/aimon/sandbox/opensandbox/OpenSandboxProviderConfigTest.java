@@ -21,7 +21,10 @@ import at.aimon.sandbox.provider.Capability;
 import at.aimon.sandbox.provider.CredentialScope;
 import at.aimon.sandbox.provider.HostPort;
 
-/** {@link OpenSandboxProviderConfig}: the capability derivation table and every refused declaration (§5.2). */
+/**
+ * {@link OpenSandboxProviderConfig}: the capability derivation table and every refused declaration
+ * (docs/design/workspace-sandbox-opensandbox.md §2, §5).
+ */
 class OpenSandboxProviderConfigTest {
 
     private static final CredentialDefinition GITHUB = CredentialDefinition.of(

@@ -43,8 +43,8 @@ class ShellEngineContractK8sPoolIT extends AbstractShellEngineK8sIT {
      * Something reaps the orphans: PID 1 is not task-executor — the shipped pool's {@code /bin/sh -c}, which Debian's
      * sh does not exec away, stays PID 1 and waits — or execd runs as {@code execd --init}, a subreaper under
      * task-executor, which the server's {@code execd_run_as_init = true} makes it. task-executor as PID 1 reaps
-     * nothing, so without the latter every run leaks its watchdog's zombie (docs/design/ptc-shell-provider.md §9,
-     * "K8s tier, measured"); this names that cause before the leftover checks show its effect.
+     * nothing, so without the latter every run leaks its watchdog's zombie (docs/design/workspace-sandbox-testing.md
+     * §6); this names that cause before the leftover checks show its effect.
      */
     @Override
     protected void checkPid1(List<String> argv, List<SandboxLeftovers.Proc> procs) {

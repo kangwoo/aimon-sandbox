@@ -39,7 +39,8 @@ import at.aimon.sandbox.workspace.WorkspaceState;
 
 /**
  * {@link SandboxSessionCleanup}: what a deleted session leaves behind (kangwoo/aimon-core#253,
- * docs/design/workspace-sandbox-core-033.md §6.3, §9). The background executor queues; each test runs it by hand.
+ * docs/design/workspace-sandbox-lifecycle.md §7.4, docs/design/workspace-sandbox-testing.md §5.6). The background
+ * executor queues; each test runs it by hand.
  */
 class SandboxSessionCleanupTest {
 

@@ -9,22 +9,23 @@ import at.aimon.core.agent.session.store.SessionRecordStore;
 import at.aimon.core.base.Principal;
 
 /**
- * Who owns a session (docs/design/workspace-sandbox.md §8.3). With it, the owner of a main turn's workspace is the
- * session's owner rather than whoever calls first, and only that owner sets the session's options. Required, in some
- * form, when {@code require-principal} is on.
+ * Who owns a session (docs/design/workspace-sandbox-binding.md §4). With it, the owner of a main turn's workspace is
+ * the session's owner rather than whoever calls first, and only that owner sets the session's options. Required, in
+ * some form, when {@code require-principal} is on.
  *
  * <p>
  * Core 0.3.3 records the owner itself (kangwoo/aimon-core#253): {@link #recorded(SessionRecordStore)} reads it, and
  * {@code WorkspaceSandbox.Builder.sessionRecords(...)} wires that without a hand-written lookup. Core records the owner
  * only when the host sets {@code SubmitRequest.owner(...)} on the submit that provisions the session's record; a
  * session provisioned without one answers empty. A host whose older sessions have no recorded owner keeps its own
- * lookup as the fallback ({@link #orElse}) until those sessions are gone (docs/design/workspace-sandbox-core-033.md
- * §5.2).
+ * lookup as the fallback ({@link #orElse}) until those sessions are gone
+ * (docs/design/workspace-sandbox-binding.md §4).
  *
  * <p>
- * The owner is compared with the executing principal by type and id (§8.3): return the principal as the runtime
- * presents it. A lookup that answers {@code Principal.user(id)} for a session whose turns run as a GROUP or SERVICE
- * principal with that id makes every turn "not permitted" under {@code workspace-access: principal}.
+ * The owner is compared with the executing principal by type and id (docs/design/workspace-sandbox-binding.md §4):
+ * return the principal as the runtime presents it. A lookup that answers {@code Principal.user(id)} for a session whose
+ * turns run as a GROUP or SERVICE principal with that id makes every turn "not permitted" under
+ * {@code workspace-access: principal}.
  */
 @FunctionalInterface
 public interface SessionOwnerLookup {

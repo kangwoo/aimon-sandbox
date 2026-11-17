@@ -8,9 +8,9 @@ import at.aimon.sandbox.provider.ProviderSandboxState;
 
 /**
  * One sandbox the provider runs for this deployment, as the janitor sees it
- * (docs/design/workspace-sandbox-management.md
- * §5.4, §6.8). It names the sandbox by {@link #refHash()} — {@code h(sandboxId)}, never the id, which with network
- * reach is root in the sandbox (WS §13.3) — and, when its labels resolve to a record, by workspace, slot and
+ * (docs/design/workspace-sandbox-management.md §4.4, §5). It names the sandbox by {@link #refHash()} —
+ * {@code h(sandboxId)}, never the id, which with network reach is root in the sandbox
+ * (docs/design/workspace-sandbox-security.md §7) — and, when its labels resolve to a record, by workspace, slot and
  * generation.
  */
 public final class SandboxView {

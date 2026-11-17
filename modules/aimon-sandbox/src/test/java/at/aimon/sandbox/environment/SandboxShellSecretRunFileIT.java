@@ -34,9 +34,9 @@ import at.aimon.sandbox.provider.ExecSpec;
 import at.aimon.sandbox.provider.SandboxFiles;
 
 /**
- * S4 (docs/design/ptc-shell-provider.md §3.3): a run directory with a file marked secret is uploaded whole, however
- * small, so the secret's bytes are in no exec argument — the script is the exec's argument, readable in
- * {@code /proc/<pid>/cmdline}. Through the local provider, recording what the exec server would receive.
+ * Secret run files (docs/design/workspace-sandbox-shell-engine.md §4): a run directory with a file marked secret is
+ * uploaded whole, however small, so the secret's bytes are in no exec argument — the script is the exec's argument,
+ * readable in {@code /proc/<pid>/cmdline}. Through the local provider, recording what the exec server would receive.
  */
 class SandboxShellSecretRunFileIT {
 

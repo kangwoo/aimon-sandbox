@@ -29,10 +29,11 @@ import at.aimon.sandbox.provider.ExecSpec;
 import at.aimon.sandbox.provider.RunningCommand;
 
 /**
- * S8 at the {@link SandboxShell} boundary (docs/design/ptc-shell-provider.md §5.4): a provider outcome that carries
- * {@link ExecKillCause#LINE_LIMIT_EXCEEDED} becomes a result with {@link ShellKillCause#LINE_LIMIT_EXCEEDED} for an
- * isolated command that is not a hook's — the call shape of core's shell engine — and an exception naming the cause
- * for every other stream run. The provider's outcome is scripted; the command itself runs on the local provider.
+ * The provider's kill cause at the {@link SandboxShell} boundary (docs/design/workspace-sandbox-shell-engine.md §5): a
+ * provider outcome that carries {@link ExecKillCause#LINE_LIMIT_EXCEEDED} becomes a result with
+ * {@link ShellKillCause#LINE_LIMIT_EXCEEDED} for an isolated command that is not a hook's — the call shape of core's
+ * shell engine — and an exception naming the cause for every other stream run. The provider's outcome is scripted; the
+ * command itself runs on the local provider.
  */
 class SandboxShellKillCauseTest {
 

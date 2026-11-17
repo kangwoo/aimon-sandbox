@@ -39,7 +39,10 @@ import at.aimon.sandbox.workspace.WorkspaceFilesUnavailableException;
 import at.aimon.sandbox.workspace.WorkspaceFilesUnavailableException.Reason;
 import at.aimon.sandbox.workspace.WorkspaceState;
 
-/** {@link SandboxWorkspaceFiles}: a file explorer's backend (docs/design/workspace-sandbox-files.md §9). */
+/**
+ * {@link SandboxWorkspaceFiles}: a file explorer's backend (docs/design/workspace-sandbox-management.md §6,
+ * docs/design/workspace-sandbox-testing.md §3.1).
+ */
 class SandboxWorkspaceFilesTest {
 
     private static final Principal BOB = Principal.user("bob");
@@ -103,7 +106,7 @@ class SandboxWorkspaceFilesTest {
     }
 
     // ----------------------------------------------------------------------------------------------------------------
-    // reads (§6.2)
+    // reads (docs/design/workspace-sandbox-management.md §6.3)
     // ----------------------------------------------------------------------------------------------------------------
 
     @Test
@@ -198,7 +201,7 @@ class SandboxWorkspaceFilesTest {
     }
 
     // ----------------------------------------------------------------------------------------------------------------
-    // changes (§6.3, §6.4)
+    // changes (docs/design/workspace-sandbox-management.md §6.4, §6.5)
     // ----------------------------------------------------------------------------------------------------------------
 
     @Test
@@ -307,7 +310,7 @@ class SandboxWorkspaceFilesTest {
     }
 
     // ----------------------------------------------------------------------------------------------------------------
-    // nothing is provisioned (§6.1)
+    // nothing is provisioned (docs/design/workspace-sandbox-management.md §6.2)
     // ----------------------------------------------------------------------------------------------------------------
 
     @Test
@@ -367,7 +370,7 @@ class SandboxWorkspaceFilesTest {
     }
 
     // ----------------------------------------------------------------------------------------------------------------
-    // rights (§6.5)
+    // rights (docs/design/workspace-sandbox-management.md §6.6)
     // ----------------------------------------------------------------------------------------------------------------
 
     @Test

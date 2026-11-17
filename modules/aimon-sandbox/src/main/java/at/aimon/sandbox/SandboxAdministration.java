@@ -18,7 +18,7 @@ import at.aimon.sandbox.workspace.WorkspaceDetail;
 import at.aimon.sandbox.workspace.WorkspaceView;
 
 /**
- * The operator's view of every workspace and sandbox (docs/design/workspace-sandbox-management.md §5.5): list and
+ * The operator's view of every workspace and sandbox (docs/design/workspace-sandbox-management.md §4): list and
  * describe every workspace and the sessions attached to it, list what the provider actually runs with the janitor's
  * verdict, and create on behalf of, attach, terminate, close, reopen and purge.
  *
@@ -106,8 +106,8 @@ public final class SandboxAdministration {
     }
 
     /**
-     * The files of any workspace's running sandbox (docs/design/workspace-sandbox-files.md): no owner or tenant check;
-     * the principal every call takes is the operator, required and recorded on {@code FILES_CHANGED}. Like the
+     * The files of any workspace's running sandbox (docs/design/workspace-sandbox-management.md §6): no owner or tenant
+     * check; the principal every call takes is the operator, required and recorded on {@code FILES_CHANGED}. Like the
      * owner-facing {@link SandboxWorkspaces#files()}, it never provisions.
      *
      * @return the operator's files

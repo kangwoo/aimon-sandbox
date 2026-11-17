@@ -11,7 +11,7 @@ import at.aimon.sandbox.workspace.SandboxWorkspaceManager;
 
 /**
  * Drops this module's per-session state when core's session router deletes a session (kangwoo/aimon-core#253,
- * docs/design/workspace-sandbox-core-033.md §6.3): the session's options record, and its derived workspace
+ * docs/design/workspace-sandbox-lifecycle.md §7.4): the session's options record, and its derived workspace
  * {@code ws:{sessionId}}, which is marked for removal at once and closed and deleted in the background. Get it from
  * {@link WorkspaceSandbox#sessionLifecycleListener()} and register it once — {@code SessionRouterBuilder
  * .lifecycleListener}, {@code SessionSpec.Builder.lifecycleListener}, or a Spring bean.

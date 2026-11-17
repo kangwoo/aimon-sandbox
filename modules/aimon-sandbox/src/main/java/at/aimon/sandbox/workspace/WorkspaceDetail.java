@@ -5,7 +5,7 @@ import java.util.Objects;
 import at.aimon.core.agent.session.SessionId;
 
 /**
- * An operator's view of one workspace (docs/design/workspace-sandbox-management.md §5.4): the workspace and the first
+ * An operator's view of one workspace (docs/design/workspace-sandbox-management.md §5): the workspace and the first
  * page of the sessions attached to it; {@code SandboxAdministration.sessions} pages on.
  */
 public final class WorkspaceDetail {

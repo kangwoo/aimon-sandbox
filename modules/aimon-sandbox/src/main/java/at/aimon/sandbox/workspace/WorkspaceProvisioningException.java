@@ -5,9 +5,8 @@ import java.util.Objects;
 
 /**
  * A managed workspace was created but its first provisioning did not finish
- * (docs/design/workspace-sandbox-management.md
- * §6.1): the record is kept — its slot FAILED with the recorded failure, or absent when admission refused — and the
- * caller retries with {@code provision(id)} or purges it.
+ * (docs/design/workspace-sandbox-management.md §2.2): the record is kept — its slot FAILED with the recorded failure,
+ * or absent when admission refused — and the caller retries with {@code provision(id)} or purges it.
  */
 public class WorkspaceProvisioningException extends SandboxUnavailableException {
 

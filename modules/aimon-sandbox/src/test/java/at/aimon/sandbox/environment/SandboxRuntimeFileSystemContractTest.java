@@ -24,9 +24,9 @@ import at.aimon.sandbox.testkit.FaultInjectingSandboxProvider.Operation;
 import at.aimon.sandbox.testkit.RuntimeFileSystemContract;
 
 /**
- * {@link SandboxRuntimeFileSystem} over the testkit's local provider (docs/design/ptc-shell-provider.md §6.2): the
- * published contract, plus what only this tier can count — refusals make no provider call, asking for the runtime file
- * system provisions nothing, and a sandbox that cannot be had is an {@link IOException}.
+ * {@link SandboxRuntimeFileSystem} over the testkit's local provider (docs/design/workspace-sandbox-testing.md §1.4):
+ * the published contract, plus what only this tier can count — refusals make no provider call, asking for the runtime
+ * file system provisions nothing, and a sandbox that cannot be had is an {@link IOException}.
  */
 class SandboxRuntimeFileSystemContractTest extends RuntimeFileSystemContract {
 

@@ -1,8 +1,8 @@
 package at.aimon.sandbox.provider;
 
 /**
- * Receives a running command's output as it arrives (docs/design/workspace-sandbox.md §6.2). Nothing streams it to
- * the model yet — {@code SandboxShell} collects the result — but the SPI does not have to change when something does.
+ * Receives a running command's output as it arrives (docs/design/workspace-sandbox-provider.md §2.2); the shell's
+ * streaming runs pass it on line by line (docs/design/workspace-sandbox-shell.md §5).
  * Called from provider threads; implementations must not block.
  */
 public interface OutputSink {

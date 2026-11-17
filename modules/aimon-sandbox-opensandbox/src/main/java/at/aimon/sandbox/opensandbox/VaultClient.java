@@ -19,11 +19,11 @@ import at.aimon.sandbox.provider.SandboxProviderException;
 
 /**
  * A sandbox's credential vault, through the lifecycle server's {@code /sandboxes/{id}/credential-vault} (OpenSandbox
- * {@code release-1.2.0}, upstream #2263). On the Docker and Kubernetes runtimes the server proxies the egress
- * sidecar's own {@code /credential-vault} (port 18080) with the sidecar's auth token, so the semantics are the
- * sidecar's (docs/design/opensandbox-spike.md §6), but the provider needs neither the sidecar's address nor its token
- * — it works without {@code use-server-proxy} as well. Only the bindings a sandbox's profile names are sent: a secret
- * no profile asked for never reaches a sandbox's sidecar.
+ * {@code release-1.2.0}, upstream #2263). On the Docker and Kubernetes runtimes the server proxies the egress sidecar's
+ * own {@code /credential-vault} (port 18080) with the sidecar's auth token, so the semantics are the sidecar's
+ * (docs/design/workspace-sandbox-opensandbox.md §3.5), but the provider needs neither the sidecar's address nor its
+ * token — it works without {@code use-server-proxy} as well. Only the bindings a sandbox's profile names are sent: a
+ * secret no profile asked for never reaches a sandbox's sidecar.
  *
  * <p>
  * A 404 is the sandbox gone, the vault absent (the sidecar's plain-text answer), or — from a server older than 1.2.0 —

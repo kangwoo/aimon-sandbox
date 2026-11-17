@@ -17,26 +17,26 @@ import at.aimon.sandbox.SandboxSettings;
 import at.aimon.sandbox.profile.SandboxProfile;
 
 /**
- * The application-scoped loop that enforces idle policy and reconciles sandboxes (docs/design/workspace-sandbox.md
- * §10.4 items 1–2). One {@link #runOnce()} does, in order:
+ * The application-scoped loop that enforces idle policy and reconciles sandboxes
+ * (docs/design/workspace-sandbox-lifecycle.md §6.1, §6.2). One {@link #runOnce()} does, in order:
  *
  * <ol>
  * <li><b>terminate</b> — every RUNNING slot idle for its profile's {@code terminateAfter} (the longest configured
  * value when its profile was removed);</li>
- * <li><b>reclaim</b> — every PROVISIONING slot whose claim is older than twice {@code provisionTimeout}: its claimer
- * is gone, and nobody connected to take it over (§10.1). It becomes TERMINATED, so it no longer blocks the idle close
- * or holds an admission slot;</li>
+ * <li><b>reclaim</b> — every PROVISIONING slot whose claim is older than twice {@code provisionTimeout}: its claimer is
+ * gone, and nobody connected to take it over (§2.4). It becomes TERMINATED, so it no longer blocks the idle close or
+ * holds an admission slot;</li>
  * <li><b>idle close</b> — every OPEN workspace with no live slot for {@code closeAfter}, counted from the latest of
  * its creation, its last reopen and its slots' {@code lastActiveAt};</li>
  * <li><b>resume</b> — every close stuck in CLOSING for {@code closeResumeAfter}, from the top;</li>
  * <li><b>tombstones</b> — every {@code DERIVED} CLOSED record older than {@code closedRetention} is deleted, and one
- * closed because its session was deleted ({@link CloseCause#SESSION_DELETED}) on the first pass; a {@code MANAGED}
- * one is kept until {@code purge} (management design §6.6);</li>
+ * closed because its session was deleted ({@link CloseCause#SESSION_DELETED}) on the first pass; a {@code MANAGED} one
+ * is kept until {@code purge} (§7.3);</li>
  * <li><b>options sweep</b> — session options still attached to a workspace whose record is gone (a {@code purge}
  * whose own {@code deleteByWorkspace} failed) are cleared;</li>
- * <li><b>deleted sessions</b> — when core's session store is wired, the options of a session that no longer exists
- * are deleted once they are older than {@code closedRetention}: the deletion event was lost, or the session was
- * deleted outside the router (docs/design/workspace-sandbox-core-033.md §6.3);</li>
+ * <li><b>deleted sessions</b> — when core's session store is wired, the options of a session that no longer exists are
+ * deleted once they are older than {@code closedRetention}: the deletion event was lost, or the session was deleted
+ * outside the router (§7.4);</li>
  * <li>node-local: {@code exec:} shell directories unused for {@code execShellIdle};</li>
  * <li><b>reconcile</b> — the deployment's sandboxes against the records: orphans, stale generations, failed leftovers
  * and duplicates are destroyed, missing sandboxes confirmed LOST ({@link SandboxReconciler}).</li>
@@ -44,7 +44,7 @@ import at.aimon.sandbox.profile.SandboxProfile;
  *
  * Every transition re-checks its condition on a freshly read record inside the CAS — a heartbeat that pushed
  * {@code lastActivityAt} in the meantime wins — and calls the provider only after the CAS. One workspace failing is
- * logged and the loop goes on. Volume reconciliation (§10.4 item 3) arrives with implementation step 5.
+ * logged and the loop goes on. Volume reconciliation (§6.3) arrives with implementation step 5.
  */
 public final class SandboxJanitor implements AutoCloseable {
 
@@ -188,7 +188,7 @@ public final class SandboxJanitor implements AutoCloseable {
 
     private void deleteTombstone(SandboxWorkspace workspace, Instant now) {
         if (workspace.origin() == WorkspaceOrigin.MANAGED) {
-            // Its id may be named by session options and agent definitions; only purge ends it (§6.6).
+            // Its id may be named by session options and agent definitions; only purge ends it (§7.3).
             return;
         }
         if (workspace.closeCause().orElse(null) == CloseCause.SESSION_DELETED) {

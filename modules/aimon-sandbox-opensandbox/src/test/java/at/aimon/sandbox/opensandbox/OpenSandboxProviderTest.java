@@ -66,8 +66,8 @@ import at.aimon.sandbox.provider.WriteMode;
 
 /**
  * {@link OpenSandboxProvider} against {@link FakeOpenSandboxServer}: the wire shapes it sends, the server behaviour it
- * must compensate for (docs/design/opensandbox-spike.md §4), and the failure paths a real server cannot be made to
- * produce on demand. The contract suite runs against a real server in the docker tier.
+ * must compensate for (docs/design/workspace-sandbox-opensandbox.md §4), and the failure paths a real server cannot be
+ * made to produce on demand. The contract suite runs against a real server in the docker tier.
  */
 class OpenSandboxProviderTest {
 

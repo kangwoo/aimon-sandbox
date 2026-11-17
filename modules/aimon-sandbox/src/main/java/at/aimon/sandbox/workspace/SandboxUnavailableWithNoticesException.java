@@ -6,10 +6,9 @@ import java.util.Objects;
 
 /**
  * A {@code connect} that failed after it had gathered notices — typically a reset (an idle reopen, a lost or terminated
- * sandbox) followed by a failed re-provisioning (§15). Its message is the reason with the notices appended, as every
- * caller outside the environment has always read it; the execution environment takes the parts apart instead, queues
- * the notices for core's drain and reports the bare {@link #reason()}
- * (docs/design/workspace-sandbox-unannounced-reset.md §6.3).
+ * sandbox) followed by a failed re-provisioning. Its message is the reason with the notices appended, as every caller
+ * outside the environment has always read it; the execution environment takes the parts apart instead, queues the
+ * notices for core's drain and reports the bare {@link #reason()} (docs/design/workspace-sandbox-notices.md §6).
  *
  * <p>
  * <b>Internal.</b> Public only for use across this library's packages: not supported API, and it may change in any

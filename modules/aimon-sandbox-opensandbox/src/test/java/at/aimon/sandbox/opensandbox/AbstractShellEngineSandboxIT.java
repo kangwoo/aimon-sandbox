@@ -30,8 +30,9 @@ import at.aimon.programmatic.testkit.ScriptedToolCallBridge;
 
 /**
  * Core's engine contract suite with core's Python shell engine on one shared OpenSandbox sandbox (shell doc §14;
- * docs/design/ptc-shell-provider.md §5.7), and this module's checks of what a run leaves behind (§9 Q-C4). The docker
- * tier and both modes of the k8s tier extend it, each with a sandbox of its own.
+ * docs/design/workspace-sandbox-testing.md §1.5), and this module's checks of what a run leaves behind
+ * (docs/design/workspace-sandbox-testing.md §6). The docker tier and both modes of the k8s tier extend it, each with a
+ * sandbox of its own.
  *
  * <p>
  * Every test, inherited ones included, is followed by a leftover check against a snapshot taken before it: a runtime,
@@ -74,8 +75,8 @@ abstract class AbstractShellEngineSandboxIT extends AbstractCodeExecutionEngineC
     /**
      * The runtime's watchdog is double-forked, so it is reparented to the sandbox's PID 1 (or the nearest subreaper)
      * and becomes that process's zombie once it has killed its group; that process must reap it
-     * (docs/design/ptc-shell-provider.md §9). The program records what it sees before it spins, and that record is
-     * checked after the timed-out return; its {@code sleep} child carries a mark of this run only.
+     * (docs/design/workspace-sandbox-shell-engine.md §7). The program records what it sees before it spins, and that
+     * record is checked after the timed-out return; its {@code sleep} child carries a mark of this run only.
      */
     @Test
     @Timeout(value = 60, unit = TimeUnit.SECONDS)

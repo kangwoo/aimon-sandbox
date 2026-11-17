@@ -42,7 +42,8 @@ import at.aimon.sandbox.testkit.SandboxTestProfiles;
 
 /**
  * Core's engine contract suite run with core's Python shell engine on a sandbox environment over the testkit's local
- * provider (shell doc §14; docs/design/ptc-shell-provider.md §5.7). Skipped when the host has no {@code python3} 3.8+.
+ * provider (shell doc §14; docs/design/workspace-sandbox-testing.md §1.5, §3.1). Skipped when the host has no
+ * {@code python3} 3.8+.
  *
  * <p>
  * The local provider virtualises {@code /workspace} in command text, environment values, output and files-API paths,

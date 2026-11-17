@@ -28,10 +28,10 @@ import at.aimon.sandbox.testkit.FaultInjectingSandboxProvider.Operation;
 import at.aimon.sandbox.testkit.SandboxTestProfiles;
 
 /**
- * Core's Python shell engine becomes available on a workspace sandbox (docs/design/ptc-shell-provider.md §6.10): the
- * offer facts core extracts from the real environment pass the engine's static availability — for a fork too — and
- * the engine's probe passes through this repository's runtime file system and shell. The contract suite does not
- * cover this: it never builds facts from an environment and never probes.
+ * Core's Python shell engine becomes available on a workspace sandbox (docs/design/workspace-sandbox-testing.md §5.10):
+ * the offer facts core extracts from the real environment pass the engine's static availability — for a fork too — and
+ * the engine's probe passes through this repository's runtime file system and shell. The contract suite does not cover
+ * this: it never builds facts from an environment and never probes.
  */
 class ShellEngineAvailabilityTest {
 

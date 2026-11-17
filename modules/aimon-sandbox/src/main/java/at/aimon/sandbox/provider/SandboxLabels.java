@@ -11,7 +11,7 @@ import java.util.Map;
 import java.util.Objects;
 
 /**
- * The {@code aimon.at/*} labels and the idempotency key of a sandbox (docs/design/workspace-sandbox.md §6.3).
+ * The {@code aimon.at/*} labels and the idempotency key of a sandbox (docs/design/workspace-sandbox-provider.md §4).
  *
  * <p>
  * Identifying values are never written in the clear: workspace ids ({@code ws:{sessionId}}) and keys contain
@@ -38,7 +38,10 @@ public final class SandboxLabels {
     /** {@code h(tenantId)}. */
     public static final String OWNER = "aimon.at/owner";
 
-    /** The labels a returned sandbox must carry unchanged before it is used (§6.3). */
+    /**
+     * The labels a returned sandbox must carry unchanged before it is used
+     * (docs/design/workspace-sandbox-provider.md §4.4).
+     */
     public static final List<String> VERIFIED = List.of(WORKSPACE, SANDBOX_KEY, GENERATION, OWNER);
 
     private static final char[] BASE32 = "abcdefghijklmnopqrstuvwxyz234567".toCharArray();

@@ -7,9 +7,9 @@ import java.util.Optional;
 import java.util.Set;
 
 /**
- * The infrastructure that creates sandboxes (docs/design/workspace-sandbox.md §6.1). The production implementation is
- * OpenSandbox ({@code aimon-sandbox-opensandbox}); {@code aimon-sandbox-testkit} holds a local-process one for tests
- * and a contract suite every implementation must pass.
+ * The infrastructure that creates sandboxes (docs/design/workspace-sandbox-provider.md §1). The production
+ * implementation is OpenSandbox ({@code aimon-sandbox-opensandbox}); {@code aimon-sandbox-testkit} holds a
+ * local-process one for tests and a contract suite every implementation must pass.
  *
  * <p>
  * A provider only does what the workspace record decided: "reuse if present" is the record's call, not
@@ -22,8 +22,8 @@ public interface SandboxProvider extends AutoCloseable {
     ProviderCapabilities capabilities();
 
     /**
-     * Best-effort idempotent on {@link CreateSpec#key()} (§6.3): when a sandbox with that key exists it is returned
-     * instead of creating another.
+     * Best-effort idempotent on {@link CreateSpec#key()} (docs/design/workspace-sandbox-provider.md §4.2): when a
+     * sandbox with that key exists it is returned instead of creating another.
      *
      * @param spec
      *            the sandbox to create
@@ -97,8 +97,8 @@ public interface SandboxProvider extends AutoCloseable {
 
     /**
      * Checks, on a live sandbox, what only the provider can see — for OpenSandbox the egress enforcement mode the
-     * server applied and the credential bindings its vault holds (§11.3). Called once per generation in the seed step,
-     * before the seed script; idempotent.
+     * server applied and the credential bindings its vault holds (docs/design/workspace-sandbox-provider.md §1.4).
+     * Called once per generation in the seed step, before the seed script; idempotent.
      *
      * @param ref
      *            the sandbox

@@ -92,11 +92,11 @@ import at.aimon.sandbox.workspace.WorkspaceScan;
 import at.aimon.sandbox.workspace.WorkspaceView;
 
 /**
- * The sandbox behind a real {@link OrcaAgentExecutor} (§16 rows 14 and 15): the prompt describes the declared
- * profile without provisioning anything, and a slash-command skill's {@code Bash} runs in the sandbox, not on the host
- * — inline in the session's turn, and in a forked subagent. A skill-declared {@code preTool} shell guard, parsed the
- * way core's bootstrap parses it, runs in the sandbox too and blocks what it guards when the sandbox is unavailable
- * (§12.1).
+ * The sandbox behind a real {@link OrcaAgentExecutor} (docs/design/workspace-sandbox-testing.md §5.3): the prompt
+ * describes the declared profile without provisioning anything, and a slash-command skill's {@code Bash} runs in the
+ * sandbox, not on the host — inline in the session's turn, and in a forked subagent. A skill-declared {@code preTool}
+ * shell guard, parsed the way core's bootstrap parses it, runs in the sandbox too and blocks what it guards when the
+ * sandbox is unavailable (docs/design/workspace-sandbox-security.md §6).
  */
 class OrcaRuntimeSandboxE2ETest {
 
@@ -226,10 +226,10 @@ class OrcaRuntimeSandboxE2ETest {
 
         assertThat(result.isSuccess()).as(result.getErrorMessage()).isTrue();
         assertThat(llm.userMessages).anyMatch(text -> text.contains("Write the fork marker file."));
-        // The fork shares the session's workspace and slot (§8.2): the marker is in the same sandbox. A fork no longer
-        // inherits its parent's caller, so this passes only because core's slash-command fork path forwards the
-        // caller's principal (core 0.3.1, OrcaAgentExecutor's command context); a dropped principal reads "not
-        // permitted".
+        // The fork shares the session's workspace and slot (docs/design/workspace-sandbox-binding.md §3): the marker is
+        // in the same sandbox. A fork no longer inherits its parent's caller, so this passes only because core's
+        // slash-command fork path forwards the caller's principal (core 0.3.1, OrcaAgentExecutor's command context); a
+        // dropped principal reads "not permitted".
         assertThat(llm.toolResults).noneMatch(text -> text.contains("not permitted"));
         assertThat(harness.hostFile(session, "/workspace/repo/fork-marker.txt")).isEqualTo("forked\n");
         assertThat(harness.store.scan(WorkspaceScan.builder().build())).hasSize(1);
@@ -466,7 +466,8 @@ class OrcaRuntimeSandboxE2ETest {
         assertThat(result.isSuccess()).as(result.getErrorMessage()).isTrue();
         assertThat(managedFile(created.id(), "/workspace/repo/marker.txt")).isEqualTo("agent-default\n");
         assertThat(harness.store.find(SandboxWorkspaceId.of("ws:" + session.value()))).isEmpty();
-        // No options record: the session was never redirected, so it hears of no switch (§6.4).
+        // No options record: the session was never redirected, so it hears of no switch
+        // (docs/design/workspace-sandbox-notices.md §3).
         assertThat(llm.toolResults).noneMatch(text -> text.contains("now runs in sandbox workspace"));
     }
 
@@ -527,7 +528,7 @@ class OrcaRuntimeSandboxE2ETest {
     }
 
     // ----------------------------------------------------------------------------------------------------------------
-    // core 0.3.3 seams through the real loop (docs/design/workspace-sandbox-core-033.md §9)
+    // core 0.3.3 seams through the real loop (docs/design/workspace-sandbox-testing.md §5.3, §5.6, §5.7)
     // ----------------------------------------------------------------------------------------------------------------
 
     @Test

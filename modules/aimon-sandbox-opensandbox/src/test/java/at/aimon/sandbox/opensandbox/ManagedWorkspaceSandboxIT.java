@@ -59,13 +59,13 @@ import at.aimon.sandbox.workspace.WorkspaceView;
 
 /**
  * Managed workspaces on a real OpenSandbox server (Docker runtime) — the docker tier of
- * docs/design/workspace-sandbox-management.md §9.2: create provisions a real sandbox, the owner and the administration
- * list it (verdict {@code OK}), an admin terminate is followed by a new generation,
- * two sessions of one owner share its files but not their cwd, an explicit close answers "closed" and a purge "does
- * not exist" — and, as documented behaviour of a shared workspace (§6.5), one session can read another's shell state.
- * The core 0.3.3 seams on the same server (docs/design/workspace-sandbox-core-033.md §9): a turn placed by request
- * attribute, and a deleted session's {@code ws:{sid}} closed by the lifecycle listener. A reset caused by a hook's
- * command is told on the session's next turn (docs/design/workspace-sandbox-unannounced-reset.md §9).
+ * docs/design/workspace-sandbox-testing.md §3.2: create provisions a real sandbox, the owner and the administration
+ * list it (verdict {@code OK}), an admin terminate is followed by a new generation, two sessions of one owner share its
+ * files but not their cwd, an explicit close answers "closed" and a purge "does not exist" — and, as documented
+ * behaviour of a shared workspace (docs/design/workspace-sandbox-binding.md §6), one session can read another's shell
+ * state. The core 0.3.3 seams on the same server (docs/design/workspace-sandbox-testing.md §5.3, §5.6): a turn placed
+ * by request attribute, and a deleted session's {@code ws:{sid}} closed by the lifecycle listener. A reset caused by a
+ * hook's command is told on the session's next turn (docs/design/workspace-sandbox-testing.md §5.6).
  */
 @Tag("docker")
 class ManagedWorkspaceSandboxIT {

@@ -46,21 +46,23 @@ import at.aimon.sandbox.provider.VolumeMount;
 
 /**
  * The production {@link SandboxProvider}: OpenSandbox over its REST API, called directly with the JDK
- * {@code HttpClient} and Jackson (docs/design/workspace-sandbox.md §6, docs/design/opensandbox-spike.md §8).
+ * {@code HttpClient} and Jackson (docs/design/workspace-sandbox-provider.md §1,
+ * docs/design/workspace-sandbox-opensandbox.md §1).
  *
  * <p>
- * It enforces what the server does not (spike §4): {@code create} always sends {@code timeout} (without one a sandbox
- * lives forever); {@link #extendExpiry} reads the current expiry, ignores a move backwards, clamps to
- * {@code max-expiry} and refuses a paused sandbox; {@link #destroy} treats 404 as success; errors are classified by
- * HTTP status. {@code create} is best-effort idempotent on the {@code sandbox-key} label (the server has no idempotency
- * key): a sandbox already carrying it is returned — the oldest when a takeover race made several, the rest are left to
- * reconciliation as duplicates. A sandbox that does not become {@code Running} in time is <b>not</b> destroyed: another
- * node may already have adopted it through that same lookup.
+ * It enforces what the server does not (docs/design/workspace-sandbox-opensandbox.md §4): {@code create} always sends
+ * {@code timeout} (without one a sandbox lives forever); {@link #extendExpiry} reads the current expiry, ignores a move
+ * backwards, clamps to {@code max-expiry} and refuses a paused sandbox; {@link #destroy} treats 404 as success; errors
+ * are classified by HTTP status. {@code create} is best-effort idempotent on the {@code sandbox-key} label (the server
+ * has no idempotency key): a sandbox already carrying it is returned — the oldest when a takeover race made several,
+ * the rest are left to reconciliation as duplicates. A sandbox that does not become {@code Running} in time is
+ * <b>not</b> destroyed: another node may already have adopted it through that same lookup.
  *
  * <p>
  * Sandbox ids are never logged at INFO: on OpenSandbox, knowing one is enough to run commands in it through the
- * server's proxy route (spike §4-5). {@link #close()} stops the command readers (on Java 17 the JDK HTTP client has no
- * {@code close()}; its selector thread ends when the client is collected); it never destroys sandboxes.
+ * server's proxy route (docs/design/workspace-sandbox-opensandbox.md §3.6). {@link #close()} stops the command readers
+ * (on Java 17 the JDK HTTP client has no {@code close()}; its selector thread ends when the client is collected); it
+ * never destroys sandboxes.
  */
 public final class OpenSandboxProvider implements SandboxProvider {
 
@@ -137,7 +139,8 @@ public final class OpenSandboxProvider implements SandboxProvider {
     @Override
     public ProviderSandboxRef create(CreateSpec spec) {
         refuseUnservable(spec);
-        // One budget for the POST and the waits after it (§6.1): the POST alone may block ~60 s on Kubernetes.
+        // One budget for the POST and the waits after it (docs/design/workspace-sandbox-opensandbox.md §4.1): the POST
+        // alone may block ~60 s on Kubernetes.
         final long deadline = System.nanoTime() + config.createTimeout().toNanos();
         final Optional<ProviderSandbox> existing = existing(spec);
         final String id;
@@ -196,7 +199,10 @@ public final class OpenSandboxProvider implements SandboxProvider {
         }
     }
 
-    /** The sandbox already carrying this spec's key, when a create ran before (§6.3); FAILED and gone ones excluded. */
+    /**
+     * The sandbox already carrying this spec's key, when a create ran before
+     * (docs/design/workspace-sandbox-opensandbox.md §4.1); FAILED and gone ones excluded.
+     */
     private Optional<ProviderSandbox> existing(CreateSpec spec) {
         final Map<String, String> selector = new LinkedHashMap<>();
         for (String label : List.of(SandboxLabels.MANAGED, SandboxLabels.DEPLOYMENT, SandboxLabels.SANDBOX_KEY)) {
@@ -390,7 +396,7 @@ public final class OpenSandboxProvider implements SandboxProvider {
                 instant(node.path("createdAt")));
     }
 
-    /** OpenSandbox's eight states onto the SPI's five (docs/design/opensandbox-spike.md §2). */
+    /** OpenSandbox's eight states onto the SPI's five (docs/design/workspace-sandbox-opensandbox.md §4.2). */
     static ProviderSandboxState state(String state) {
         switch (state) {
             case "Running" :
@@ -438,11 +444,12 @@ public final class OpenSandboxProvider implements SandboxProvider {
     }
 
     /**
-     * Forward only and at most {@code max-expiry} from now — the server enforces neither on renew (spike §4-1). Two
-     * nodes extending at once may race (read, then renew); both write about {@code now + terminateAfter}. A paused
-     * sandbox is refused: on Kubernetes renewing one breaks it (spike §4-2). The target is rounded up to a whole
-     * microsecond: the server keeps microseconds and drops the rest, so a nanosecond clock (Linux) would otherwise get
-     * an expiry just before the one asked for.
+     * Forward only and at most {@code max-expiry} from now — the server enforces neither on renew
+     * (docs/design/workspace-sandbox-opensandbox.md §3.1, §4.3). Two nodes extending at once may race (read, then
+     * renew); both write about {@code now + terminateAfter}. A paused sandbox is refused: on Kubernetes renewing one
+     * breaks it (docs/design/workspace-sandbox-opensandbox.md §3.1). The target is rounded up to a whole microsecond:
+     * the server keeps microseconds and drops the rest, so a nanosecond clock (Linux) would otherwise get an expiry
+     * just before the one asked for.
      */
     @Override
     public void extendExpiry(ProviderSandboxRef ref, Instant until) {
@@ -510,9 +517,10 @@ public final class OpenSandboxProvider implements SandboxProvider {
     }
 
     /**
-     * The seed step's provider checks (§11.3): with {@code EGRESS_POLICY} required, the sidecar must enforce
-     * {@code dns+nft} with a deny default — the declaration is checked, not trusted (spike §4-6); with
-     * {@code CREDENTIAL_INJECTION} required, the vault must hold exactly the bindings the sandbox was created with.
+     * The seed step's provider checks (docs/design/workspace-sandbox-opensandbox.md §4.9): with {@code EGRESS_POLICY}
+     * required, the sidecar must enforce {@code dns+nft} with a deny default — the declaration is checked, not trusted;
+     * with {@code CREDENTIAL_INJECTION} required, the vault must hold exactly the bindings the sandbox was created
+     * with.
      */
     @Override
     public List<VerificationFailure> verify(ProviderSandboxRef ref, Set<Capability> required) {

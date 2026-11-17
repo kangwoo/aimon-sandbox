@@ -28,8 +28,8 @@ import at.aimon.programmatic.testkit.PythonPrograms;
 import at.aimon.programmatic.testkit.ScriptedToolCallBridge;
 
 /**
- * The negative control of {@link ShellEngineContractIT}'s leftover check (docs/design/ptc-shell-provider.md §9): the
- * same detector, on a sandbox of its own so the shared one stays clean, turns red for what a broken runtime would
+ * The negative control of {@link ShellEngineContractIT}'s leftover check (docs/design/workspace-sandbox-testing.md §6):
+ * the same detector, on a sandbox of its own so the shared one stays clean, turns red for what a broken runtime would
  * leave. A pre-#336 core cannot be pinned, and core is not modified here, so this shows that the check detects an
  * escaped process and an unreaped zombie — not that an old core fails it.
  */

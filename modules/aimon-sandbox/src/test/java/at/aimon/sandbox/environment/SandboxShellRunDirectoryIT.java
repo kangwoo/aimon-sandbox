@@ -45,8 +45,8 @@ import at.aimon.sandbox.provider.SandboxFiles;
 
 /**
  * {@link ShellFeature#RUN_DIRECTORY} and the stream runs of hooks and isolated commands (kangwoo/aimon-sandbox#33,
- * docs/design/workspace-sandbox.md §9), through the local provider. Numbers in the display names follow the design
- * record's test list (docs/design/workspace-sandbox-run-directory.md §7).
+ * docs/design/workspace-sandbox-shell.md §9), through the local provider. The scenarios are those of
+ * docs/design/workspace-sandbox-testing.md §5.5; the numbers in the display names are this class's own.
  */
 class SandboxShellRunDirectoryIT {
 
@@ -463,7 +463,8 @@ class SandboxShellRunDirectoryIT {
     @Test
     @DisplayName("13b: a removed shell root is re-created by a hook run, and a guard is not locked out")
     void aRemovedShellRootDoesNotBreakHookRuns() throws Exception {
-        // The removing command loses its own output, and says so (§16); what matters is the runs after it.
+        // The removing command loses its own output, and says so (docs/design/workspace-sandbox-shell.md §11); what
+        // matters is the runs after it.
         assertThatThrownBy(() -> bash(env, "rm -rf /workspace/.aimon-shell"))
                 .hasMessageContaining("so its output is lost");
 

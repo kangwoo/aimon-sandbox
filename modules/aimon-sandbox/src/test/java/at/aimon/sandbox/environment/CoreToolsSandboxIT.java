@@ -33,7 +33,10 @@ import at.aimon.sandbox.provider.SandboxProviderException;
 import at.aimon.sandbox.testkit.FaultInjectingSandboxProvider.Fault;
 import at.aimon.sandbox.testkit.FaultInjectingSandboxProvider.Operation;
 
-/** Core's own file and shell tools on sandbox environments (§16 rows 1 and 4, §15 messages). */
+/**
+ * Core's own file and shell tools on sandbox environments (docs/design/workspace-sandbox-testing.md §5.1, and the
+ * failure messages of docs/design/workspace-sandbox.md §7).
+ */
 class CoreToolsSandboxIT {
 
     private final SandboxHarness harness = SandboxHarness.standard();

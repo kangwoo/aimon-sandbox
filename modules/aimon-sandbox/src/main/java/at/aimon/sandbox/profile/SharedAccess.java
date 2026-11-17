@@ -1,6 +1,9 @@
 package at.aimon.sandbox.profile;
 
-/** How a profile's sandboxes mount the workspace's {@code /shared} volume (docs/design/workspace-sandbox.md §11.3). */
+/**
+ * How a profile's sandboxes mount the workspace's {@code /shared} volume
+ * (docs/design/workspace-sandbox-filesystem.md §8.2).
+ */
 public enum SharedAccess {
 
     /** Read-write: every {@code rw} slot of a workspace is one trust domain. */

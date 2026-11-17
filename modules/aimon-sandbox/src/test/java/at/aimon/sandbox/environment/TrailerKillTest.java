@@ -12,7 +12,7 @@ import org.junit.jupiter.api.Test;
 import at.aimon.sandbox.provider.ExecOutcome;
 import at.aimon.sandbox.provider.RunningCommand;
 
-/** The kill that follows a stream run's trailer (docs/design/workspace-sandbox.md §9). */
+/** The kill that follows a stream run's trailer (docs/design/workspace-sandbox-shell.md §9.5). */
 class TrailerKillTest {
 
     /** A command whose wait never ends by itself, as an exec a hook's {@code cmd &} holds open. */

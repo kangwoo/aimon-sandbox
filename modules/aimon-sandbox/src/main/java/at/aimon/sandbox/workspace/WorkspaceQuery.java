@@ -6,8 +6,8 @@ import java.util.Optional;
 import java.util.Set;
 
 /**
- * An owner's listing of their own workspaces (docs/design/workspace-sandbox-management.md §5.4): optional state,
- * origin and name-prefix filters, and a keyset page ordered by id.
+ * An owner's listing of their own workspaces (docs/design/workspace-sandbox-management.md §5): optional state, origin
+ * and name-prefix filters, and a keyset page ordered by id.
  */
 public final class WorkspaceQuery {
 

@@ -21,7 +21,8 @@ public final class AdmissionDecision {
 
     /**
      * @param reason
-     *            which limit was hit and its value, in words the model can act on (§15)
+     *            which limit was hit and its value, in words the model can act on
+     *            (docs/design/workspace-sandbox-security.md §8)
      * @return a rejection
      */
     public static AdmissionDecision rejected(String reason) {

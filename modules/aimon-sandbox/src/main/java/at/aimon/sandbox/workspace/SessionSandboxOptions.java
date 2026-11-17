@@ -8,10 +8,10 @@ import at.aimon.core.agent.session.SessionId;
 import at.aimon.sandbox.binding.UnattachedRule;
 
 /**
- * One session's sandbox options (docs/design/workspace-sandbox-management.md §5.2): the managed workspace its turns
- * are attached to, its own unattached rule, the workspace it last connected to, and a reset of its sandbox the model
- * may not have heard of (docs/design/workspace-sandbox-unannounced-reset.md) — kept apart from the workspace record,
- * which must not grow with its sessions. Changed only by version CAS through {@link SessionOptionsStore}.
+ * One session's sandbox options (docs/design/workspace-sandbox-domain.md §3): the managed workspace its turns are
+ * attached to, its own unattached rule, the workspace it last connected to, and a reset of its sandbox the model may
+ * not have heard of (docs/design/workspace-sandbox-notices.md §5) — kept apart from the workspace record, which must
+ * not grow with its sessions. Changed only by version CAS through {@link SessionOptionsStore}.
  *
  * <p>
  * Immutable; {@link #toBuilder()} returns a copy. {@link #version()} is assigned by the store.
@@ -70,14 +70,17 @@ public final class SessionSandboxOptions {
         return Optional.ofNullable(unattached);
     }
 
-    /** @return the workspace the session last connected to, for the workspace-switch notice (§6.4) */
+    /**
+     * @return the workspace the session last connected to, for the workspace-switch notice
+     *         (docs/design/workspace-sandbox-notices.md §3)
+     */
     public Optional<SandboxWorkspaceId> lastWorkspaceId() {
         return Optional.ofNullable(lastWorkspaceId);
     }
 
     /**
      * @return a reset of the session's sandbox that no drain has delivered yet, told again at the session's next root
-     *         execution that connects that slot (docs/design/workspace-sandbox-unannounced-reset.md)
+     *         execution that connects that slot (docs/design/workspace-sandbox-notices.md §5)
      */
     public Optional<UnannouncedReset> unannouncedReset() {
         return Optional.ofNullable(unannouncedReset);

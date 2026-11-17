@@ -10,7 +10,7 @@ import at.aimon.sandbox.workspace.UnannouncedReset;
 
 /**
  * What a session's root binding read of its options record, for the environment's notice bookkeeping
- * (docs/design/workspace-sandbox-unannounced-reset.md §5.2): the record's version, the base of the environment's CAS
+ * (docs/design/workspace-sandbox-notices.md §5.2): the record's version, the base of the environment's CAS
  * writes, and the unannounced reset it held. Set by {@link SessionOptionsBindingPolicy} from the record it reads
  * anyway; a fork's and a routine's binding have none.
  *

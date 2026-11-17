@@ -6,7 +6,8 @@ import at.aimon.core.base.Principal;
 
 /**
  * {@code (tenantId, principal)} — the owner of a workspace, fixed when the record is created
- * (docs/design/workspace-sandbox.md §5.1), or the caller of an entry point when compared against it (§8.3).
+ * (docs/design/workspace-sandbox-domain.md §1), or the caller of an entry point when compared against it
+ * (docs/design/workspace-sandbox-binding.md §4).
  *
  * <p>
  * The principal is recorded as {@code TYPE:id} (e.g. {@code USER:alice}), because core's identity of a principal is

@@ -9,7 +9,7 @@ import at.aimon.sandbox.workspace.SandboxWorkspaceId;
 
 /**
  * The execution attributes a host sets to place one execution (kangwoo/aimon-core#252,
- * docs/design/workspace-sandbox-core-033.md §5.1): on a main turn through {@code SubmitOptions.executionAttributes},
+ * docs/design/workspace-sandbox-binding.md §2): on a main turn through {@code SubmitOptions.executionAttributes},
  * on a routine through a {@code RoutineExecutionAttributes} resolver. Core forwards them, {@code environment.}
  * stripped, to {@link BindingContext#requestAttributes()}; forks never carry them.
  *

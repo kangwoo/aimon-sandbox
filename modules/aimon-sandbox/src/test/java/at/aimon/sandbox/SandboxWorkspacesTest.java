@@ -49,7 +49,10 @@ import at.aimon.sandbox.workspace.WorkspaceScan;
 import at.aimon.sandbox.workspace.WorkspaceState;
 import at.aimon.sandbox.workspace.WorkspaceView;
 
-/** {@link SandboxWorkspaces}: create and provision, purge, listings, session options (management design §6.1–§6.6). */
+/**
+ * {@link SandboxWorkspaces}: create and provision, purge, listings, session options
+ * (docs/design/workspace-sandbox-management.md §2, §3, §5).
+ */
 class SandboxWorkspacesTest {
 
     private static final Principal BOB = Principal.user("bob");
@@ -84,7 +87,7 @@ class SandboxWorkspacesTest {
     }
 
     // ----------------------------------------------------------------------------------------------------------------
-    // create and provision (§6.1)
+    // create and provision (docs/design/workspace-sandbox-management.md §2.2)
     // ----------------------------------------------------------------------------------------------------------------
 
     @Test
@@ -218,7 +221,7 @@ class SandboxWorkspacesTest {
     }
 
     // ----------------------------------------------------------------------------------------------------------------
-    // lifecycle (§6.6)
+    // lifecycle (docs/design/workspace-sandbox-management.md §2.3)
     // ----------------------------------------------------------------------------------------------------------------
 
     @Test
@@ -300,7 +303,7 @@ class SandboxWorkspacesTest {
     }
 
     // ----------------------------------------------------------------------------------------------------------------
-    // listings and views (§5.4)
+    // listings and views (docs/design/workspace-sandbox-management.md §5)
     // ----------------------------------------------------------------------------------------------------------------
 
     @Test
@@ -346,7 +349,7 @@ class SandboxWorkspacesTest {
     }
 
     // ----------------------------------------------------------------------------------------------------------------
-    // session options (§6.2)
+    // session options (docs/design/workspace-sandbox-management.md §3.2)
     // ----------------------------------------------------------------------------------------------------------------
 
     @Test

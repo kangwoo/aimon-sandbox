@@ -8,7 +8,7 @@ import java.util.Optional;
 import at.aimon.sandbox.SandboxSettings;
 
 /**
- * What an owner or operator sees of a workspace (docs/design/workspace-sandbox-management.md §5.4). It carries no
+ * What an owner or operator sees of a workspace (docs/design/workspace-sandbox-management.md §5). It carries no
  * provider sandbox id, credentials, seed parameters or endpoints; the {@link #name()} is for people, never for the
  * model.
  */

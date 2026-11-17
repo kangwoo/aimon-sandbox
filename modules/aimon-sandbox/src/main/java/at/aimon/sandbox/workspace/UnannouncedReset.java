@@ -4,11 +4,10 @@ import java.time.Instant;
 import java.util.Objects;
 
 /**
- * A reset of a session's sandbox slot that the model may not have heard of yet
- * (docs/design/workspace-sandbox-unannounced-reset.md §5.1): kept on the session's options record from the
- * {@code connect} that reset the slot until a drain delivers a notice that covers it. A hook, a workflow step or a
- * staging call can reset a slot on a path core never drains; the session's next root execution then tells the model
- * again.
+ * A reset of a session's sandbox slot that the model may not have heard of yet (docs/design/workspace-sandbox-domain.md
+ * §3): kept on the session's options record from the {@code connect} that reset the slot until a drain delivers a
+ * notice that covers it. A hook, a workflow step or a staging call can reset a slot on a path core never drains; the
+ * session's next root execution then tells the model again.
  *
  * <p>
  * Immutable. Equal when all three values are: {@link #at()} is part of the identity, so a newer reset of the same slot

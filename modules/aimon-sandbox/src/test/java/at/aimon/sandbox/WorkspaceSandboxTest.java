@@ -111,7 +111,7 @@ class WorkspaceSandboxTest {
     }
 
     // ----------------------------------------------------------------------------------------------------------------
-    // core 0.3.3 (docs/design/workspace-sandbox-core-033.md §3.5, §5.2)
+    // core 0.3.3 (docs/design/workspace-sandbox-management.md §1, docs/design/workspace-sandbox-binding.md §4)
     // ----------------------------------------------------------------------------------------------------------------
 
     @Test

@@ -39,14 +39,14 @@ import at.aimon.sandbox.workspace.SessionOptionsStore;
 
 /**
  * The assembly: builds, validates and closes the application-scoped singletons of docs/design/workspace-sandbox.md
- * §3.2 in one place, since this module does not assume a DI container.
+ * §4 in one place, since this module does not assume a DI container.
  *
  * <pre>{@code
  * WorkspaceSandbox sandbox = WorkspaceSandbox.builder()
  *         .settings(settings).provider(provider)       // provider borrowed unless ownProvider(true)
  *         .tenantResolver(...)                          // required with require-principal
  *         .sessionRecords(stack::sessionRecordStore)    // core's recorded owner; and/or .sessionOwnerLookup(...)
- *         .build();                                     // SandboxConfigurationException on any §13.2 violation
+ *         .build();                                     // SandboxConfigurationException on any startup-check violation
  * runtimeBuilder.executionEnvironmentProvider(sandbox.environmentProvider());
  * sessionSpec.lifecycleListener(sandbox.sessionLifecycleListener()); // drops a deleted session's sandbox state
  * sandbox.janitor().start();
@@ -63,10 +63,11 @@ import at.aimon.sandbox.workspace.SessionOptionsStore;
  *
  * <p>
  * Skill-declared shell hooks need nothing from this assembly: aimon-core runs such a hook in the execution's sandbox
- * shell — never on the host — and a guard whose sandbox is unavailable blocks what it guards (§12.1). The assembly
+ * shell — never on the host — and a guard whose sandbox is unavailable blocks what it guards
+ * (docs/design/workspace-sandbox-security.md §6). The assembly
  * recommends against registering core's
  * {@code GitStatusContextProvider} and {@code DirectorySummaryContextProvider}: they read the filesystem every turn
- * and so would provision a sandbox for turns that run no command (§11.1).
+ * and so would provision a sandbox for turns that run no command (docs/design/workspace-sandbox-filesystem.md §3.5).
  */
 public final class WorkspaceSandbox implements AutoCloseable {
 
@@ -113,7 +114,7 @@ public final class WorkspaceSandbox implements AutoCloseable {
         this.scheduler = ownScheduler ? SandboxScheduler.daemon("aimon-sandbox-heartbeat", 2) : builder.scheduler;
         this.janitorScheduler = ownScheduler ? SandboxScheduler.daemon("aimon-sandbox-janitor", 1) : builder.scheduler;
         // One-shot work apart from both: a deleted session's close can wait up to close-wait, and a heartbeat must not
-        // queue behind it (core-033 design §3.5).
+        // queue behind it (docs/design/workspace-sandbox-lifecycle.md §7.5).
         this.ownBackground = builder.backgroundExecutor == null;
         this.background = ownBackground ? backgroundPool() : builder.backgroundExecutor;
         try {
@@ -165,7 +166,7 @@ public final class WorkspaceSandbox implements AutoCloseable {
     }
 
     /**
-     * The owner sources, in the order of docs/design/workspace-sandbox-core-033.md §5.2: the owner core recorded, else
+     * The owner sources, in the order of docs/design/workspace-sandbox-binding.md §4: the owner core recorded, else
      * the host's lookup; either alone; or none (single tenant: a main turn's caller owns its workspace).
      */
     private static SessionOwnerLookup sessionOwners(Builder builder) {
@@ -242,7 +243,8 @@ public final class WorkspaceSandbox implements AutoCloseable {
 
     /**
      * Stops the janitor and the background executor, closes cached connections, and closes the scheduler and provider
-     * when this assembly owns them. Sandboxes are not touched: they live as long as their workspaces (§3.2).
+     * when this assembly owns them. Sandboxes are not touched: they live as long as their workspaces
+     * (docs/design/workspace-sandbox.md §4).
      *
      * <p>
      * The owned background executor takes no new work and gets {@link #BACKGROUND_CLOSE_WAIT} to finish what it holds;
@@ -355,7 +357,8 @@ public final class WorkspaceSandbox implements AutoCloseable {
          * Default: a new {@link InMemorySandboxWorkspaceStore} — <b>single node only</b>: the janitor's reconciliation
          * destroys every sandbox of the deployment its store has no record of, so two nodes with an in-memory store
          * each
-         * would reclaim each other's sandboxes as orphans (docs/design/workspace-sandbox.md §5.3, §10.4).
+         * would reclaim each other's sandboxes as orphans (docs/design/workspace-sandbox-domain.md §4.4,
+         * docs/design/workspace-sandbox-lifecycle.md §6.2).
          */
         public Builder store(SandboxWorkspaceStore store) {
             this.store = store;
@@ -364,7 +367,7 @@ public final class WorkspaceSandbox implements AutoCloseable {
 
         /**
          * Default: a new {@link InMemorySessionOptionsStore} — <b>single node only</b>, like the in-memory workspace
-         * store (docs/design/workspace-sandbox-management.md §12 Q4).
+         * store (docs/design/workspace-sandbox-domain.md §4.4).
          */
         public Builder sessionOptionsStore(SessionOptionsStore sessionOptionsStore) {
             this.sessionOptionsStore = sessionOptionsStore;
@@ -456,7 +459,7 @@ public final class WorkspaceSandbox implements AutoCloseable {
         /**
          * @return the assembly
          * @throws SandboxConfigurationException
-         *             listing every startup violation (§13.2)
+         *             listing every startup violation (docs/design/workspace-sandbox-configuration.md §3)
          */
         public WorkspaceSandbox build() {
             return new WorkspaceSandbox(this);

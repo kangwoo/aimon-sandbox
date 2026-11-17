@@ -10,7 +10,7 @@ import at.aimon.sandbox.workspace.SandboxWorkspaceId;
 import at.aimon.sandbox.workspace.WorkspaceOwner;
 
 /**
- * The default binding rules (docs/design/workspace-sandbox.md §8.2).
+ * The default binding rules (docs/design/workspace-sandbox-binding.md §3).
  *
  * <ul>
  * <li>workspace: {@code ws:{sessionId}}, else {@code ws:{executionId}}; a request with neither is rejected — no id

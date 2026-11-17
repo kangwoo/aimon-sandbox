@@ -3,8 +3,8 @@ package at.aimon.sandbox.provider;
 import java.util.Objects;
 
 /**
- * A shared volume, identified by its name (docs/design/workspace-sandbox.md §6.3 — volumes carry no labels, so the
- * name rule is the identity).
+ * A shared volume, identified by its name (docs/design/workspace-sandbox-provider.md §5 — volumes carry no labels, so
+ * the name rule is the identity).
  */
 public final class VolumeRef {
 

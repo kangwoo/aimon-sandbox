@@ -22,7 +22,10 @@ import at.aimon.sandbox.testkit.FaultInjectingSandboxProvider.Fault;
 import at.aimon.sandbox.testkit.FaultInjectingSandboxProvider.Operation;
 import at.aimon.sandbox.testkit.SandboxTestProfiles;
 
-/** Close, reopen, idle close and redeploys (§16 rows 19–23, Q1/D12). */
+/**
+ * Close, reopen, idle close and redeploys (docs/design/workspace-sandbox-testing.md §5.6;
+ * docs/design/workspace-sandbox-lifecycle.md §7.2).
+ */
 class WorkspaceLifecycleIT {
 
     private SandboxHarness harness = SandboxHarness.standard();

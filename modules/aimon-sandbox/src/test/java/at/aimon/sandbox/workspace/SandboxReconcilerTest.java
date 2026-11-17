@@ -37,8 +37,8 @@ import at.aimon.sandbox.testkit.FaultInjectingSandboxProvider.Operation;
 import at.aimon.sandbox.testkit.SandboxTestProfiles;
 
 /**
- * {@link SandboxReconciler}: the §10.4 table row by row, and the implementation-step-4 rows of §16 that are manager
- * logic, on the local provider with a manual clock.
+ * {@link SandboxReconciler}: the docs/design/workspace-sandbox-lifecycle.md §6.2 table row by row, and the rows of
+ * docs/design/workspace-sandbox-testing.md §5.8 that are manager logic, on the local provider with a manual clock.
  */
 class SandboxReconcilerTest {
 

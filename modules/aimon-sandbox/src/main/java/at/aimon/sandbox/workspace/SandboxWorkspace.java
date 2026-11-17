@@ -12,18 +12,17 @@ import at.aimon.sandbox.SandboxSettings;
 import at.aimon.sandbox.provider.VolumeRef;
 
 /**
- * The workspace aggregate: owner, lifecycle state and every slot, persisted as one record and changed only by
- * version CAS (docs/design/workspace-sandbox.md §5.1, §5.3). Shell state is not here — it lives in files inside the
- * sandbox (§9).
+ * The workspace aggregate: owner, lifecycle state and every slot, persisted as one record and changed only by version
+ * CAS (docs/design/workspace-sandbox-domain.md §1, §4). Shell state is not here — it lives in files inside the sandbox
+ * (docs/design/workspace-sandbox-shell.md §1).
  *
  * <p>
  * Immutable; {@code with*} and {@link #toBuilder()} return copies. {@link #version()} is assigned by the store.
  *
  * <p>
- * A {@link WorkspaceOrigin#MANAGED} record also carries what {@code create} was asked for
- * (docs/design/workspace-sandbox-management.md §4.1): a display {@link #name()}, the requested {@link #profile()} —
- * kept even while no slot exists — and its own {@link #access()}. Records written before these fields existed read as
- * {@code DERIVED} with none of them.
+ * A {@link WorkspaceOrigin#MANAGED} record also carries what {@code create} was asked for (§1): a display
+ * {@link #name()}, the requested {@link #profile()} — kept even while no slot exists — and its own {@link #access()}.
+ * Records written before these fields existed read as {@code DERIVED} with none of them.
  */
 public final class SandboxWorkspace {
 

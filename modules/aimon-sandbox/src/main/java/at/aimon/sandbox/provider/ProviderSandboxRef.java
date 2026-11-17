@@ -4,7 +4,7 @@ import java.util.Objects;
 
 /**
  * Where a sandbox lives: the provider's name and the provider's own id for it. The workspace record stores this and
- * nothing else about the remote object (docs/design/workspace-sandbox.md §5.2).
+ * nothing else about the remote object (docs/design/workspace-sandbox-domain.md §2.1).
  */
 public final class ProviderSandboxRef {
 
@@ -63,8 +63,8 @@ public final class ProviderSandboxRef {
 
     /**
      * The provider and a hash of the id, never the id itself: on OpenSandbox the id alone lets anyone who reaches the
-     * server run commands in the sandbox (docs/design/workspace-sandbox.md §13.3), and this string ends up in logs,
-     * events and tool errors the model sees.
+     * server run commands in the sandbox (docs/design/workspace-sandbox-security.md §7), and this string ends up in
+     * logs, events and tool errors the model sees.
      */
     @Override
     public String toString() {

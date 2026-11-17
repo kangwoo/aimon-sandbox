@@ -12,9 +12,9 @@ import at.aimon.core.base.Principal;
 import at.aimon.core.environment.EnvironmentRequest;
 
 /**
- * What a {@link SandboxBindingPolicy} sees of core's {@link EnvironmentRequest} (docs/design/workspace-sandbox.md
- * §8.1): the agent, the runtime, the session or execution id, the invoking session, the principal, the
- * definition's flattened attributes and the request's own attributes.
+ * What a {@link SandboxBindingPolicy} sees of core's {@link EnvironmentRequest}
+ * (docs/design/workspace-sandbox-binding.md §1): the agent, the runtime, the session or execution id, the invoking
+ * session, the principal, the definition's flattened attributes and the request's own attributes.
  */
 public final class BindingContext {
 

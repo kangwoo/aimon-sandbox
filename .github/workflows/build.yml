@@ -79,7 +79,7 @@ jobs:
   # The docker tier (@Tag("docker")): the OpenSandbox provider against a real server that OpenSandboxTestServer
   # starts on the runner's Docker daemon. Its own job so it runs in parallel and a red check names the tier. This is
   # also the only place the tier runs on Linux/amd64 -- the spike and step 4 ran it on macOS arm64 only
-  # (docs/design/workspace-sandbox.md §20, "러너에서의 docker 계층").
+  # (docs/design/workspace-sandbox-testing.md §3.2, "CI").
   integration:
     runs-on: ubuntu-latest
     timeout-minutes: 45

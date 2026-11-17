@@ -8,13 +8,13 @@ import at.aimon.sandbox.workspace.WorkspaceOwner;
 
 /**
  * What one execution uses: {@code (workspaceId, owner, slot, requiredProfile?, shellKey, root)}
- * (docs/design/workspace-sandbox.md §3.1), plus the {@link #caller()} — the executing principal, which every manager
- * entry point checks against the owner (§8.3). Only a {@link SandboxBindingPolicy} makes one; tool arguments never
- * reach it.
+ * (docs/design/workspace-sandbox-binding.md §1), plus the {@link #caller()} — the executing principal, which every
+ * manager entry point checks against the owner (docs/design/workspace-sandbox-binding.md §5). Only a
+ * {@link SandboxBindingPolicy} makes one; tool arguments never reach it.
  *
  * <p>
  * A binding that names a workspace it did not derive — a session's attachment, an agent default — is
- * {@link #mustExist()}: {@code connect} never creates its record (docs/design/workspace-sandbox-management.md §5.3).
+ * {@link #mustExist()}: {@code connect} never creates its record (docs/design/workspace-sandbox-binding.md §1).
  * {@link #toBuilder()} copies it, so the environment provider's rebuilds keep it and forks inherit it. It copies the
  * {@link #workspaceSwitch()} and the {@link #sessionBookkeeping()} too; the provider drops both for forks.
  */
@@ -105,7 +105,10 @@ public final class SandboxBinding {
         return mustExist;
     }
 
-    /** @return the switch to announce after the first successful connect, for a session's root binding (§6.4) */
+    /**
+     * @return the switch to announce after the first successful connect, for a session's root binding
+     *         (docs/design/workspace-sandbox-notices.md §3)
+     */
     public Optional<WorkspaceSwitch> workspaceSwitch() {
         return Optional.ofNullable(workspaceSwitch);
     }
@@ -113,7 +116,7 @@ public final class SandboxBinding {
     /**
      * @return what the session's options record held when this root binding was made, set by
      *         {@link SessionOptionsBindingPolicy} — a custom policy leaves it alone, and a fork never has it
-     *         (docs/design/workspace-sandbox-unannounced-reset.md §5.2)
+     *         (docs/design/workspace-sandbox-notices.md §5.2)
      */
     public Optional<SessionBookkeeping> sessionBookkeeping() {
         return Optional.ofNullable(sessionBookkeeping);

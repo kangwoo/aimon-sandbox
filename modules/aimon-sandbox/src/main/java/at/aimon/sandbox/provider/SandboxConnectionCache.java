@@ -17,10 +17,10 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Node-local state that must never reach the workspace record (docs/design/workspace-sandbox.md §3.2): connections per
- * sandbox, the per-{@code (sandbox, shellKey)} lock that orders one node's commands on a shell (§9), the
- * per-{@code (sandbox, staging target)} lock that serialises {@code stage()} of one resource, and the {@code exec:}
- * shell directories to sweep after {@code execShellIdle}.
+ * Node-local state that must never reach the workspace record (docs/design/workspace-sandbox.md §4): connections per
+ * sandbox, the per-{@code (sandbox, shellKey)} lock that orders one node's commands on a shell
+ * (docs/design/workspace-sandbox-shell.md §3.1), the per-{@code (sandbox, staging target)} lock that serialises
+ * {@code stage()} of one resource, and the {@code exec:} shell directories to sweep after {@code execShellIdle}.
  *
  * <p>
  * A lock entry exists only while some thread holds or waits on it — it is removed the moment the last user leaves —
@@ -219,8 +219,9 @@ public final class SandboxConnectionCache implements AutoCloseable {
     }
 
     /**
-     * Deletes the {@code exec:} shell directories no command has used for {@code idle} (§9). A directory whose lock is
-     * held in the sandbox is kept; one whose sandbox is gone is forgotten.
+     * Deletes the {@code exec:} shell directories no command has used for {@code idle}
+     * (docs/design/workspace-sandbox-shell.md §10.3). A directory whose lock is held in the sandbox is kept; one whose
+     * sandbox is gone is forgotten.
      *
      * @param idle
      *            how long a directory must have been unused

@@ -14,9 +14,10 @@ import at.aimon.sandbox.workspace.WorkspaceQuota;
 
 /**
  * The workspace sandbox's configuration — the keys implementation steps 3 and 4 read, named after the Spring
- * properties docs/design/workspace-sandbox.md §13.2 proposes ({@code provision-timeout} is {@link #provisionTimeout()},
- * and so on). Keys a later step reads (volume and orchestrator keys) are added with that step: a key nothing reads
- * rots. The provider's own keys ({@code aimon.sandbox.opensandbox.*}) belong to the provider module, never here.
+ * properties docs/design/workspace-sandbox-configuration.md §2.3 proposes ({@code provision-timeout} is
+ * {@link #provisionTimeout()}, and so on). Keys a later step reads (volume and orchestrator keys) are added with that
+ * step: a key nothing reads rots. The provider's own keys ({@code aimon.sandbox.opensandbox.*}) belong to the provider
+ * module, never here.
  *
  * <p>
  * Validated as a whole by {@link WorkspaceSandbox.Builder#build()}, not here, so one failed start lists every problem.
@@ -25,11 +26,11 @@ public final class SandboxSettings {
 
     /**
      * {@link #maxRunningPerTenant()} and {@link #maxManagedPerOwner()} value that turns the limit off; it has to be set
-     * explicitly (§12.2).
+     * explicitly (docs/design/workspace-sandbox-security.md §8).
      */
     public static final int UNLIMITED = -1;
 
-    /** Who may use a workspace besides its owner (§8.3). */
+    /** Who may use a workspace besides its owner (docs/design/workspace-sandbox-binding.md §5). */
     public enum WorkspaceAccess {
         /** The owner's tenant <i>and</i> principal must match (the default). */
         PRINCIPAL,
@@ -93,7 +94,7 @@ public final class SandboxSettings {
         this.nodeId = builder.nodeId != null ? builder.nodeId : defaultNodeId();
     }
 
-    /** @return a new builder with the §13.2 defaults */
+    /** @return a new builder with the defaults of docs/design/workspace-sandbox-configuration.md §2.1 */
     public static Builder builder() {
         return new Builder();
     }
@@ -114,7 +115,7 @@ public final class SandboxSettings {
 
     /**
      * {@code {hostname}-{uuid}}, drawn fresh in every JVM so a restarted node never mistakes its old commands for its
-     * current ones (§9).
+     * current ones (docs/design/workspace-sandbox-shell.md §3.2).
      */
     private static String defaultNodeId() {
         String host;
@@ -126,12 +127,18 @@ public final class SandboxSettings {
         return host + "-" + UUID.randomUUID();
     }
 
-    /** @return {@code deployment}: the name of the set of nodes sharing one store; required, label-safe (§6.3) */
+    /**
+     * @return {@code deployment}: the name of the set of nodes sharing one store; required, label-safe
+     *         (docs/design/workspace-sandbox-provider.md §4.5)
+     */
     public String deployment() {
         return deployment;
     }
 
-    /** @return {@code require-principal}: only USER/GROUP principals, or listed system principals (§8.3) */
+    /**
+     * @return {@code require-principal}: only USER/GROUP principals, or listed system principals
+     *         (docs/design/workspace-sandbox-binding.md §4)
+     */
     public boolean requirePrincipal() {
         return requirePrincipal;
     }
@@ -191,7 +198,10 @@ public final class SandboxSettings {
         return execShellIdle;
     }
 
-    /** @return {@code shell-lock-wait} (10s): how long a command waits for its shell (§9) */
+    /**
+     * @return {@code shell-lock-wait} (10s): how long a command waits for its shell
+     *         (docs/design/workspace-sandbox-shell.md §3.3)
+     */
     public Duration shellLockWait() {
         return shellLockWait;
     }
@@ -203,7 +213,8 @@ public final class SandboxSettings {
 
     /**
      * @return {@code orphan-grace} (10m): how old a sandbox with no matching record, or a duplicate, must be
-     *         before reconciliation destroys it (§10.4); longer than {@code provision-timeout}
+     *         before reconciliation destroys it (docs/design/workspace-sandbox-lifecycle.md §6.2); longer than
+     *         {@code provision-timeout}
      */
     public Duration orphanGrace() {
         return orphanGrace;
@@ -211,7 +222,7 @@ public final class SandboxSettings {
 
     /**
      * @return {@code lost-confirm-after} (90s): how long a RUNNING slot's sandbox must stay missing before
-     *         reconciliation declares it LOST (§10.4)
+     *         reconciliation declares it LOST (docs/design/workspace-sandbox-lifecycle.md §6.2)
      */
     public Duration lostConfirmAfter() {
         return lostConfirmAfter;
@@ -245,7 +256,7 @@ public final class SandboxSettings {
     /**
      * @return {@code unattached} ({@code per-session}): the floor of the unattached rule — a definition's
      *         {@code sandbox.unattached} and a session's own option can only tighten it
-     *         (docs/design/workspace-sandbox-management.md §6.3)
+     *         (docs/design/workspace-sandbox-binding.md §2)
      */
     public UnattachedRule unattached() {
         return unattached;
@@ -254,7 +265,7 @@ public final class SandboxSettings {
     /**
      * @return {@code allow-shared-workspaces} (false): whether a managed workspace may be created with
      *         {@code access: tenant} under {@code workspace-access: principal} — sharing one across principals makes
-     *         them one trust domain (management design §6.5)
+     *         them one trust domain (docs/design/workspace-sandbox-binding.md §6)
      */
     public boolean allowSharedWorkspaces() {
         return allowSharedWorkspaces;
@@ -270,7 +281,9 @@ public final class SandboxSettings {
         return nodeId;
     }
 
-    /** Builder for {@link SandboxSettings}, holding the §13.2 defaults. */
+    /**
+     * Builder for {@link SandboxSettings}, holding the defaults of docs/design/workspace-sandbox-configuration.md §2.1.
+     */
     public static final class Builder {
         private String deployment;
         private boolean requirePrincipal;

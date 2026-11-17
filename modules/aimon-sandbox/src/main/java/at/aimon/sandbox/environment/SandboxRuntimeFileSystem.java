@@ -24,9 +24,9 @@ import at.aimon.sandbox.workspace.ConnectedSlot;
 import at.aimon.sandbox.workspace.SandboxWorkspaceManager;
 
 /**
- * core's {@link RuntimeFileSystem} over a sandbox (docs/design/ptc-shell-prerequisites.md S5): the framework's own file
- * access for the {@code ExecuteCode} shell engine's reply files. Framework-only — outside the file tools' path rules,
- * never handed to a model tool.
+ * core's {@link RuntimeFileSystem} over a sandbox (docs/design/workspace-sandbox-shell-engine.md §3): the framework's
+ * own file access for the {@code ExecuteCode} shell engine's reply files. Framework-only — outside the file tools' path
+ * rules, never handed to a model tool.
  *
  * <ul>
  * <li><b>Confined to {@code /workspace/**}</b>, the mount contract and the only tree the testkit's local provider

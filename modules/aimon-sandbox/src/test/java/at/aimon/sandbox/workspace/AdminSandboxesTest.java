@@ -29,8 +29,9 @@ import at.aimon.sandbox.testkit.FaultInjectingSandboxProvider.Operation;
 import at.aimon.sandbox.testkit.SandboxTestProfiles;
 
 /**
- * {@code SandboxAdministration.sandboxes()} (management design §6.8): every listed sandbox with the reconciler's
- * verdict, on the {@link SandboxReconcilerTest} fixtures — and nothing destroyed, no raw sandbox id shown.
+ * {@code SandboxAdministration.sandboxes()} (docs/design/workspace-sandbox-management.md §4.4): every listed sandbox
+ * with the reconciler's verdict, on the {@link SandboxReconcilerTest} fixtures — and nothing destroyed, no raw sandbox
+ * id shown.
  */
 class AdminSandboxesTest {
 

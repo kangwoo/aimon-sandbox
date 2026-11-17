@@ -3,7 +3,7 @@ package at.aimon.sandbox.workspace;
 import at.aimon.sandbox.profile.SandboxProfile;
 
 /**
- * The per-tenant limit (docs/design/workspace-sandbox.md §12.2). Workspaces appear implicitly per session, so a
+ * The per-tenant limit (docs/design/workspace-sandbox-security.md §8). Workspaces appear implicitly per session, so a
  * workspace quota cannot bound a tenant; this can. {@code connect} asks before every branch that adds provider
  * resources — new provisioning and a retry of a failed one in implementation step 3.
  */

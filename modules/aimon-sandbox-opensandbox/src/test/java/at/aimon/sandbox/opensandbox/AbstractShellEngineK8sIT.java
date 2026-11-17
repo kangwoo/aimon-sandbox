@@ -16,9 +16,10 @@ import org.junit.jupiter.api.Timeout;
 import at.aimon.core.shell.ShellCommandResult;
 
 /**
- * The shell-engine checks of {@link AbstractShellEngineSandboxIT} on the k8s tier (docs/design/workspace-sandbox.md
- * §16), plus what they rest on there: which process is the sandbox's PID 1, and whether it reaps an orphaned zombie.
- * Both modes extend it; they differ in how the sandbox is created, and so in what PID 1 is.
+ * The shell-engine checks of {@link AbstractShellEngineSandboxIT} on the k8s tier
+ * (docs/design/workspace-sandbox-testing.md §3.3), plus what they rest on there: which process is the sandbox's PID 1,
+ * and whether it reaps an orphaned zombie. Both modes extend it; they differ in how the sandbox is created, and so in
+ * what PID 1 is.
  */
 abstract class AbstractShellEngineK8sIT extends AbstractShellEngineSandboxIT {
 

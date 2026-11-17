@@ -26,9 +26,9 @@ import at.aimon.sandbox.testkit.FaultInjectingSandboxProvider.Fault;
 import at.aimon.sandbox.testkit.FaultInjectingSandboxProvider.Operation;
 
 /**
- * The "two nodes" rows of §16 for implementation step 4, simulated as two managers in one JVM — each with its own
- * node id, connection cache and node-local locks — sharing one {@code InMemory} store and one local provider (§16:
- * the real multi-process run is step 6's).
+ * The "two nodes" rows of docs/design/workspace-sandbox-testing.md §5.8, simulated as two managers in one JVM — each
+ * with its own node id, connection cache and node-local locks — sharing one {@code InMemory} store and one local
+ * provider (§4: the real multi-process run is step 6's).
  */
 class MultiNodeScenariosTest {
 
@@ -104,7 +104,7 @@ class MultiNodeScenariosTest {
     }
 
     // ----------------------------------------------------------------------------------------------------------------
-    // the durable unannounced reset (docs/design/workspace-sandbox-unannounced-reset.md §6.5)
+    // the durable unannounced reset (docs/design/workspace-sandbox-notices.md §5.3)
     // ----------------------------------------------------------------------------------------------------------------
 
     /** Two nodes sharing the workspace store, the options store and the provider; node A's background queues. */

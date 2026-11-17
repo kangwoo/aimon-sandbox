@@ -12,8 +12,8 @@ import at.aimon.sandbox.provider.SandboxProviderException;
 
 /**
  * What {@link SandboxWorkspaceManager#runningFiles} hands back: the files API of a workspace's RUNNING, seeded
- * {@code primary} sandbox, reached without provisioning anything (docs/design/workspace-sandbox-files.md §6.1), and
- * bound to the generation it was opened on, like {@link ConnectedSlot}.
+ * {@code primary} sandbox, reached without provisioning anything (docs/design/workspace-sandbox-management.md §6.2),
+ * and bound to the generation it was opened on, like {@link ConnectedSlot}.
  * <p>
  * <b>Internal.</b> Public only for use across this library's packages: not supported API, and it may change in any
  * release.

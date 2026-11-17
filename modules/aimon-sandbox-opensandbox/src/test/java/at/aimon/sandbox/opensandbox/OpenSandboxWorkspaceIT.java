@@ -64,10 +64,10 @@ import at.aimon.sandbox.workspace.SandboxWorkspaceId;
 import at.aimon.sandbox.workspace.SandboxWorkspaceStore;
 
 /**
- * {@code WorkspaceSandbox} end to end on a real OpenSandbox server (Docker runtime) — the implementation-step-4 rows of
- * docs/design/workspace-sandbox.md §16 that need the real server: labels accepted for a {@code ws:{uuid}} workspace,
- * shell state across calls, timeout kill, cancellation of a running background command, reconciliation of a restarted
- * node's orphan, resource limits, the line normalization of output, and hook runs with their run directories
+ * {@code WorkspaceSandbox} end to end on a real OpenSandbox server (Docker runtime) — the scenarios of
+ * docs/design/workspace-sandbox-testing.md §5 that need the real server: labels accepted for a {@code ws:{uuid}}
+ * workspace, shell state across calls, timeout kill, cancellation of a running background command, reconciliation of a
+ * restarted node's orphan, resource limits, the line normalization of output, and hook runs with their run directories
  * (kangwoo/aimon-sandbox#33).
  */
 @Tag("docker")

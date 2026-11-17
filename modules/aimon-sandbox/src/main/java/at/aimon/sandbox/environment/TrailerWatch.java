@@ -11,11 +11,12 @@ import java.util.regex.Pattern;
 import at.aimon.sandbox.provider.OutputSink;
 
 /**
- * Watches a stream script's stderr for its trailer while the exec runs (docs/design/workspace-sandbox.md §9). A hook
- * that leaves {@code cmd &} behind keeps the exec's streams open, and a provider's {@code await} may return only when
- * every holder is gone: on seeing the trailer this runs an action once — {@code SandboxShell} kills the exec — and
- * keeps the parsed trailer, which survives a stderr larger than the provider's capture cap, whose tail (the trailer
- * included) the provider drops. Only the last {@link #TAIL} bytes are kept between chunks; STDOUT is ignored.
+ * Watches a stream script's stderr for its trailer while the exec runs (docs/design/workspace-sandbox-shell.md §4.1,
+ * §9.5). A hook that leaves {@code cmd &} behind keeps the exec's streams open, and a provider's {@code await} may
+ * return only when every holder is gone: on seeing the trailer this runs an action once — {@code SandboxShell} kills
+ * the exec — and keeps the parsed trailer, which survives a stderr larger than the provider's capture cap, whose tail
+ * (the trailer included) the provider drops. Only the last {@link #TAIL} bytes are kept between chunks; STDOUT is
+ * ignored.
  */
 final class TrailerWatch implements OutputSink {
 

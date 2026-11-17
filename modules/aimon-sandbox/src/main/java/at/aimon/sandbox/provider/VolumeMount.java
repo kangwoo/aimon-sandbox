@@ -3,8 +3,9 @@ package at.aimon.sandbox.provider;
 import java.util.Objects;
 
 /**
- * A shared volume declared on {@link CreateSpec}: the first sandbox of a workspace creates it (§6.1). Only providers
- * advertising {@link Capability#SHARED_VOLUME} receive one; implementation step 3 never declares any.
+ * A shared volume declared on {@link CreateSpec}: the first sandbox of a workspace creates it
+ * (docs/design/workspace-sandbox-provider.md §5). Only providers advertising {@link Capability#SHARED_VOLUME} receive
+ * one; implementation step 3 never declares any.
  */
 public final class VolumeMount {
 

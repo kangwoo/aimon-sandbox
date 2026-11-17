@@ -8,8 +8,8 @@ import at.aimon.core.agent.session.SessionId;
 import at.aimon.sandbox.binding.UnattachedRule;
 
 /**
- * What an owner or operator sees of a session's sandbox options (docs/design/workspace-sandbox-management.md §5.4):
- * the record without its version and its switch-notice bookkeeping.
+ * What an owner or operator sees of a session's sandbox options (docs/design/workspace-sandbox-management.md §5): the
+ * record without its version and its switch-notice bookkeeping.
  */
 public final class SessionOptionsView {
 

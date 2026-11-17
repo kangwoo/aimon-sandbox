@@ -18,7 +18,10 @@ import at.aimon.sandbox.SandboxHarness;
 import at.aimon.sandbox.SandboxSettings;
 import at.aimon.sandbox.binding.SandboxTenantResolver;
 
-/** The owner check at every entry point (§8.3; §16 rows 24, 26, 28). */
+/**
+ * The owner check at every entry point (docs/design/workspace-sandbox-binding.md §5;
+ * docs/design/workspace-sandbox-testing.md §5.7).
+ */
 class OwnerCheckTest {
 
     private static final Principal ALICE = Principal.user("t1-alice");

@@ -7,9 +7,9 @@ import at.aimon.sandbox.workspace.SandboxWorkspaceId;
 
 /**
  * The one home of the managed workspace id format, {@code wsm:{UUID}} (docs/design/workspace-sandbox-management.md
- * §3.1, §6.3). A managed id is generated, never chosen, and never reused, so whatever names one — session options, a
- * definition's {@code sandbox.workspace} — can never be redirected to another workspace. A derived {@code ws:} id is
- * reused after its tombstone expires, so nothing may name one.
+ * §2.1, docs/design/workspace-sandbox-binding.md §2). A managed id is generated, never chosen, and never reused, so
+ * whatever names one — session options, a definition's {@code sandbox.workspace} — can never be redirected to another
+ * workspace. A derived {@code ws:} id is reused after its tombstone expires, so nothing may name one.
  */
 public final class ManagedIds {
 

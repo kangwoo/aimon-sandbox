@@ -45,7 +45,10 @@ import at.aimon.sandbox.testkit.LocalProcessSandboxProvider;
 import at.aimon.sandbox.workspace.SandboxUnavailableException;
 import at.aimon.sandbox.workspace.SandboxWorkspaceManager;
 
-/** {@code rg --json} inside the sandbox (§7). Real searches need ripgrep on the host; the stub must fail loudly. */
+/**
+ * {@code rg --json} inside the sandbox (docs/design/workspace-sandbox-filesystem.md §3.4). Real searches need ripgrep
+ * on the host; the stub must fail loudly.
+ */
 class SandboxContentSearchIT {
 
     private final SandboxHarness harness = SandboxHarness.standard();

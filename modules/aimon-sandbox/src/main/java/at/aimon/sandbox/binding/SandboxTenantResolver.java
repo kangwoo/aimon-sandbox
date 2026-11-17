@@ -4,7 +4,7 @@ import at.aimon.core.base.Principal;
 import at.aimon.sandbox.workspace.TenantId;
 
 /**
- * Maps a principal to its tenant (docs/design/workspace-sandbox.md §8.3) — core's {@link Principal} has no tenant
+ * Maps a principal to its tenant (docs/design/workspace-sandbox-binding.md §4) — core's {@link Principal} has no tenant
  * field. Required when {@code require-principal} is on; the single-tenant default puts everyone in
  * {@link TenantId#DEFAULT}.
  */

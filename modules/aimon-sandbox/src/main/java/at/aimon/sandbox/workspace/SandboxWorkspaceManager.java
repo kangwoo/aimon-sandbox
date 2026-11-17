@@ -45,20 +45,21 @@ import at.aimon.sandbox.provider.SandboxProvider;
 import at.aimon.sandbox.provider.SandboxProviderException;
 
 /**
- * The workspace state machine (docs/design/workspace-sandbox.md §10): lazy provisioning on {@link #connect}, owner
- * checks at every public entry point, explicit and idle close with tombstones, and reopen.
+ * The workspace state machine (docs/design/workspace-sandbox-lifecycle.md §2, §7): lazy provisioning on
+ * {@link #connect}, owner checks at every public entry point, explicit and idle close with tombstones, and reopen.
  *
  * <p>
- * Build it through {@code WorkspaceSandbox}: {@link #builder()} runs none of the startup validation (§13.2), so a
- * hand-wired manager would silently accept profiles this version refuses — {@code pause-after}, {@code seed},
- * shared access, unchecked credential bindings — and act on them as if they were not there.
+ * Build it through {@code WorkspaceSandbox}: {@link #builder()} runs none of the startup validation
+ * (docs/design/workspace-sandbox-configuration.md §3), so a hand-wired manager would silently accept profiles this
+ * version refuses — {@code pause-after}, {@code seed}, shared access, unchecked credential bindings — and act on them
+ * as if they were not there.
  *
  * <p>
- * Every write is read → decide → {@code update(id, expectedVersion, next)}; on {@link StaleVersionException} the
- * record is re-read and the decision re-made, up to {@code casRetries} times (§5.3). Provider calls happen only after
- * the CAS that authorises them. A CAS lost after a provider call never destroys what the call made — the sandbox may be
- * the winner's (§21); the janitor's reconciliation ({@code SandboxReconciler}) reclaims it once it is provably
- * nobody's.
+ * Every write is read → decide → {@code update(id, expectedVersion, next)}; on {@link StaleVersionException} the record
+ * is re-read and the decision re-made, up to {@code casRetries} times (docs/design/workspace-sandbox-domain.md §4.3).
+ * Provider calls happen only after the CAS that authorises them. A CAS lost after a provider call never destroys what
+ * the call made — the sandbox may be the winner's (§2.1); the janitor's reconciliation ({@code SandboxReconciler})
+ * reclaims it once it is provably nobody's.
  *
  * <p>
  * Provisions {@code primary} only, without {@code PAUSE_RESUME} (implementation steps 3–4).
@@ -66,7 +67,7 @@ import at.aimon.sandbox.provider.SandboxProviderException;
 public final class SandboxWorkspaceManager {
 
     /**
-     * The notice a caller gets when its workspace came back empty after an idle close (§10.5, §15).
+     * The notice a caller gets when its workspace came back empty after an idle close (§7.2, §8).
      *
      * <p>
      * <b>Internal.</b> Public only for use across this library's packages: not supported API, and it may change in
@@ -76,7 +77,7 @@ public final class SandboxWorkspaceManager {
             + "its files and shell state are gone";
 
     /**
-     * The error of a command whose sandbox disappeared under it (§15).
+     * The error of a command whose sandbox disappeared under it (§8).
      *
      * <p>
      * <b>Internal.</b> Public only for use across this library's packages: not supported API, and it may change in
@@ -89,7 +90,10 @@ public final class SandboxWorkspaceManager {
     private static final Duration SLOW_PROVISIONING = Duration.ofSeconds(5);
     private static final Duration FIRST_POLL = Duration.ofMillis(100);
     private static final Duration MAX_POLL = Duration.ofSeconds(2);
-    /** Activity writes are never dropped for a conflict (§5.3): they retry far longer than other writes. */
+    /**
+     * Activity writes are never dropped for a conflict (docs/design/workspace-sandbox-domain.md §4.3, §6): they retry
+     * far longer than other writes.
+     */
     private static final int ACTIVITY_RETRIES = 1000;
     private static final int CONFLICTS_BEFORE_BACKOFF = 10;
     /** A call that keeps losing what it just created stops instead of creating sandboxes without end. */
@@ -133,7 +137,7 @@ public final class SandboxWorkspaceManager {
 
     /**
      * For tests and custom assemblies. <b>Runs no startup validation</b>: build through {@code WorkspaceSandbox}, which
-     * refuses the settings this version cannot honour (§13.2).
+     * refuses the settings this version cannot honour (docs/design/workspace-sandbox-configuration.md §3).
      *
      * <p>
      * <b>Internal.</b> Public only for use across this library's packages: not supported API, and it may change in
@@ -146,11 +150,11 @@ public final class SandboxWorkspaceManager {
     }
 
     // ---------------------------------------------------------------------------------------------------------------
-    // connect (§10.1)
+    // connect (§2.1)
     // ---------------------------------------------------------------------------------------------------------------
 
     /**
-     * Returns the binding's slot RUNNING and seeded, provisioning it first when needed (§10.1). Called before every
+     * Returns the binding's slot RUNNING and seeded, provisioning it first when needed (§2.1). Called before every
      * command and file operation — reads are per call, writes are throttled.
      *
      * <p>
@@ -270,9 +274,9 @@ public final class SandboxWorkspaceManager {
 
         /**
          * The error with this call's notices appended. A reset notice (idle reopen, a lost or terminated sandbox) is
-         * otherwise lost when the recreate that follows it fails: the next call finds the slot FAILED, not
-         * TERMINATED, and has nothing to tell (§15). The execution environment takes the parts apart again and queues
-         * the notices for core's drain (docs/design/workspace-sandbox-unannounced-reset.md §6.3).
+         * otherwise lost when the recreate that follows it fails: the next call finds the slot FAILED, not TERMINATED,
+         * and has nothing to tell. The execution environment takes the parts apart again and queues the notices for
+         * core's drain (docs/design/workspace-sandbox-notices.md §6).
          */
         private SandboxUnavailableException withNotices(SandboxUnavailableException e) {
             if (notices.isEmpty()) {
@@ -288,7 +292,7 @@ public final class SandboxWorkspaceManager {
             if (workspace.state() != WorkspaceState.OPEN
                     && workspace.closeCause().orElse(null) == CloseCause.SESSION_DELETED) {
                 // Ahead of the use check: a re-created session with the same id and another owner must hear the same
-                // answer as its predecessor's owner would, never "not permitted" (core-033 design §6.3).
+                // answer as its predecessor's owner would, never "not permitted" (§7.4).
                 throw new SandboxUnavailableException(
                         "this session's sandbox workspace is being removed; retry shortly");
             }
@@ -415,7 +419,8 @@ public final class SandboxWorkspaceManager {
             return found.get();
         }
         if (binding.mustExist()) {
-            // A purged managed id must not come back owned by whoever binds to it next (management design §5.3).
+            // A purged managed id must not come back owned by whoever binds to it next
+            // (docs/design/workspace-sandbox-binding.md §1).
             throw new SandboxUnavailableException("sandbox workspace " + binding.workspaceId() + " does not exist");
         }
         final Instant now = clock.instant();
@@ -427,7 +432,7 @@ public final class SandboxWorkspaceManager {
     /**
      * The slot's profile, which a required one must equal; for a new slot the required profile, else the one a managed
      * workspace was created with, else the default — so a lazy bind after a refused first provisioning builds what
-     * {@code create} asked for (management design §6.1).
+     * {@code create} asked for (docs/design/workspace-sandbox-management.md §2.2).
      */
     private SandboxProfile profileFor(Target binding, SandboxWorkspace workspace, SandboxSlot slot) {
         if (slot != null) {
@@ -448,7 +453,7 @@ public final class SandboxWorkspaceManager {
                 .orElseThrow(() -> new SandboxUnavailableException("sandbox profile '" + name + "' is not configured"));
     }
 
-    /** Whether a FAILED slot may be provisioned again now (§10.1). */
+    /** Whether a FAILED slot may be provisioned again now (§2.2). */
     private boolean retryable(SandboxSlot slot, SandboxProfile profile) {
         if (slot.state() != SlotState.FAILED) {
             return false;
@@ -481,7 +486,7 @@ public final class SandboxWorkspaceManager {
                 + "provisioned: " + failure.reason() + " [step " + failure.step() + "]; " + retry);
     }
 
-    /** Creates the claimed generation's sandbox, verifies it and marks it RUNNING (§10.1 step 4). */
+    /** Creates the claimed generation's sandbox, verifies it and marks it RUNNING (§2.1 step 5). */
     private void create(SandboxWorkspace workspace, SandboxSlot slot, SandboxProfile profile) {
         final Instant now = clock.instant();
         final String key = SandboxLabels.key(settings.deployment(), workspace.id().value(), workspace.incarnation(),
@@ -535,7 +540,7 @@ public final class SandboxWorkspaceManager {
     /**
      * A provider's or server's message with the sandbox's raw id replaced by its hash, as {@link ProviderSandboxRef}
      * prints it: a recorded failure reaches owner-facing views and the model, and the id plus network reach is root in
-     * the sandbox (WS §13.3; management design §5.4).
+     * the sandbox (docs/design/workspace-sandbox-security.md §7; docs/design/workspace-sandbox-management.md §5).
      */
     static String redact(String message, ProviderSandboxRef ref) {
         if (message == null || ref == null || ref.sandboxId().isEmpty()) {
@@ -581,9 +586,9 @@ public final class SandboxWorkspaceManager {
     }
 
     /**
-     * Seeds the generation (§6.9) and records {@code seeded=true}, or FAILED(permanent) on a failed check. The
-     * provider's own checks ({@link SandboxProvider#verify}: egress enforcement, vault bindings) run first, then the
-     * seed script (§11.3).
+     * Seeds the generation (§3) and records {@code seeded=true}, or FAILED(permanent) on a failed check. The provider's
+     * own checks ({@link SandboxProvider#verify}: egress enforcement, vault bindings) run first, then the seed script
+     * (§3).
      */
     private void seed(SandboxWorkspace workspace, SandboxSlot slot, SandboxProfile profile,
             SandboxConnection connection, String root) {
@@ -628,14 +633,15 @@ public final class SandboxWorkspaceManager {
     }
 
     // ---------------------------------------------------------------------------------------------------------------
-    // close and reopen (§10.5)
+    // close and reopen (§7)
     // ---------------------------------------------------------------------------------------------------------------
 
     /**
      * Closes a workspace for good: its sandboxes are destroyed and the record stays as a tombstone for
-     * {@code closedRetention}, answering "workspace closed" until {@link #reopen} (§10.5). Idempotent, so closing an
-     * id that has no record is success — which also means a foreign caller learns whether an id exists ("not
-     * permitted" or nothing), the one thing §15 lets the owner check reveal. Workspace ids are not guessable.
+     * {@code closedRetention}, answering "workspace closed" until {@link #reopen} (§7.2). Idempotent, so closing an id
+     * that has no record is success — which also means a foreign caller learns whether an id exists ("not permitted" or
+     * nothing), the one thing docs/design/workspace-sandbox-binding.md §8 lets the owner check reveal. Workspace ids
+     * are not guessable.
      *
      * @param id
      *            the workspace
@@ -644,8 +650,8 @@ public final class SandboxWorkspaceManager {
      * @throws SandboxUnavailableException
      *             when the caller may not close it
      * @throws at.aimon.sandbox.binding.BindingRejectedException
-     *             when the principal gate refuses the caller (§8.3) — like {@code SandboxUnavailableException}, an
-     *             {@code ExecutionEnvironmentUnavailableException}
+     *             when the principal gate refuses the caller (docs/design/workspace-sandbox-binding.md §4) — like
+     *             {@code SandboxUnavailableException}, an {@code ExecutionEnvironmentUnavailableException}
      */
     public void close(SandboxWorkspaceId id, Principal caller) {
         close(id, Acting.as(callers.callerOf(Optional.ofNullable(caller))));
@@ -662,7 +668,7 @@ public final class SandboxWorkspaceManager {
 
     /**
      * Reopens a CLOSED workspace: OPEN, a new incarnation, the owner unchanged; the slots stay TERMINATED so the next
-     * use provisions a new generation (§10.5). An OPEN workspace is left as is.
+     * use provisions a new generation (§7.1). An OPEN workspace is left as is.
      *
      * @param id
      *            the workspace
@@ -674,8 +680,8 @@ public final class SandboxWorkspaceManager {
      *             its session was deleted ("being removed; retry shortly", {@link CloseCause#SESSION_DELETED}) —
      *             also when that happened after this call first read it
      * @throws at.aimon.sandbox.binding.BindingRejectedException
-     *             when the principal gate refuses the caller (§8.3) — like {@code SandboxUnavailableException}, an
-     *             {@code ExecutionEnvironmentUnavailableException}
+     *             when the principal gate refuses the caller (docs/design/workspace-sandbox-binding.md §4) — like
+     *             {@code SandboxUnavailableException}, an {@code ExecutionEnvironmentUnavailableException}
      */
     public void reopen(SandboxWorkspaceId id, Principal caller) {
         reopen(id, Acting.as(callers.callerOf(Optional.ofNullable(caller))));
@@ -692,8 +698,8 @@ public final class SandboxWorkspaceManager {
         // not silently ignored.
         mutate(id, current -> {
             // Before the CLOSING check, so a deleted session's workspace gets one answer whether or not its close has
-            // finished. Its session is gone and the record is about to be deleted (core-033 design §6.3); reopening
-            // would clear the cause and take it out of that deletion, keeping a deleted session's workspace alive.
+            // finished. Its session is gone and the record is about to be deleted (§7.4); reopening would clear the
+            // cause and take it out of that deletion, keeping a deleted session's workspace alive.
             refuseIfSessionDeleted(current);
             if (current.state() == WorkspaceState.CLOSING) {
                 throw new SandboxUnavailableException(
@@ -717,9 +723,9 @@ public final class SandboxWorkspaceManager {
     }
 
     /**
-     * The close procedure (§10.5, without the volume steps) behind {@link #close} and the janitor's closes, which are
-     * internal paths with no caller (§8.3). Every step is idempotent, so the janitor can resume a close stuck in
-     * CLOSING from the top.
+     * The close procedure (§7.1, without the volume steps) behind {@link #close} and the janitor's closes, which are
+     * internal paths with no caller (docs/design/workspace-sandbox-binding.md §5). Every step is idempotent, so the
+     * janitor can resume a close stuck in CLOSING from the top.
      *
      * @param guard
      *            re-checked on the freshly read record, whatever its state, before the state-switch CAS; a refusal
@@ -748,7 +754,7 @@ public final class SandboxWorkspaceManager {
                     return current.toBuilder().state(WorkspaceState.CLOSING).stateSince(clock.instant())
                             .closeCause(cause).build();
                 case CLOSING :
-                    // An explicit close overtaking an idle one turns it into a tombstone (§10.5).
+                    // An explicit close overtaking an idle one turns it into a tombstone (§7.2).
                     return cause == CloseCause.EXPLICIT && current.closeCause().orElse(null) == CloseCause.IDLE
                             ? current.toBuilder().closeCause(CloseCause.EXPLICIT).build()
                             : current;
@@ -791,7 +797,7 @@ public final class SandboxWorkspaceManager {
     }
 
     /**
-     * CAS one slot to TERMINATED, then destroy its sandbox (§10.5 step 2, §10.4 item 1).
+     * CAS one slot to TERMINATED, then destroy its sandbox (§7.1 step 2, §6.1).
      *
      * @param guard
      *            re-checked on the freshly read slot before the CAS (the janitor's idle condition)
@@ -819,12 +825,12 @@ public final class SandboxWorkspaceManager {
     }
 
     /**
-     * Reclaims a PROVISIONING slot whose claim nobody finished or took over (§10.4 item 1 as amended in implementation
-     * step 3): its claimer died, or its {@code create} or RUNNING CAS failed in a way that left the claim behind. Such
-     * a slot would otherwise block the idle close and hold an admission slot until someone connects to that session.
-     * The claim must be {@link #provisioningAbandoned abandoned} — twice {@code provisionTimeout}, longer than any
-     * claimer still working and than the connect-path takeover — and still the same on the freshly read record. The
-     * slot becomes TERMINATED, and a sandbox the claimer may have created under its key is destroyed.
+     * Reclaims a PROVISIONING slot whose claim nobody finished or took over (§6.1): its claimer died, or its
+     * {@code create} or RUNNING CAS failed in a way that left the claim behind. Such a slot would otherwise block the
+     * idle close and hold an admission slot until someone connects to that session. The claim must be
+     * {@link #provisioningAbandoned abandoned} — twice {@code provisionTimeout}, longer than any claimer still working
+     * and than the connect-path takeover — and still the same on the freshly read record. The slot becomes TERMINATED,
+     * and a sandbox the claimer may have created under its key is destroyed.
      *
      * @return whether this call reclaimed it
      */
@@ -870,9 +876,9 @@ public final class SandboxWorkspaceManager {
     }
 
     /**
-     * Waits for the workspace's sandboxes to disappear (§10.5 step 3), destroying what is still listed while the
-     * record is this close's: a sandbox whose creator lost its RUNNING CAS to this close is recorded nowhere, and
-     * nothing else would destroy it before provider expiry. Each destroy re-reads the record first.
+     * Waits for the workspace's sandboxes to disappear (§7.1 step 3), destroying what is still listed while the record
+     * is this close's: a sandbox whose creator lost its RUNNING CAS to this close is recorded nowhere, and nothing else
+     * would destroy it before provider expiry. Each destroy re-reads the record first.
      */
     private void awaitSandboxesGone(SandboxWorkspaceId id, Predicate<SandboxWorkspace> stillClosing) {
         final Map<String, String> selector = SandboxLabels.workspaceSelector(settings.deployment(), id.value());
@@ -913,14 +919,14 @@ public final class SandboxWorkspaceManager {
     }
 
     // ---------------------------------------------------------------------------------------------------------------
-    // managed workspaces and session options (docs/design/workspace-sandbox-management.md §6.1, §6.2, §6.6)
+    // managed workspaces and session options (docs/design/workspace-sandbox-management.md §2, §3)
     // ---------------------------------------------------------------------------------------------------------------
 
     /**
-     * Creates a managed workspace and provisions its {@code primary} slot before returning (management design §6.1):
-     * the principal gate on {@code owner}, the request's checks, {@code max-managed-per-owner}, then a record under a
-     * new {@code wsm:} id and the {@link #connect} state machine from step 2 on. Repeating a call creates a second
-     * workspace.
+     * Creates a managed workspace and provisions its {@code primary} slot before returning
+     * (docs/design/workspace-sandbox-management.md §2.2): the principal gate on {@code owner}, the request's checks,
+     * {@code max-managed-per-owner}, then a record under a new {@code wsm:} id and the {@link #connect} state machine
+     * from step 2 on. Repeating a call creates a second workspace.
      *
      * <p>
      * <b>Internal.</b> Public only for use across this library's packages: not supported API, and it may change in
@@ -1034,10 +1040,10 @@ public final class SandboxWorkspaceManager {
     }
 
     /**
-     * Deletes a CLOSED managed workspace for good (management design §6.6): the manage right, then the record (a CAS on
-     * the version read — a concurrent reopen makes it fail and nothing else happens), a {@code WORKSPACE_PURGED} event,
-     * then every session's attachment to it. When that last step fails the janitor's sweep finishes it. An id with no
-     * record is success, as for {@link #close}.
+     * Deletes a CLOSED managed workspace for good (§7.3): the manage right, then the record (a CAS on the version read
+     * — a concurrent reopen makes it fail and nothing else happens), a {@code WORKSPACE_PURGED} event, then every
+     * session's attachment to it. When that last step fails the janitor's sweep finishes it. An id with no record is
+     * success, as for {@link #close}.
      *
      * <p>
      * <b>Internal.</b> Public only for use across this library's packages: not supported API, and it may change in
@@ -1087,7 +1093,7 @@ public final class SandboxWorkspaceManager {
 
     /**
      * A workspace as {@code caller} may see it: empty when it does not exist or the caller may not use it — the two
-     * answer alike (WS §15).
+     * answer alike (docs/design/workspace-sandbox-binding.md §8).
      *
      * <p>
      * <b>Internal.</b> Public only for use across this library's packages: not supported API, and it may change in
@@ -1150,11 +1156,11 @@ public final class SandboxWorkspaceManager {
     }
 
     /**
-     * Sets a session's sandbox options (management design §6.2): only the session's owner — tenant and principal,
-     * whatever any access mode says — and, for an attachment, to a managed workspace that is OPEN or idle-closed and
-     * that both the caller and the session's owner may use. Each turn is still checked at {@code connect} against the
-     * <i>executing</i> principal: in a multi-participant session a non-owner's turn into the attached workspace passes
-     * only if that participant may use it. Touches no sandbox.
+     * Sets a session's sandbox options (docs/design/workspace-sandbox-management.md §3.2): only the session's owner —
+     * tenant and principal, whatever any access mode says — and, for an attachment, to a managed workspace that is OPEN
+     * or idle-closed and that both the caller and the session's owner may use. Each turn is still checked at
+     * {@code connect} against the <i>executing</i> principal: in a multi-participant session a non-owner's turn into
+     * the attached workspace passes only if that participant may use it. Touches no sandbox.
      *
      * <p>
      * <b>Internal.</b> Public only for use across this library's packages: not supported API, and it may change in
@@ -1195,7 +1201,7 @@ public final class SandboxWorkspaceManager {
                         + "; it has to be reopened before a session can be attached to it");
             }
             // The consistency check, on the administrator's path too: no session is attached where its owner's turns
-            // would all be refused (§5.5).
+            // would all be refused (docs/design/workspace-sandbox-management.md §4.3).
             if (!acting.mayUse(this, workspace) || !mayUse(workspace, sessionOwner)) {
                 throw new BindingRejectedException("the owner of session " + session.value()
                         + " is not permitted to use sandbox workspace " + workspace.id());
@@ -1212,8 +1218,8 @@ public final class SandboxWorkspaceManager {
 
     /**
      * Clears a session's attachment and rule, keeping its {@code lastWorkspaceId} so its next turn hears that it moved
-     * (§6.4), and its unannounced reset; a record with nothing left is deleted. The same rights as
-     * {@link #setSessionOptions}.
+     * (docs/design/workspace-sandbox-notices.md §3), and its unannounced reset; a record with nothing left is deleted.
+     * The same rights as {@link #setSessionOptions}.
      *
      * <p>
      * <b>Internal.</b> Public only for use across this library's packages: not supported API, and it may change in
@@ -1240,9 +1246,9 @@ public final class SandboxWorkspaceManager {
             }
             final SessionSandboxOptions record = current.get();
             // Where the session last ran: recorded, else the workspace it is being detached from. Every tool result now
-            // delivers the switch notice (core-033 design §6.4), but its record write is asynchronous and loses its CAS
-            // to this clear when the two race: without the fallback the next turn would land elsewhere silently,
-            // although the model was last told it runs here.
+            // delivers the switch notice (docs/design/workspace-sandbox-notices.md §3), but its record write is
+            // asynchronous and loses its CAS to this clear when the two race: without the fallback the next turn would
+            // land elsewhere silently, although the model was last told it runs here.
             final Optional<SandboxWorkspaceId> last = record.lastWorkspaceId().or(record::workspace);
             try {
                 if (last.isEmpty() && record.unannouncedReset().isEmpty()) {
@@ -1311,10 +1317,10 @@ public final class SandboxWorkspaceManager {
 
     /**
      * Keeps a reset of a session's sandbox on its options record until a drain delivers it
-     * (docs/design/workspace-sandbox-unannounced-reset.md §2.1, §6.1). Called by the root environment whose
-     * {@code connect} reset the slot, synchronously and before the reset notice is queued — so no drain can return the
-     * notice before it is durable — on a path that is provisioning a sandbox anyway. A newer reset replaces an older
-     * one: both say that the files from before are gone.
+     * (docs/design/workspace-sandbox-notices.md §5.2). Called by the root environment whose {@code connect} reset the
+     * slot, synchronously and before the reset notice is queued — so no drain can return the notice before it is
+     * durable — on a path that is provisioning a sandbox anyway. A newer reset replaces an older one: both say that the
+     * files from before are gone.
      *
      * <p>
      * Best effort and never throws: on a store error or {@code casRetries} lost CASes it logs a WARN and returns empty,
@@ -1326,7 +1332,7 @@ public final class SandboxWorkspaceManager {
      * A switch the same environment already delivered, whose asynchronous {@link #acknowledgeLater} may still be
      * queued, is written along with the reset, under the same strict version CAS: otherwise this write would move the
      * record past {@code switchVersion} first and that acknowledgement would lose its CAS, so the next turn would hear
-     * the switch again (design §12).
+     * the switch again (docs/design/workspace-sandbox-notices.md §5.2).
      *
      * <p>
      * <b>Internal.</b> Public only for use across this library's packages: not supported API, and it may change in
@@ -1390,8 +1396,8 @@ public final class SandboxWorkspaceManager {
 
     /**
      * Records on the background executor what a drain delivered, so that core's {@code drainNotices()}, which triggers
-     * it, never waits on the store (core-033 design §6.4, docs/design/workspace-sandbox-unannounced-reset.md §6.2). A
-     * refused submission is logged; the worst case is the switch notice, or a reset, told once more.
+     * it, never waits on the store (docs/design/workspace-sandbox-notices.md §3, §5.2). A refused submission is logged;
+     * the worst case is the switch notice, or a reset, told once more.
      *
      * <p>
      * <b>Internal.</b> Public only for use across this library's packages: not supported API, and it may change in
@@ -1421,9 +1427,9 @@ public final class SandboxWorkspaceManager {
      * <ul>
      * <li>{@code lastWorkspace} is written only while the record is still at {@code expectedVersion} — a CAS on what
      * the binding read, so a re-attach since is never overwritten; the worst case is the switch notice repeating once
-     * (§6.4). With no {@code expectedVersion} the session had no record and one is created holding only
-     * {@code lastWorkspaceId} — unless core's session store is wired and no longer knows the session: a write queued
-     * behind a deletion must not bring the deleted session's state back.</li>
+     * (docs/design/workspace-sandbox-notices.md §3). With no {@code expectedVersion} the session had no record and one
+     * is created holding only {@code lastWorkspaceId} — unless core's session store is wired and no longer knows the
+     * session: a write queued behind a deletion must not bring the deleted session's state back.</li>
      * <li>{@code delivered} is cleared only while the record still holds exactly that reset: a newer one, written since
      * by another execution of the session, is left for its own delivery. Nothing is created for it.</li>
      * </ul>
@@ -1492,7 +1498,7 @@ public final class SandboxWorkspaceManager {
     }
 
     // ---------------------------------------------------------------------------------------------------------------
-    // session deletion (kangwoo/aimon-core#253, docs/design/workspace-sandbox-core-033.md §6.3)
+    // session deletion (kangwoo/aimon-core#253, §7.4)
     // ---------------------------------------------------------------------------------------------------------------
 
     /**
@@ -1624,8 +1630,9 @@ public final class SandboxWorkspaceManager {
     }
 
     /**
-     * The session's owner, which the caller must be — the right over a session is its owner's (§6.2) — unless an
-     * administrator acts (§5.5): the lookup is still required and must know the session.
+     * The session's owner, which the caller must be — the right over a session is its owner's
+     * (docs/design/workspace-sandbox-management.md §3.1) — unless an administrator acts
+     * (docs/design/workspace-sandbox-management.md §4.3): the lookup is still required and must know the session.
      */
     private WorkspaceOwner requireSessionOwner(SessionId session, Acting acting) {
         Objects.requireNonNull(session, "session must not be null");
@@ -1682,12 +1689,12 @@ public final class SandboxWorkspaceManager {
     }
 
     // ---------------------------------------------------------------------------------------------------------------
-    // administration (docs/design/workspace-sandbox-management.md §5.5, §6.7, §6.8) — no owner check on the actor
+    // administration (docs/design/workspace-sandbox-management.md §4) — no owner check on the actor
     // ---------------------------------------------------------------------------------------------------------------
 
     /**
      * Who a management call acts as: a principal holding the owner's rights, or an administrator, who passes no owner
-     * or tenant check and is only recorded (§5.5).
+     * or tenant check and is only recorded (docs/design/workspace-sandbox-management.md §4.1).
      */
     private static final class Acting {
         private final WorkspaceOwner who;
@@ -1845,9 +1852,9 @@ public final class SandboxWorkspaceManager {
     }
 
     /**
-     * Terminates one slot (§6.7): CAS to TERMINATED, then destroy, with cause "terminated by administrator". The
-     * workspace stays OPEN and the next use provisions a new generation; a command running in it fails as "lost". A
-     * slot that is absent or already TERMINATED is left alone.
+     * Terminates one slot (docs/design/workspace-sandbox-management.md §4.5): CAS to TERMINATED, then destroy, with
+     * cause "terminated by administrator". The workspace stays OPEN and the next use provisions a new generation; a
+     * command running in it fails as "lost". A slot that is absent or already TERMINATED is left alone.
      *
      * <p>
      * <b>Internal.</b> Public only for use across this library's packages: not supported API, and it may change in
@@ -1952,9 +1959,9 @@ public final class SandboxWorkspaceManager {
     }
 
     /**
-     * Every sandbox the provider runs for this deployment, with the reconciler's verdict (§6.8): the store is scanned
-     * first, to the end, then the provider listed — the reconciler's order (WS §10.4). Informational: nothing is
-     * destroyed. O(records + sandboxes), uncached.
+     * Every sandbox the provider runs for this deployment, with the reconciler's verdict
+     * (docs/design/workspace-sandbox-management.md §4.4): the store is scanned first, to the end, then the provider
+     * listed — the reconciler's order (§6.2). Informational: nothing is destroyed. O(records + sandboxes), uncached.
      *
      * <p>
      * <b>Internal.</b> Public only for use across this library's packages: not supported API, and it may change in
@@ -1983,7 +1990,8 @@ public final class SandboxWorkspaceManager {
             final SandboxWorkspace record = byHash.get(sandbox.labels().get(SandboxLabels.WORKSPACE));
             final SandboxReconciler.Verdict verdict = SandboxReconciler.classify(record, sandbox);
             // What the janitor waits for: the grace of an ORPHAN or a DUPLICATE, and of an IN_FLIGHT sandbox ahead of
-            // its record's generation, which it treats as ORPHAN once the grace is over (§6.8).
+            // its record's generation, which it treats as ORPHAN once the grace is over
+            // (docs/design/workspace-sandbox-management.md §4.4).
             final boolean graced = verdict.afterGrace() || verdict == SandboxReconciler.Verdict.IN_FLIGHT
                     && SandboxReconciler.inFlightByGeneration(record, sandbox);
             final SandboxView.Builder view = SandboxView.builder().refHash(SandboxLabels.h(sandbox.ref().sandboxId()))
@@ -2005,7 +2013,7 @@ public final class SandboxWorkspaceManager {
     }
 
     // ---------------------------------------------------------------------------------------------------------------
-    // reconciliation (§10.4 item 2) — every write guarded on generation, providerRef and state
+    // reconciliation (§6.2) — every write guarded on generation, providerRef and state
     // ---------------------------------------------------------------------------------------------------------------
 
     private static Optional<SandboxSlot> sameSandbox(SandboxWorkspace current, SandboxSlot slot) {
@@ -2034,7 +2042,7 @@ public final class SandboxWorkspaceManager {
     }
 
     /**
-     * Declares the slot's sandbox LOST once it has been missing for {@code lost-confirm-after} (§10.4): TERMINATED with
+     * Declares the slot's sandbox LOST once it has been missing for {@code lost-confirm-after} (§6.2): TERMINATED with
      * {@code lostAt}, the connection evicted, a {@code LOST} event. The next call provisions a new generation and tells
      * the model {@code /workspace} was reset.
      *
@@ -2063,7 +2071,7 @@ public final class SandboxWorkspaceManager {
     }
 
     // ---------------------------------------------------------------------------------------------------------------
-    // files (docs/design/workspace-sandbox-files.md §6.1) — a running sandbox's files, never provisioning
+    // files (docs/design/workspace-sandbox-management.md §6.2) — a running sandbox's files, never provisioning
     // ---------------------------------------------------------------------------------------------------------------
 
     /**
@@ -2163,10 +2171,10 @@ public final class SandboxWorkspaceManager {
     // ---------------------------------------------------------------------------------------------------------------
 
     /**
-     * The use right (§8.3; management design §6.5): the tenant always, the principal too unless the workspace's access
-     * — its own, else {@code workspace-access} — is {@code tenant}. Checked by {@code connect}, {@code provision},
-     * {@code describe} and for the target of session options. The message says nothing about the workspace beyond "not
-     * permitted" (§15).
+     * The use right (docs/design/workspace-sandbox-binding.md §5): the tenant always, the principal too unless the
+     * workspace's access — its own, else {@code workspace-access} — is {@code tenant}. Checked by {@code connect},
+     * {@code provision}, {@code describe} and for the target of session options. The message says nothing about the
+     * workspace beyond "not permitted" (docs/design/workspace-sandbox-binding.md §8).
      *
      * @throws SandboxUnavailableException
      *             when {@code caller} may not use it
@@ -2188,9 +2196,9 @@ public final class SandboxWorkspaceManager {
     }
 
     /**
-     * The manage right (management design §6.5) of {@code close}, {@code reopen} and {@code purge}: on a
-     * {@code MANAGED} record the owner's tenant and principal, whatever its access mode — sharing a workspace lets
-     * others use it, not end it; on a {@code DERIVED} record the use right, as before.
+     * The manage right (docs/design/workspace-sandbox-binding.md §5) of {@code close}, {@code reopen} and
+     * {@code purge}: on a {@code MANAGED} record the owner's tenant and principal, whatever its access mode — sharing a
+     * workspace lets others use it, not end it; on a {@code DERIVED} record the use right, as before.
      *
      * @throws SandboxUnavailableException
      *             when {@code caller} may not manage it
@@ -2338,7 +2346,7 @@ public final class SandboxWorkspaceManager {
     }
 
     // ---------------------------------------------------------------------------------------------------------------
-    // activity (§5.3, §10.3)
+    // activity (§5; docs/design/workspace-sandbox-domain.md §6)
     // ---------------------------------------------------------------------------------------------------------------
 
     private SlotActivity activity(SandboxWorkspace workspace, SandboxSlot slot, SandboxProfile profile) {
@@ -2488,7 +2496,7 @@ public final class SandboxWorkspaceManager {
             return this;
         }
 
-        /** Default: none — session options are then refused (management design §6.2). */
+        /** Default: none — session options are then refused (docs/design/workspace-sandbox-management.md §3.1). */
         public Builder sessionOwners(SessionOwnerLookup sessionOwners) {
             this.sessionOwners = sessionOwners;
             return this;

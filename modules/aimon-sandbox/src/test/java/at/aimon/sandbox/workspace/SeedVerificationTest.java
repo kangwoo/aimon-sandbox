@@ -27,8 +27,8 @@ import at.aimon.sandbox.provider.VerificationFailure;
 import at.aimon.sandbox.testkit.SandboxTestProfiles;
 
 /**
- * The seed step's checks of implementation step 4 (§11.3): the provider's {@link SandboxProvider#verify} and the
- * control-plane network probe, end to end through {@code WorkspaceSandbox} on the local provider.
+ * The seed step's checks (docs/design/workspace-sandbox-lifecycle.md §3): the provider's {@link SandboxProvider#verify}
+ * and the control-plane network probe, end to end through {@code WorkspaceSandbox} on the local provider.
  */
 class SeedVerificationTest {
 

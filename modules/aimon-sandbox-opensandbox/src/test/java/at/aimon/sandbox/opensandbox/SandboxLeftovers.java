@@ -14,7 +14,7 @@ import java.util.stream.Collectors;
 import at.aimon.core.shell.ShellCommandResult;
 
 /**
- * What a shell-engine run leaves in a sandbox (docs/design/ptc-shell-provider.md §9 Q-C4): the sandbox's processes as
+ * What a shell-engine run leaves in a sandbox (docs/design/workspace-sandbox-testing.md §6): the sandbox's processes as
  * {@code /proc} (or {@code ps}) lists them, the ones that count as left over — a zombie, a core runtime
  * ({@code aimon_ptc}) or a child the test's program started — and which of them are new since a baseline. A zombie is
  * shown with its parent, the process that did not reap it. Also the program a run executes to record the runtime's

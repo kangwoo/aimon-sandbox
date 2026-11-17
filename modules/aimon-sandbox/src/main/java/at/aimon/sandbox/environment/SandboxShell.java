@@ -57,9 +57,9 @@ import at.aimon.sandbox.workspace.SandboxUnavailableException;
 import at.aimon.sandbox.workspace.SandboxWorkspaceManager;
 
 /**
- * The shell of a sandbox environment (docs/design/workspace-sandbox.md §9): one {@code run} per command, wrapped by
- * {@link ShellWrapper} so {@code cd} and {@code export} persist per {@link at.aimon.sandbox.binding.ShellKey} in a
- * state file inside the sandbox.
+ * The shell of a sandbox environment (docs/design/workspace-sandbox-shell.md §1, §2): one {@code run} per command,
+ * wrapped by {@link ShellWrapper} so {@code cd} and {@code export} persist per
+ * {@link at.aimon.sandbox.binding.ShellKey} in a state file inside the sandbox.
  *
  * <p>
  * Each call connects (lazy provisioning), records activity, takes the node-local lock of its shell (the in-sandbox
@@ -99,7 +99,7 @@ import at.aimon.sandbox.workspace.SandboxWorkspaceManager;
  * mismatch throws {@link RunDirectoryIntegrityException} and the command does not run. Any other failure to place them
  * is a plain {@link ShellExecutionException}. The wrapper removes the directory, and so does {@code cleanUp} when the
  * wrapper was killed first. Narrowing, not a privilege boundary: a process of the same user can still reach the
- * directory while the command runs (docs/design/workspace-sandbox.md §12.1).
+ * directory while the command runs (docs/design/workspace-sandbox-security.md §6).
  *
  * <p>
  * <b>Cancellation</b> ({@link ShellFeature#CANCELLATION}, foreground and background alike). The signal of
@@ -117,22 +117,22 @@ import at.aimon.sandbox.workspace.SandboxWorkspaceManager;
  * <p>
  * The kill — for a timeout, an interrupt and a cancellation — reaches the exec's <b>process group</b>: the wrapper,
  * the command and every descendant that stayed in the group. A job the command moved into a group or session of its
- * own ({@code setsid}, {@code set -m}) outlives it until the sandbox goes; the exec server offers nothing wider (§9).
+ * own ({@code setsid}, {@code set -m}) outlives it until the sandbox goes; the exec server offers nothing wider (§6.1).
  *
  * <p>
  * <b>Streaming</b> ({@link ShellFeature#STREAMING}). A command run through
  * {@link #execute(ShellCommand, ExecutionOptions, ShellLineListener)} takes a hook's stream path whatever its flags —
  * no lock, no state save, the watchdog — and its stdout reaches the listener line by line as the provider delivers it.
  * This is what a background monitor runs on; it relies on the provider calling its {@link OutputSink} as output
- * arrives, which the SPI already asks of it (§6.2).
+ * arrives, which the SPI already asks of it (docs/design/workspace-sandbox-provider.md §2.2).
  *
  * <p>
  * <b>A command the provider ended itself</b> ({@link ExecOutcome#killCause()}: a line over its limit) is reported on
  * the result's {@link ShellCommandResult#killCause()} for an isolated command that is not a hook's — the call shape of
  * core's {@code ExecuteCode} shell engine, which reads a result with {@link ShellKillCause#LINE_LIMIT_EXCEEDED} as a
- * protocol violation (docs/design/ptc-shell-prerequisites.md S8). Every other run keeps failing with an exception
- * whose message names the cause: a hook that floods a line must not come back as a plain exit code its runner might
- * treat as a decision.
+ * protocol violation (docs/design/workspace-sandbox-shell-engine.md §5). Every other run keeps failing with an
+ * exception whose message names the cause: a hook that floods a line must not come back as a plain exit code its runner
+ * might treat as a decision.
  *
  * <p>
  * <b>Notices.</b> A result or exception carries only what is true of its own command: {@link #KILLED_NOTICE} and a
@@ -147,7 +147,7 @@ final class SandboxShell implements VirtualShell {
 
     /**
      * How much a provider's line normalization can grow a stream: every invalid UTF-8 byte becomes U+FFFD, three bytes
-     * (docs/design/workspace-sandbox.md §6.1).
+     * (docs/design/workspace-sandbox-provider.md §2.3).
      */
     static final long NORMALIZATION_GROWTH = 3;
 
@@ -164,7 +164,7 @@ final class SandboxShell implements VirtualShell {
     private static final Duration BACKSTOP_SLACK = Duration.ofSeconds(5);
     private static final Pattern TRAILER = Pattern
             .compile("exit=(-?\\d+) out=\\s*(\\d+) err=\\s*(\\d+) cwd=(\\d)\\s*$");
-    /** A stream run's trailer after its marker: no byte counts, and not anchored at the end (§9). */
+    /** A stream run's trailer after its marker: no byte counts, and not anchored at the end (§4.1). */
     private static final Pattern STREAM_TRAILER = Pattern.compile("exit=(-?\\d+) cwd=(\\d)\\r?\\n");
     /** How long a stream run's exec lives after its trailer arrived, unless its wait returns first. */
     static final Duration TRAILER_KILL_GRACE = Duration.ofMillis(500);
@@ -207,7 +207,7 @@ final class SandboxShell implements VirtualShell {
      * {@inheritDoc}
      *
      * <p>
-     * A streamed command takes the stream path of a hook's command (§9): no shell lock and no state save, the
+     * A streamed command takes the stream path of a hook's command (§5.5): no shell lock and no state save, the
      * session's cwd and exports to start from, the watchdog for its timeout, and its output in the exec's own streams.
      * Its stdout and stderr reach the listener as the provider delivers them ({@link StreamLines}); the wrapper's
      * trailer line is taken out of stderr and never reaches the listener. The result keeps stdout capped as any stream
@@ -275,7 +275,7 @@ final class SandboxShell implements VirtualShell {
         slot.activity().record(false);
         if (!foreground) {
             // None may hold the session's shell: a background command outlives the call, and a hook or an isolated
-            // command runs on behalf of the runtime between the model's own commands (§9, §12.1). None saves state;
+            // command runs on behalf of the runtime between the model's own commands (§5). None saves state;
             // only an isolated command does not read it either.
             return run(slot, plan, options);
         }
@@ -338,7 +338,7 @@ final class SandboxShell implements VirtualShell {
      */
     private Plan plan(String text, ExecutionOptions options, boolean foreground, ShellLineListener listener)
             throws ShellExecutionException {
-        // A streamed command that is neither a hook's nor isolated runs as a hook's would: the stream path (§9).
+        // A streamed command that is neither a hook's nor isolated runs as a hook's would: the stream path (§5.5).
         final Mode mode = foreground
                 ? Mode.FOREGROUND
                 : options.isIsolated()
@@ -389,8 +389,8 @@ final class SandboxShell implements VirtualShell {
             fileUploads.add(new Upload(runPrefix + ".blob", ShellWrapper.blob(runFiles), "the hook files"));
             inlineBytes += ShellWrapper.scriptBytes(ShellWrapper.quote(manifest));
             // A secret file never goes into the script, which is the exec's argument and so readable in
-            // /proc/<pid>/cmdline: all of them are uploaded, still two files (docs/design/ptc-shell-prerequisites.md
-            // S4).
+            // /proc/<pid>/cmdline: all of them are uploaded, still two files
+            // (docs/design/workspace-sandbox-shell-engine.md §4).
             final boolean secret = !runDirectory.get().getSecretPaths().isEmpty();
             filesUploaded = secret || inlineBytes > ShellWrapper.INLINE_RUN_FILES_LIMIT;
             invocation.runDirectory(runDirectory.get().getVariable(), runFiles, filesUploaded);
@@ -475,7 +475,7 @@ final class SandboxShell implements VirtualShell {
     /**
      * The provider-side capture cap of one wrapper run: a backstop the wrapper's own {@code head -c {max}} never lets
      * raw output reach, sized so that a line-normalizing provider cannot cut the trailer off either — {@code max} raw
-     * bytes can arrive as {@code 3 × max} (§6.1). Saturates instead of overflowing for a huge {@code max}.
+     * bytes can arrive as {@code 3 × max} (§8). Saturates instead of overflowing for a huge {@code max}.
      */
     static long captureBackstop(long max) {
         if (max > (Long.MAX_VALUE - TRAILER_ALLOWANCE) / NORMALIZATION_GROWTH) {
@@ -500,7 +500,8 @@ final class SandboxShell implements VirtualShell {
             // Not binding.root(): a command may have removed it, and an exec server may refuse a missing directory
             // before the wrapper could fall back. The wrapper moves into the root itself.
             // A stream run's output is the exec's own streams, so the provider's copy of them is the only one left in
-            // the sandbox after the run: it goes too (transientOutput, docs/design/ptc-shell-prerequisites.md S1).
+            // the sandbox after the run: it goes too (transientOutput,
+            // docs/design/workspace-sandbox-shell-engine.md §6).
             final ExecSpec spec = ExecSpec.builder().command(plan.script).workingDirectory(ShellWrapper.EXEC_DIRECTORY)
                     .environment(slot.profile().environment()).timeout(plan.backstop)
                     .maxCaptureBytes(captureBackstop(plan.run.max)).transientOutput(plan.run.mode.streams()).build();
@@ -536,7 +537,7 @@ final class SandboxShell implements VirtualShell {
         }
     }
 
-    /** Which wrapper script a run uses (§9). */
+    /** Which wrapper script a run uses (§2.2, §9.1). */
     private enum Mode {
         /** The model's command: the shell's lock, the state save and the watchdog. */
         FOREGROUND,
@@ -577,7 +578,10 @@ final class SandboxShell implements VirtualShell {
         private final String privateDirectory;
         private final boolean uploadedRunFiles;
         private final boolean uploadedStdin;
-        /** An isolated command that is not a hook's: a kill cause is its result's, not an exception's (S8). */
+        /**
+         * An isolated command that is not a hook's: a kill cause is its result's, not an exception's
+         * (docs/design/workspace-sandbox-shell-engine.md §5).
+         */
         private final boolean reportsKillCause;
 
         private Run(String prefix, String nonce, Duration timeout, long max, Mode mode, ExecutionOptions options,
@@ -629,7 +633,7 @@ final class SandboxShell implements VirtualShell {
             }
         });
         final CountDownLatch awaited = new CountDownLatch(1);
-        // A stream run ends at its trailer: what it left running in the exec's process group goes with it (§9).
+        // A stream run ends at its trailer: what it left running in the exec's process group goes with it (§9.5).
         final TrailerWatch watch = run.mode.streams()
                 ? new TrailerWatch(run.nonce, () -> killAfterTrailer(running, awaited))
                 : null;
@@ -887,14 +891,14 @@ final class SandboxShell implements VirtualShell {
      * A stream run's result. The trailer is the one in the captured stderr — matched at its marker, not at the end: a
      * descendant may write after it before the kill lands, and that is dropped — or, when the provider's capture cap
      * cut it off, the one {@link TrailerWatch} parsed from the stream. The cap is applied here, on the bytes received
-     * (after any line normalization, §6.1): stdout and the stderr before the trailer, each cut to {@code max}.
+     * (after any line normalization, §8): stdout and the stderr before the trailer, each cut to {@code max}.
      *
      * <p>
      * An isolated non-hook run that the provider ended for a long line keeps that cause even when the trailer arrived
-     * (S8). Deliberate, not an oversight: output after the cut was lost although the wrapper finished, so the caller
-     * must not read the stream as complete — and core's shell engine then reports a protocol violation for a run
-     * whose wrapper ended normally. On OpenSandbox this only happens when something floods after the trailer, since
-     * its reader stops at the long line.
+     * (docs/design/workspace-sandbox-shell-engine.md §5). Deliberate, not an oversight: output after the cut was lost
+     * although the wrapper finished, so the caller must not read the stream as complete — and core's shell engine then
+     * reports a protocol violation for a run whose wrapper ended normally. On OpenSandbox this only happens when
+     * something floods after the trailer, since its reader stops at the long line.
      */
     private Optional<ShellCommandResult> completedStream(ExecOutcome outcome, Run run, Duration duration,
             TrailerWatch watch) {
@@ -1023,7 +1027,7 @@ final class SandboxShell implements VirtualShell {
 
     /**
      * The lock stayed busy for {@code shellLockWait} although this node holds no command on the shell: another node
-     * is running one (§9). Implementation step 3 is single-node, so it reports rather than takes over.
+     * is running one (§3.3). Implementation step 3 is single-node, so it reports rather than takes over.
      */
     private String busyLockMessage(ConnectedSlot slot) {
         String owner = "";
@@ -1152,7 +1156,7 @@ final class SandboxShell implements VirtualShell {
                 || feature == ShellFeature.RUN_DIRECTORY || feature == ShellFeature.STREAMING;
     }
 
-    /** Nothing to release: the environment is a view (§3.2). */
+    /** Nothing to release: the environment is a view (docs/design/workspace-sandbox.md §4). */
     @Override
     public void close() {
         // Nothing is held between calls.

@@ -10,15 +10,16 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 /**
- * execd's {@code /command} stream: JSON objects separated by blank lines, each optionally prefixed {@code data:} as
- * in SSE (docs/design/opensandbox-spike.md §3, B §d). Tolerant: a line that is not JSON is skipped.
+ * execd's {@code /command} stream: JSON objects separated by blank lines, each optionally prefixed {@code data:} as in
+ * SSE (docs/design/workspace-sandbox-opensandbox.md §3.2, spike/opensandbox/reports/B-docker.md §d). Tolerant: a line
+ * that is not JSON is skipped.
  *
  * <p>
  * <b>Bounded.</b> execd puts no limit on an output line (it buffers a pending line without bound and sends it as one
  * event), so a command that prints one huge line would make a line reader hold all of it before the capture cap could
  * apply. A line is therefore never materialized past {@link #MAX_LINE_BYTES}: the reader stops with
  * {@link LineTooLongException} as soon as a line grows over the limit, having held at most that many bytes of it
- * (docs/design/ptc-shell-prerequisites.md S2).
+ * (docs/design/workspace-sandbox-provider.md §2.4, docs/design/workspace-sandbox-opensandbox.md §4.4).
  */
 final class SseEvents {
 

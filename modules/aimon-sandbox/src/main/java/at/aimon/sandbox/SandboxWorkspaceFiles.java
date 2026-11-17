@@ -33,8 +33,8 @@ import at.aimon.sandbox.workspace.WorkspaceFilesUnavailableException;
 
 /**
  * The files of a workspace's running sandbox, for a person — the backend of a file explorer
- * (docs/design/workspace-sandbox-files.md). Get the owner-facing one from {@link SandboxWorkspaces#files()} and the
- * operator's from {@link SandboxAdministration#files()}.
+ * (docs/design/workspace-sandbox-management.md §6). Get the owner-facing one from {@link SandboxWorkspaces#files()} and
+ * the operator's from {@link SandboxAdministration#files()}.
  *
  * <pre>{@code
  * SandboxWorkspaceFiles files = sandbox.workspaces().files();

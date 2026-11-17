@@ -30,23 +30,24 @@ import at.aimon.sandbox.workspace.SandboxWorkspaceStore;
 import at.aimon.sandbox.workspace.WorkspaceOwner;
 
 /**
- * aimon-core's {@link ExecutionEnvironmentProvider}, answered with sandboxes (docs/design/workspace-sandbox.md §7).
+ * aimon-core's {@link ExecutionEnvironmentProvider}, answered with sandboxes (docs/design/workspace-sandbox.md §6.1).
  *
  * <p>
  * {@link #resolve} makes no provider call and at most one workspace-store read and, for a session, one options-store
- * read (docs/design/workspace-sandbox-management.md §6.3): it binds the request (§8) and returns a
+ * read (docs/design/workspace-sandbox-binding.md §1, §2): it binds the request and returns a
  * {@link SandboxExecutionEnvironment} whose descriptor carries the profile's <i>declared</i> platform, OS, shell and
  * runtimes, and {@code SANDBOXED} isolation, so a turn that runs no command provisions nothing and the prompt does not
  * change between generations. A binding that cannot be made is thrown as core's
  * {@code ExecutionEnvironmentUnavailableException}; core then installs an unavailable environment, and the tools fail
- * with the reason — never on the host (§12.1).
+ * with the reason — never on the host (§7; docs/design/workspace-sandbox-security.md §3).
  *
  * <p>
- * A fork — {@code request.fork().isPresent()}, never judged by {@code parent} (§8.1) — inherits its parent's
- * workspace, owner and root, gets {@code exec:{executionId}} as its shell key, and asks only the policy's
- * {@code forkSlot}. Its caller is its own principal through the same gate as a root request — a fork without one
- * never inherits its parent's caller. A fork without a parent environment, of an unavailable one or of another
- * provider's is unavailable too, carrying the parent's cause where there is one (§8.2).
+ * A fork — {@code request.fork().isPresent()}, never judged by {@code parent}
+ * (docs/design/workspace-sandbox-binding.md §3) — inherits its parent's workspace, owner and root, gets
+ * {@code exec:{executionId}} as its shell key, and asks only the policy's {@code forkSlot}. Its caller is its own
+ * principal through the same gate as a root request — a fork without one never inherits its parent's caller. A fork
+ * without a parent environment, of an unavailable one or of another provider's is unavailable too, carrying the
+ * parent's cause where there is one (docs/design/workspace-sandbox-binding.md §3).
  *
  * <p>
  * <b>{@code bindRuntime} is not overridden</b>: this provider keeps nothing per {@code AgentRuntime}. Workspaces are
@@ -54,7 +55,7 @@ import at.aimon.sandbox.workspace.WorkspaceOwner;
  * passed to the binding policy. The inherited {@code RuntimeBinding.NONE} therefore meets core's contract by
  * construction — closing it stops no command and releases nothing another binding uses, and {@link #resolve} never
  * asks whether an id was bound. Sandboxes end with their workspace (close, idle policy, janitor, provider expiry),
- * not with a runtime (§3.2). Anything later keyed by runtime id must come with a real {@code bindRuntime} whose
+ * not with a runtime (§4, §6.4). Anything later keyed by runtime id must come with a real {@code bindRuntime} whose
  * {@code close()} leaves running commands alone.
  */
 public final class SandboxExecutionEnvironmentProvider implements ExecutionEnvironmentProvider {
@@ -83,8 +84,8 @@ public final class SandboxExecutionEnvironmentProvider implements ExecutionEnvir
 
     /**
      * For tests and custom assemblies. <b>Runs no startup validation</b>: build through {@code WorkspaceSandbox}, which
-     * refuses the settings this version cannot honour (§13.2) — a hand-wired provider would silently ignore
-     * {@code pause-after}, {@code seed}, shared access and credentials.
+     * refuses the settings this version cannot honour (docs/design/workspace-sandbox-configuration.md §3) — a
+     * hand-wired provider would silently ignore {@code pause-after}, {@code seed}, shared access and credentials.
      *
      * <p>
      * <b>Internal.</b> Public only for use across this library's packages: not supported API, and it may change in
@@ -112,9 +113,10 @@ public final class SandboxExecutionEnvironmentProvider implements ExecutionEnvir
     }
 
     /**
-     * The policy chooses the workspace, owner, slot and root; the caller is always the request's principal through
-     * the assembly's gate, whatever the policy set. The manager's owner check is the second tenant line (§8.3): a
-     * policy that hands out another tenant's workspace, or names its owner as the caller, is still stopped there.
+     * The policy chooses the workspace, owner, slot and root; the caller is always the request's principal through the
+     * assembly's gate, whatever the policy set. The manager's owner check is the second tenant line
+     * (docs/design/workspace-sandbox-binding.md §5): a policy that hands out another tenant's workspace, or names its
+     * owner as the caller, is still stopped there.
      */
     private SandboxBinding bindRoot(EnvironmentRequest request) {
         return policy.bind(BindingContext.from(request)).toBuilder().caller(callers.callerOf(request.principal()))
@@ -142,21 +144,22 @@ public final class SandboxExecutionEnvironmentProvider implements ExecutionEnvir
                 .orElseThrow(() -> new BindingRejectedException("this fork has no execution id"));
         final SandboxBinding parentBinding = sandbox.binding();
         final SlotChoice choice = policy.forkSlot(parentBinding, fork);
-        // Same slot: the parent's root, whatever the policy chose for it (§8.2). Another slot is another sandbox, whose
-        // root is the default one.
+        // Same slot: the parent's root, whatever the policy chose for it (docs/design/workspace-sandbox-binding.md §3).
+        // Another slot is another sandbox, whose root is the default one.
         final String root = choice.slot().equals(parentBinding.slot())
                 ? parentBinding.root()
                 : SandboxBinding.DEFAULT_ROOT;
         // The fork's own principal, through the same gate as a root request: every fork path of the supported cores
         // (0.3.1+) forwards the principal its parent was resolved with, so a fork without one acts as a root without
-        // one would — refused under require-principal, anonymous otherwise — and the owner check still decides
-        // whether that caller may use the parent's workspace (§8.2, §8.3). It never inherits the parent's caller.
+        // one would — refused under require-principal, anonymous otherwise — and the owner check still decides whether
+        // that caller may use the parent's workspace (docs/design/workspace-sandbox-binding.md §3, §4, §5). It never
+        // inherits the parent's caller.
         final WorkspaceOwner caller = callers.callerOf(request.principal());
         // A fork inherits mustExist (it must not create what its parent may not) but never the parent's switch: the
         // parent's environment announces and records it. Nor the session's bookkeeping: a fork never keeps a reset on
         // the session's record, since the parent, which read that record at its bind, could not tell its own later
         // files from the fork's reset and the next turn would hear a false one
-        // (docs/design/workspace-sandbox-unannounced-reset.md §2.2).
+        // (docs/design/workspace-sandbox-notices.md §5.2).
         return parentBinding.toBuilder().caller(caller).slot(choice.slot())
                 .requiredProfile(choice.requiredProfile().orElse(null)).shellKey(ShellKey.execution(executionId))
                 .root(root).workspaceSwitch(null).sessionBookkeeping(null).build();
@@ -165,10 +168,10 @@ public final class SandboxExecutionEnvironmentProvider implements ExecutionEnvir
     /**
      * The profile the descriptor declares: the required one, else the slot's (one store read), else — for
      * {@code primary} of a managed workspace that has no slot yet — the profile it was created with, else the default:
-     * the profile {@code connect} will build (management design §6.1). The
-     * background ceiling is read from it too, while the heartbeat limit it defaults to is applied from the connected
-     * slot's profile; the two are the same profile on every path that runs a command, because {@code connect}
-     * refuses a slot whose profile differs from the required one or was removed.
+     * the profile {@code connect} will build (docs/design/workspace-sandbox-management.md §2.2). The background ceiling
+     * is read from it too, while the heartbeat limit it defaults to is applied from the connected slot's profile; the
+     * two are the same profile on every path that runs a command, because {@code connect} refuses a slot whose profile
+     * differs from the required one or was removed.
      */
     private SandboxProfile declaredProfile(SandboxBinding binding) {
         final Optional<String> required = binding.requiredProfile();
@@ -184,10 +187,10 @@ public final class SandboxExecutionEnvironmentProvider implements ExecutionEnvir
     }
 
     /**
-     * The descriptor of §7: declared platform, OS and shell, {@code workingDirectory = root}, and notes that tell the
+     * The descriptor of §6.2: declared platform, OS and shell, {@code workingDirectory = root}, and notes that tell the
      * model it is isolated, what egress it has, how relative paths resolve and what shell state persists. Isolation is
      * always {@code SANDBOXED} — this environment's shell and files are always inside a sandbox — and the runtimes are
-     * the profile's declaration, which the seed verifies (docs/design/ptc-shell-prerequisites.md S6): with
+     * the profile's declaration, which the seed verifies (docs/design/workspace-sandbox-shell-engine.md §1): with
      * {@code python3} among them, core may offer its Python {@code ExecuteCode} shell engine here.
      */
     static EnvironmentDescriptor descriptor(SandboxBinding binding, SandboxProfile profile) {

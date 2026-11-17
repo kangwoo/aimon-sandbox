@@ -5,10 +5,10 @@ import java.util.Locale;
 import java.util.Objects;
 
 /**
- * Why a slot is FAILED (docs/design/workspace-sandbox.md §5.2, §10.1): {@code (at, kind, step, reason, attempts,
- * profileHash)}. A {@link Kind#PERMANENT} failure is not retried while the profile's hash equals
- * {@link #profileHash()}; a {@link Kind#TRANSIENT} one is retried after a backoff that doubles with
- * {@link #attempts()}.
+ * Why a slot is FAILED (docs/design/workspace-sandbox-domain.md §2.2; docs/design/workspace-sandbox-lifecycle.md §2.2):
+ * {@code (at, kind, step, reason, attempts, profileHash)}. A {@link Kind#PERMANENT} failure is not retried while the
+ * profile's hash equals {@link #profileHash()}; a {@link Kind#TRANSIENT} one is retried after a backoff that doubles
+ * with {@link #attempts()}.
  */
 public final class SlotFailure {
 

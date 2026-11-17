@@ -21,7 +21,10 @@ import at.aimon.sandbox.provider.ProviderCapabilities;
 import at.aimon.sandbox.testkit.LocalProcessSandboxProvider;
 import at.aimon.sandbox.testkit.SandboxTestProfiles;
 
-/** One case per startup rule (§13.2, and the refusals of implementation steps 3 and 4). */
+/**
+ * One case per startup rule (docs/design/workspace-sandbox-configuration.md §3, and the refusals of implementation
+ * steps 3 and 4).
+ */
 class SandboxStartupValidatorTest {
 
     private static final ProviderCapabilities LOCAL = ProviderCapabilities

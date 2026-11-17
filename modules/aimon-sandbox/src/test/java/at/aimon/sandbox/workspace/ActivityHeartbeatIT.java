@@ -29,10 +29,16 @@ import at.aimon.sandbox.testkit.FaultInjectingSandboxProvider.Fault;
 import at.aimon.sandbox.testkit.FaultInjectingSandboxProvider.Operation;
 import at.aimon.sandbox.testkit.SandboxTestProfiles;
 
-/** Activity heartbeat and expiry (§5.3, §10.3; §16 rows 9, 13, 29). */
+/**
+ * Activity heartbeat and expiry (docs/design/workspace-sandbox-lifecycle.md §5;
+ * docs/design/workspace-sandbox-testing.md §5.1, §5.3, §5.8).
+ */
 class ActivityHeartbeatIT {
 
-    /** Set before a heartbeat tick: the tick's first write loses its CAS to a concurrent write (§5.3). */
+    /**
+     * Set before a heartbeat tick: the tick's first write loses its CAS to a concurrent write
+     * (docs/design/workspace-sandbox-domain.md §4.3).
+     */
     private final AtomicBoolean interfere = new AtomicBoolean();
     private final AtomicInteger heartbeatConflicts = new AtomicInteger();
     private final Thread testThread = Thread.currentThread();

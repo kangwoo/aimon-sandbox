@@ -39,7 +39,10 @@ import at.aimon.sandbox.workspace.WorkspaceScan;
 import at.aimon.sandbox.workspace.WorkspaceState;
 import at.aimon.sandbox.workspace.WorkspaceView;
 
-/** {@link SandboxAdministration} (management design §5.5, §6.7): listings, detail, and the operator's writes. */
+/**
+ * {@link SandboxAdministration} (docs/design/workspace-sandbox-management.md §4): listings, detail, and the operator's
+ * writes.
+ */
 class SandboxAdministrationTest {
 
     private static final Principal ALICE = Principal.user("t1-alice");

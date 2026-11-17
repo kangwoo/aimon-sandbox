@@ -29,7 +29,8 @@ import at.aimon.sandbox.workspace.WorkspaceOwner;
 
 /**
  * {@link PendingNotices}: delivery through the drain (kangwoo/aimon-core#254), the switch, generation tracking, and the
- * durable unannounced reset (docs/design/workspace-sandbox-unannounced-reset.md §6.1, §6.2, §9).
+ * durable unannounced reset (docs/design/workspace-sandbox-notices.md §2, §3, §4, §5.2; scenarios in
+ * docs/design/workspace-sandbox-testing.md §5.6).
  */
 class PendingNoticesTest {
 
@@ -173,7 +174,7 @@ class PendingNoticesTest {
     }
 
     // ----------------------------------------------------------------------------------------------------------------
-    // the durable unannounced reset (docs/design/workspace-sandbox-unannounced-reset.md)
+    // the durable unannounced reset (docs/design/workspace-sandbox-notices.md §5)
     // ----------------------------------------------------------------------------------------------------------------
 
     private static SessionBookkeeping bookkeeping(long version, UnannouncedReset reset) {

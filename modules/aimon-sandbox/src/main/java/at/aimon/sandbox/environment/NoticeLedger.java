@@ -10,7 +10,7 @@ import at.aimon.sandbox.workspace.UnannouncedReset;
 
 /**
  * What {@link PendingNotices} writes to the session's options record: the manager in production, a fake in tests
- * (docs/design/workspace-sandbox-unannounced-reset.md §3.3). Neither method throws.
+ * (docs/design/workspace-sandbox-notices.md §2, §5.2). Neither method throws.
  */
 interface NoticeLedger {
 

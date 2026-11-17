@@ -11,10 +11,10 @@ import at.aimon.sandbox.provider.SandboxNotFoundException;
 
 /**
  * One sandbox's execd (port 44772), reached at the address the lifecycle server resolves. The address is cached and
- * resolved again once after a connect failure — on Kubernetes a
- * resumed sandbox comes back with a new IP (docs/design/opensandbox-spike.md §3). A sandbox that is gone is
- * {@link SandboxNotFoundException}; which 404 means "gone" and which "no such file" is settled by asking the lifecycle
- * server, since through the server proxy both are 404.
+ * resolved again once after a connect failure — on Kubernetes a resumed sandbox comes back with a new IP
+ * (docs/design/workspace-sandbox-opensandbox.md §3.2). A sandbox that is gone is {@link SandboxNotFoundException};
+ * which 404 means "gone" and which "no such file" is settled by asking the lifecycle server, since through the server
+ * proxy both are 404.
  */
 final class ExecdClient {
 

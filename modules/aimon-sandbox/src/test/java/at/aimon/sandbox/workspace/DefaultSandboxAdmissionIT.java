@@ -12,7 +12,10 @@ import at.aimon.core.agent.session.SessionId;
 import at.aimon.core.base.Principal;
 import at.aimon.sandbox.SandboxHarness;
 
-/** The default per-tenant admission (§12.2, §16 row 25). */
+/**
+ * The default per-tenant admission (docs/design/workspace-sandbox-security.md §8;
+ * docs/design/workspace-sandbox-testing.md §5.7).
+ */
 class DefaultSandboxAdmissionIT {
 
     private static final Principal ALICE = Principal.user("t1-alice");

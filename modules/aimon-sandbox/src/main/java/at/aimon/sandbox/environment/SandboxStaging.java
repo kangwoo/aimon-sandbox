@@ -37,8 +37,8 @@ import at.aimon.sandbox.workspace.SandboxWorkspaceManager;
 
 /**
  * Content-addressed staging into the sandbox: {@code /workspace/.aimon-staged/{name}/{contentKey}/}
- * (docs/design/workspace-sandbox.md §7, §11.1). Core's {@code LocalStaging} is the reference; every check it makes is
- * made here, so {@code stage()} has one contract on either environment — concurrency included.
+ * (docs/design/workspace-sandbox-filesystem.md §4). Core's {@code LocalStaging} is the reference; every check it makes
+ * is made here, so {@code stage()} has one contract on either environment — concurrency included.
  *
  * <ol>
  * <li>Shape checks before anything touches the sandbox: a single-segment name, a 16-hex key, confined relative file

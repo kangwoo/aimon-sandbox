@@ -3,8 +3,9 @@ package at.aimon.sandbox.workspace;
 import java.util.Objects;
 
 /**
- * An opaque workspace id (docs/design/workspace-sandbox.md §5.1). The default binding policy derives it
- * deterministically — {@code ws:{sessionId}} or {@code ws:{executionId}} (§8.2) — so no mapping store is needed.
+ * An opaque workspace id (docs/design/workspace-sandbox-domain.md §1). The default binding policy derives it
+ * deterministically — {@code ws:{sessionId}} or {@code ws:{executionId}} (docs/design/workspace-sandbox-binding.md §3)
+ * — so no mapping store is needed.
  */
 public final class SandboxWorkspaceId implements Comparable<SandboxWorkspaceId> {
 

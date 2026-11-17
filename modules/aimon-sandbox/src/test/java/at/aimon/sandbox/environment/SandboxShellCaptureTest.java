@@ -4,7 +4,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import org.junit.jupiter.api.Test;
 
-/** The provider-side capture backstop of a wrapper run (§6.1: output may be line-normalized). */
+/**
+ * The provider-side capture backstop of a wrapper run (docs/design/workspace-sandbox-shell.md §8: output may be
+ * line-normalized).
+ */
 class SandboxShellCaptureTest {
 
     @Test

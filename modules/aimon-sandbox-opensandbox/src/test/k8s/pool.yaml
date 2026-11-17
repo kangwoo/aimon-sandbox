@@ -1,4 +1,4 @@
-# The k8s tier's pool mode (ShellEngineContractK8sPoolIT; docs/design/ptc-shell-provider.md §9): a Pool the server
+# The k8s tier's pool mode (ShellEngineContractK8sPoolIT; docs/design/workspace-sandbox-testing.md §3.3): a Pool the server
 # takes a sandbox from when the create body carries `extensions.poolRef` (the provider's test seam). Applied by
 # `scripts/k8s-tier.sh up` after the chart; the image is the tier's contract image, loaded into the node.
 #
@@ -8,7 +8,7 @@
 # a pod is never handed to a second sandbox, so no run inherits another's processes or zombies.
 #
 # Something in the pod has to reap orphans (core's watchdogs, the shell wrapper's helpers); task-executor as PID 1 reaps
-# nothing, measured (docs/design/ptc-shell-provider.md §9, "K8s tier, measured"). Two things here do:
+# nothing, measured (docs/design/workspace-sandbox-testing.md §3.3). Two things here do:
 # - the server's `execd_run_as_init = true`, which `scripts/k8s-tier.sh` sets and an operator must set
 #   (docs/guide/opensandbox-kubernetes.md §4.2): the task's bootstrap execs `execd --init`, a subreaper under
 #   task-executor. This is the requirement; a pool whose PID 1 is task-executor reaps with it and leaks without it;

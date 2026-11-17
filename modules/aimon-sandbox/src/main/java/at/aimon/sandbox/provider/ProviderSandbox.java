@@ -7,8 +7,8 @@ import java.util.Optional;
 
 /**
  * What a provider reports about one sandbox: its reference, its state, its labels, its expiry and, when the provider
- * knows it, its creation time — reconciliation measures an orphan's grace from it (docs/design/workspace-sandbox.md
- * §10.4).
+ * knows it, its creation time — reconciliation measures an orphan's grace from it
+ * (docs/design/workspace-sandbox-lifecycle.md §6.2).
  */
 public final class ProviderSandbox {
 

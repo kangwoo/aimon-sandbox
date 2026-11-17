@@ -7,9 +7,9 @@ import java.util.Optional;
 import at.aimon.core.agent.session.SessionId;
 
 /**
- * A sandbox lifecycle event for the application's audit log (docs/design/workspace-sandbox.md §14): the workspace, the
- * slot and generation, the owner, the profile and the cause — and, for what a principal asked for, the
- * {@link #actor()} (docs/design/workspace-sandbox-management.md §4.1).
+ * A sandbox lifecycle event for the application's audit log (docs/design/workspace-sandbox-management.md §7): the
+ * workspace, the slot and generation, the owner, the profile and the cause — and, for what a principal asked for, the
+ * {@link #actor()} (§7.2).
  *
  * <p>
  * The two session types ({@link Type#SESSION_OPTIONS_SET}, {@link Type#SESSION_OPTIONS_CLEARED}) carry the
@@ -48,7 +48,7 @@ public final class SandboxEvent {
         SESSION_OPTIONS_CLEARED,
         /**
          * Files in a workspace were changed through {@code SandboxWorkspaceFiles} — by a person, not an agent's tools;
-         * the cause names the operation and path (docs/design/workspace-sandbox-files.md §6.4).
+         * the cause names the operation and path (docs/design/workspace-sandbox-management.md §6.5).
          */
         FILES_CHANGED;
 
