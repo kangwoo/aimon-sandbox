@@ -17,7 +17,7 @@
 |------|-----|
 | `id` | `SandboxWorkspaceId` — 불투명 문자열. 파생 워크스페이스는 바인딩 정책이 세션·실행 id 에서 결정론적으로 만들고(`ws:{sessionId}`, `ws:{executionId}`, [바인딩 §3](workspace-sandbox-binding.md)), 관리형 워크스페이스는 `wsm:{UUID}` 를 새로 뽑으며 다시 쓰지 않는다(규칙과 이유는 [관리 §2](workspace-sandbox-management.md)) |
 | `origin` | `DERIVED`(`connect` 가 파생 id 로 만든 것, 기본값) · `MANAGED`(`create` 가 만든 것). janitor 는 기한 지난 `DERIVED` 의 CLOSED 레코드를 지우고, `MANAGED` 레코드는 지우지 않는다 — `purge` 만 지운다([수명 §7](workspace-sandbox-lifecycle.md)) |
-| `name`? · `profile`? · `access`? | 관리형만. 사람이 보는 이름(모델에는 보이지 않고, 유일하지 않다), `create` 가 요구한 프로파일(슬롯이 아직 없어도 남아 `primary` 를 처음 만들 때 요구 프로파일이 된다), 워크스페이스 자신의 접근 모드(없으면 배포 설정 `workspace-access`, [바인딩 §5](workspace-sandbox-binding.md)) |
+| `name`? · `profile`? · `access`? | 관리형만. 사람이 보는 이름(모델에는 보이지 않고, 유일하지 않다), `create` 가 요구한 프로파일(슬롯이 아직 없어도 남아 `primary` 를 처음 만들 때 요구 프로파일이 된다), 워크스페이스 자신의 접근 모드(없으면 배포 설정 `workspaceAccess`, [바인딩 §5](workspace-sandbox-binding.md)) |
 | `owner` | `WorkspaceOwner` — `(tenantId, principal)`, principal 은 `TYPE:id`(예 `USER:alice`). 레코드를 만들 때 고정된다. 호출한 실행의 주체가 아니라 **워크스페이스의 소유자**다. 누가 owner 가 되는지는 [바인딩 §4](workspace-sandbox-binding.md) |
 | `state` | `OPEN` · `CLOSING` · `CLOSED` |
 | `incarnation` | 레코드를 만들 때와 `reopen` 할 때마다 새로 뽑는 짧은 무작위 id |

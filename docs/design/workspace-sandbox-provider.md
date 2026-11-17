@@ -110,7 +110,7 @@ egress 허용 목록(있으면 빈 목록도 정책이다) · 자격 증명 바�
 | 필드 | 뜻 | 읽는 쪽 |
 |---|---|---|
 | `advertised` | 광고한 capability | 기동 검사, 매니저 |
-| `maxExpiry` | 서버의 최대 만료 | 기동 검사 `terminate-after ≤ max-expiry` |
+| `maxExpiry` | 서버의 최대 만료 | 기동 검사 `terminateAfter ≤ maxExpiry` |
 | `runtimeClass` | 서버가 모든 샌드박스에 쓰는 runtime class 하나 | 기동 검사 — 프로파일의 `runtimeClass` 는 이것과 같아야 한다 |
 | `credentialScopes` | 자격 증명 바인딩 이름 → 범위. 비밀은 담지 않는다 | 기동 검사(정의 · 겹침 · egress 덮음, [보안 §5](workspace-sandbox-security.md)) |
 | `controlPlaneEndpoints` | 샌드박스가 닿으면 안 되는 주소 | seed 의 제어면 탐침([수명 §3](workspace-sandbox-lifecycle.md)) |
@@ -130,7 +130,7 @@ PATCH · DELETE) · `paths`(기본 `/*`, 끝의 `*` 는 접두어)로 이루어�
 
 `verify` 는 살아 있는 샌드박스에서만 프로바이더가 볼 수 있는 것 — 선언으로 광고한 capability 가 실제로 걸렸는지 — 을
 확인한다. seed 단계에서 세대마다 한 번, seed 스크립트 앞에 불린다(순서와 실패 처리는 [수명 §3](workspace-sandbox-lifecycle.md)).
-`required` 는 그 프로파일이 요구하는 capability(`insecure-allow` 를 뺀 것)다.
+`required` 는 그 프로파일이 요구하는 capability(`insecureAllow` 를 뺀 것)다.
 
 - 멱등이다.
 - 돌려주는 실패 하나하나는 그 프로파일에 대해 영구다. 모두 성립하거나 확인할 것이 없으면 빈 목록이다(기본 구현).
@@ -356,8 +356,8 @@ PVC 에도 라벨이나 ownerRef 가 없으며, Docker 의 named volume 은 만�
 | `pauseAfter` 가 있다 (계획 — 구현 단계 7) | `PAUSE_RESUME` |
 | 모든 프로파일 | `EXPIRY` · `HARDENED_SECURITY_CONTEXT` · `NETWORK_ISOLATION` |
 
-로컬 개발처럼 격리를 일부러 풀려면 프로파일에 `insecure-allow: [HARDENED_SECURITY_CONTEXT, …]` 를 적어야 하고, 기동 로그에
-경고가 남는다. `insecure-allow` 는 `HARDENED_SECURITY_CONTEXT` · `RUNTIME_CLASS` · `NETWORK_ISOLATION` 만 면제한다. 기동 검사의
+로컬 개발처럼 격리를 일부러 풀려면 프로파일에 `insecureAllow: [HARDENED_SECURITY_CONTEXT, …]` 를 적어야 하고, 기동 로그에
+경고가 남는다. `insecureAllow` 는 `HARDENED_SECURITY_CONTEXT` · `RUNTIME_CLASS` · `NETWORK_ISOLATION` 만 면제한다. 기동 검사의
 전체 목록은 [설정 §3](workspace-sandbox-configuration.md).
 
 샌드박스 자원 사용량은 capability(`METRICS`)로 올리지 않는다. 프로바이더 서버와 K8s 가 이미 내고 §4.3 의 라벨로 이어 붙이면

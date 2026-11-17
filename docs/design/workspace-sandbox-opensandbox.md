@@ -35,14 +35,14 @@ OpenSandbox 를 어떻게 부르고, 서버가 실제로 어떻게 동작하며,
 |-----------|----------|-----------------|
 | `EXEC` | 늘 | execd `/command`(cwd · envs). 세션 API(`RunInSession`)는 쓰지 않는다 — 이유는 [셸 §1](workspace-sandbox-shell.md). 백그라운드 모드도 쓰지 않는다(§3.2) |
 | `FILES` | 늘 | execd files API. `stat` 의 mtime 은 나노초이고 해시 · etag 는 없다 — mtime 만으로 변경 감지 계약([프로바이더 §3.1](workspace-sandbox-provider.md))을 지킨다. 쓰기는 임시 이름에 올린 뒤 옮긴다(§4.6). 공유 볼륨(NFS)의 mtime 해상도는 공유 볼륨과 함께 다시 본다(계획 — 구현 단계 5) |
-| `EXPIRY` | 늘 | 생성의 `timeout`(상대 초, 최소 60)과 `renew-expiration`(절대 시각). 서버 상한 `max_sandbox_timeout_seconds` 는 API 로 읽을 수 없어 `max-expiry` 로 선언한다. 만료는 즉시 삭제이고 idle 타임아웃이 아니다. 서버가 지키지 않는 규칙은 프로바이더가 지킨다(§3.1, §4.3) |
+| `EXPIRY` | 늘 | 생성의 `timeout`(상대 초, 최소 60)과 `renew-expiration`(절대 시각). 서버 상한 `max_sandbox_timeout_seconds` 는 API 로 읽을 수 없어 `maxExpiry` 로 선언한다. 만료는 즉시 삭제이고 idle 타임아웃이 아니다. 서버가 지키지 않는 규칙은 프로바이더가 지킨다(§3.1, §4.3) |
 | `PAUSE_RESUME` | 광고하지 않는다 (계획 — 구현 단계 7) | pause/resume API. `pause` · `resume` 은 지금 `UnsupportedOperationException` 이다. 서버 동작은 §3.1 |
-| `SHARED_VOLUME` | `volume-reclaimer` 를 주입했을 때 | 생성은 `volumes[].pvc.createIfNotExists`(기본 access mode 가 `ReadWriteOnce` 이므로 RWX 를 명시). 서버에 삭제 API 가 없어 `VolumeReclaimer`(K8s API 또는 Docker 볼륨 API)가 `SharedVolumes` 가 된다. 내장 구현은 **(계획 — 구현 단계 5)**. 서버 동작은 §3.4 |
-| `EGRESS_POLICY` | `egress-enforcement: dns+nft` 이고 runtime class 가 gVisor 가 아닐 때 | `networkPolicy` + `defaultAction: deny`. `dns` 모드는 IP 로 새므로 받되 광고하지 않는다. gVisor 와 `dns+nft` 의 조합은 설정 오류다(§5). 기동 시점에는 모드를 알 수 없어 선언으로 광고하고, 샌드박스가 생긴 뒤 `verify` 가 실제 모드를 대조한다(§4.9). Docker 런타임은 서버가 `network_mode = "bridge"` 여야 정책을 받는다([설정 §5](workspace-sandbox-configuration.md)) |
+| `SHARED_VOLUME` | `volumeReclaimer` 를 주입했을 때 | 생성은 `volumes[].pvc.createIfNotExists`(기본 access mode 가 `ReadWriteOnce` 이므로 RWX 를 명시). 서버에 삭제 API 가 없어 `VolumeReclaimer`(K8s API 또는 Docker 볼륨 API)가 `SharedVolumes` 가 된다. 내장 구현은 **(계획 — 구현 단계 5)**. 서버 동작은 §3.4 |
+| `EGRESS_POLICY` | `egressEnforcement: DNS_NFT` 이고 runtime class 가 gVisor 가 아닐 때 | `networkPolicy` + `defaultAction: deny`. `dns` 모드는 IP 로 새므로 받되 광고하지 않는다. gVisor 와 `dns+nft` 의 조합은 설정 오류다(§5). 기동 시점에는 모드를 알 수 없어 선언으로 광고하고, 샌드박스가 생긴 뒤 `verify` 가 실제 모드를 대조한다(§4.9). Docker 런타임은 서버가 `network_mode = "bridge"` 여야 정책을 받는다([설정 §5](workspace-sandbox-configuration.md)) |
 | `CREDENTIAL_INJECTION` | `dns+nft` 이고 `credentials` 가 비어 있지 않을 때 | credential vault. 범위는 scheme · host · method · path(glob)다. port 는 겹침 검사에서 무시한다 — 이유는 [보안 §5](workspace-sandbox-security.md). 바인딩은 생성 뒤 서버 경로로 **프로파일이 이름으로 부른 것만** 넣는다(§3.5, §4.1) |
-| `NETWORK_ISOLATION` | `network-isolation: declared` (kubernetes 런타임만) | OpenSandbox 는 강제하지 않는다. 운영자가 NetworkPolicy 를 걸고 선언한다. seed 가 `controlPlaneEndpoints` 로의 연결이 실패하는지 탐침한다([수명 §3](workspace-sandbox-lifecycle.md)). Docker 런타임은 선언할 수 없다(§3.6) |
-| `RUNTIME_CLASS` | `runtime-class` 를 설정했을 때 (kubernetes 런타임만) | 요청마다 지정할 필드가 없다. 서버 설정(`[secure_runtime].k8s_runtime_class`)이나 서버의 BatchSandbox 템플릿으로만 정해진다. 그래서 프로바이더 설정이 서버의 class 를 선언하고, 프로파일의 `runtimeClass` 는 그 이름과 같아야 한다(기동 시 검사, [설정 §3](workspace-sandbox-configuration.md)). 없는 class 는 서버 기동 실패(설정)나 60초 뒤 504(템플릿)로 드러난다 |
-| `HARDENED_SECURITY_CONTEXT` | `hardened-security-context: declared` (kubernetes 런타임만) | 요청으로는 지정할 수 없다. 서버의 BatchSandbox 템플릿이 **샌드박스 컨테이너의** securityContext 로 건다(§3.7). seed 가 결과(uid)를 다시 검사한다. Docker 런타임은 root 로만 돌아 선언할 수 없다 |
+| `NETWORK_ISOLATION` | `networkIsolation: DECLARED` (kubernetes 런타임만) | OpenSandbox 는 강제하지 않는다. 운영자가 NetworkPolicy 를 걸고 선언한다. seed 가 `controlPlaneEndpoints` 로의 연결이 실패하는지 탐침한다([수명 §3](workspace-sandbox-lifecycle.md)). Docker 런타임은 선언할 수 없다(§3.6) |
+| `RUNTIME_CLASS` | `runtimeClass` 를 설정했을 때 (kubernetes 런타임만) | 요청마다 지정할 필드가 없다. 서버 설정(`[secure_runtime].k8s_runtime_class`)이나 서버의 BatchSandbox 템플릿으로만 정해진다. 그래서 프로바이더 설정이 서버의 class 를 선언하고, 프로파일의 `runtimeClass` 는 그 이름과 같아야 한다(기동 시 검사, [설정 §3](workspace-sandbox-configuration.md)). 없는 class 는 서버 기동 실패(설정)나 60초 뒤 504(템플릿)로 드러난다 |
+| `HARDENED_SECURITY_CONTEXT` | `hardenedSecurityContext: DECLARED` (kubernetes 런타임만) | 요청으로는 지정할 수 없다. 서버의 BatchSandbox 템플릿이 **샌드박스 컨테이너의** securityContext 로 건다(§3.7). seed 가 결과(uid)를 다시 검사한다. Docker 런타임은 root 로만 돌아 선언할 수 없다 |
 | `SNAPSHOT` · `FORK` | 광고하지 않는다 (계획 — 구현 단계 8) | snapshot API(fork 는 snapshot 위에 조립). 1.1.x 에서도 실측하지 않았다 |
 
 ## 3. 서버 동작
@@ -162,7 +162,7 @@ OpenSandbox 를 어떻게 부르고, 서버가 실제로 어떻게 동작하며,
   신뢰하게 하는 방법은 [셸 §10](workspace-sandbox-shell.md).
 - **vault.** 1.2.0 서버는 `/v1/sandboxes/{id}/credential-vault` 경로를 연다. Docker 와 K8s 런타임에서 서버가 사이드카 자신의
   `/credential-vault`(포트 18080)를 사이드카의 인증 토큰과 함께 프록시하므로 의미는 사이드카의 것이다. 프로바이더는 사이드카의
-  주소도 토큰도 필요 없고, `use-server-proxy` 와 상관없이 늘 서버를 거친다. 바인딩은 `{schemes, hosts, methods, paths}` 이고,
+  주소도 토큰도 필요 없고, `useServerProxy` 와 상관없이 늘 서버를 거친다. 바인딩은 `{schemes, hosts, methods, paths}` 이고,
   범위 밖 요청에는 키가 붙지 않는다 — 자격 증명 규칙은 [보안 §5](workspace-sandbox-security.md). 샌드박스 환경에는 비밀이 없다.
 
 ### 3.6 네트워크 격리
@@ -189,7 +189,7 @@ OpenSandbox 를 어떻게 부르고, 서버가 실제로 어떻게 동작하며,
   [가이드 §5](../guide/opensandbox-kubernetes.md).
 - **Docker.** 샌드박스는 root 로 돌고, 루트 파일 시스템이 쓰기 가능하며, 요청에 user 필드가 없다(모르는 필드는 조용히 무시한다).
   서버 설정의 cap drop · no-new-privileges · seccomp · pids 는 걸린다(1.1.x 에서 잼, 1.2.0 미확인). 그래서 Docker 런타임은
-  `HARDENED_SECURITY_CONTEXT` 를 선언할 수 없고 `insecure-allow` 로만 쓴다.
+  `HARDENED_SECURITY_CONTEXT` 를 선언할 수 없고 `insecureAllow` 로만 쓴다.
 - execd 는 OpenSandbox 가 넣는다 — Docker 에서는 컨테이너에 복사되고 K8s 에서는 init 컨테이너가 넣는다. 그래서 샌드박스 이미지에
   execd 가 필요 없다([설정 §4](workspace-sandbox-configuration.md)).
 - **PID 1.** Docker 런타임과 K8s 템플릿 모드에서 샌드박스의 PID 1 은 `bootstrap.sh` 의 `sh` 이고, 진입점을 기다리는 `wait` 가
@@ -219,12 +219,12 @@ SPI 는 풀을 요청하지 않는다([프로바이더 §7](workspace-sandbox-pr
 
 ### 4.1 생성
 
-`create` 의 예산은 `create-timeout` 하나다. POST 와 그 뒤의 모든 기다림이 이 안에 든다 — K8s 에서는 POST 만으로도 60초 가까이
+`create` 의 예산은 `createTimeout` 하나다. POST 와 그 뒤의 모든 기다림이 이 안에 든다 — K8s 에서는 POST 만으로도 60초 가까이
 막힐 수 있다.
 
 1. **기존 샌드박스 조회.** `managed` · `deployment` · `sandbox-key` 라벨로 목록을 읽어, TERMINATED · FAILED 가 아니고
    자격 증명 라벨(아래)이 같은 샌드박스가 있으면 그것을 쓴다. 여럿이면(인계 경합) `createdAt` 이 가장 오래된 것을 쓰고, 나머지는
-   조정이 DUPLICATE 로 회수한다. FAILED 를 빼는 이유: 다시 써 봐야 `create-timeout` 을 기다릴 뿐이다.
+   조정이 DUPLICATE 로 회수한다. FAILED 를 빼는 이유: 다시 써 봐야 `createTimeout` 을 기다릴 뿐이다.
 2. **POST.** 없으면 `POST /v1/sandboxes` 를 보낸다. 재시도하지 않는다(§4.8).
 3. **Running 대기.** Docker 는 `Pending` 으로 답하므로 `Running` 까지 폴링한다. `Failed` 이거나 시간 안에 `Running` 이 되지
    않으면 transient 실패이고, 샌드박스는 **지우지 않는다**([프로바이더 §4.2](workspace-sandbox-provider.md)).
@@ -238,9 +238,9 @@ SPI 는 풀을 요청하지 않는다([프로바이더 §7](workspace-sandbox-pr
 
 생성 본문:
 
-- `timeout` 은 `ceil((expiresAt − now) / 1초)` 를 60 이상 `max-expiry` 이하로 맞춰 **늘** 보낸다(§3.1 — 빼면 만료되지 않는다).
+- `timeout` 은 `ceil((expiresAt − now) / 1초)` 를 60 이상 `maxExpiry` 이하로 맞춰 **늘** 보낸다(§3.1 — 빼면 만료되지 않는다).
 - `entrypoint` 는 설정값(기본 `[tail, -f, /dev/null]`)을 늘 보낸다.
-- `resourceLimits` 는 프로파일의 cpu · memory, 없으면 `default-resources` 다.
+- `resourceLimits` 는 프로파일의 cpu · memory, 없으면 `defaultResources` 다.
 - `metadata` 는 `CreateSpec` 의 라벨에 자격 증명 라벨을 더한 것이다.
 - `networkPolicy` 는 egress 가 있으면 빈 목록이라도 `defaultAction: deny` 와 함께 보낸다(§3.5).
 - 자격 증명이 있으면 `credentialProxy.enabled` 를 켠다. 볼륨 마운트는 `volumes[].pvc` 로 보낸다.
@@ -270,7 +270,7 @@ SPI 는 풀을 요청하지 않는다([프로바이더 §7](workspace-sandbox-pr
 
 ### 4.3 만료와 삭제
 
-`extendExpiry` 는 현재 `expiresAt` 을 읽어 뒤로 가는 요청을 무시하고, `now + max-expiry` 로 자르며, `Paused` 상태의 샌드박스는
+`extendExpiry` 는 현재 `expiresAt` 을 읽어 뒤로 가는 요청을 무시하고, `now + maxExpiry` 로 자르며, `Paused` 상태의 샌드박스는
 영구 실패로 거부한다(§3.1 — K8s 에서 멈춘 샌드박스의 renew 는 샌드박스를 망가뜨린다. 쓰이는 것은 계획 — 구현 단계 7). 목표는
 마이크로초로 올림해 보낸다 — 서버가 마이크로초 아래를 버리므로, 나노초 시계(Linux)에서는 그대로 보내면 요청보다 조금 이른 만료가
 남는다. 두 노드가 동시에 연장하면 읽기와 renew 사이가 원자적이지 않아 경합하지만, 둘 다 대략 `now + terminateAfter` 를 쓰므로
@@ -375,7 +375,7 @@ execd 가 성공으로 답하므로 이미 지워졌으면 해가 없다.
 **멱등 호출만 재시도한다.** `create` · `/command` · 업로드는 재시도하지 않는다. 이 호출들의 응답이 사라지는 것은 레코드와 조정이
 흡수할 장애이고, 다시 보내면 샌드박스나 명령이 둘 생긴다. 재시도 횟수와 간격은 `retry` 설정이다(§5).
 
-`max-concurrent-calls` 는 요청/응답 호출만 세는 세마포어다. 명령의 이벤트 스트림은 허가를 잡지 않는다 — 20분짜리 빌드가 janitor
+`maxConcurrentCalls` 는 요청/응답 호출만 세는 세마포어다. 명령의 이벤트 스트림은 허가를 잡지 않는다 — 20분짜리 빌드가 janitor
 의 호출을 굶기면 안 되기 때문이다.
 
 ### 4.9 `verify`
@@ -389,7 +389,7 @@ seed 단계의 `verify`([프로바이더 §1.4](workspace-sandbox-provider.md))�
 
 ### 4.10 엔드포인트와 서버 프록시
 
-`use-server-proxy` 에서는 엔드포인트 API 가 돌려준 주소의 경로만 쓰고, 그것을 설정된 서버 엔드포인트에 대해 해석한다. NAT 나
+`useServerProxy` 에서는 엔드포인트 API 가 돌려준 주소의 경로만 쓰고, 그것을 설정된 서버 엔드포인트에 대해 해석한다. NAT 나
 port-forward 처럼 AIMON 이 보는 서버 주소와 요청의 `Host` 가 다른 배치에서도 동작하게 하기 위해서다. 샌드박스 id 는 INFO 로그에
 남기지 않는다(§3.6, [보안 §7](workspace-sandbox-security.md)).
 
@@ -402,11 +402,11 @@ port-forward 처럼 AIMON 이 보는 서버 주소와 요청의 `Host` 가 다�
 |---|---|---|
 | `endpoint` | 필수 | 수명 서버 주소. `/v1` 이 없으면 붙인다 |
 | `apiKey` (`api-key`) | 필수 | `OPEN-SANDBOX-API-KEY`. 공급자로 받고 로그에 남기지 않는다 |
-| `runtime` | **필수, 기본값 없음** | `docker` · `kubernetes`. 어떤 선언이 합법인지 정한다 |
+| `runtime` | **필수, 기본값 없음** | `DOCKER` · `KUBERNETES`. 어떤 선언이 합법인지 정한다 |
 | `maxExpiry` (`max-expiry`) | 필수, 60초 이상 | 서버의 `max_sandbox_timeout_seconds` 와 같은 값. `ProviderCapabilities.maxExpiry` 가 된다. 서버보다 크면 `create` 가 400 이다 |
-| `egressEnforcement` (`egress-enforcement`) | `none` | `none` · `dns` · `dns+nft`. `dns+nft` 일 때만 `EGRESS_POLICY` |
-| `networkIsolation` (`network-isolation`) | `undeclared` | `declared` 면 `NETWORK_ISOLATION` |
-| `hardenedSecurityContext` (`hardened-security-context`) | `undeclared` | `declared` 면 `HARDENED_SECURITY_CONTEXT` |
+| `egressEnforcement` (`egress-enforcement`) | `NONE` | `NONE` · `DNS` · `DNS_NFT`(서버의 `dns` · `dns+nft` 모드). `DNS_NFT` 일 때만 `EGRESS_POLICY` |
+| `networkIsolation` (`network-isolation`) | `UNDECLARED` | `DECLARED` 면 `NETWORK_ISOLATION` |
+| `hardenedSecurityContext` (`hardened-security-context`) | `UNDECLARED` | `DECLARED` 면 `HARDENED_SECURITY_CONTEXT` |
 | `runtimeClass` (`runtime-class`) | 없음 | `{name, kind: gvisor · kata · other}`. `RUNTIME_CLASS` 와 `runtimeClass()` 가 된다 |
 | `credentials` | 비어 있음 | 바인딩 이름 → `CredentialDefinition`. `credentialScopes()` 가 된다 |
 | `controlPlaneProbes` (`control-plane-probes`) | 엔드포인트의 host:port, kubernetes 면 `kubernetes.default.svc:443` 도 | `controlPlaneEndpoints()` 가 된다 |
@@ -422,22 +422,22 @@ port-forward 처럼 AIMON 이 보는 서버 주소와 요청의 `Host` 가 다�
 `build()` 는 위반을 모두 모아 `SandboxConfigurationException` 하나로 던진다 — 매니저의 기동 검사와 같은 "한 번에 전부" 규칙이다.
 `build()` 가 거부하는 것:
 
-- **Docker 런타임의 선언** — `network-isolation` · `hardened-security-context` · `runtime-class`. Docker 런타임은 그 격리를 세울 수
+- **Docker 런타임의 선언** — `networkIsolation` · `hardenedSecurityContext` · `runtimeClass`. Docker 런타임은 그 격리를 세울 수
   없다(§3.6, §3.7).
-- **`dns+nft` 와 gVisor `runtime-class`.** 서버가 gVisor 에서 모든 `networkPolicy` 를 400 으로 거부한다(§3.5). 둘을 함께 광고하면
+- **`dns+nft` 와 gVisor `runtimeClass`.** 서버가 gVisor 에서 모든 `networkPolicy` 를 400 으로 거부한다(§3.5). 둘을 함께 광고하면
   `egress` 가 있는 프로파일(`egress: []` 포함)이 기동을 통과한 뒤 첫 `create` 마다 슬롯이 영구 실패한다. `EGRESS_POLICY` 를 조용히
   빼지 않고 거부하는 이유는, 틀린 것이 선언이므로 오류를 선언이 있는 곳에 두기 위해서다 — 빼면 나중에 모든 egress 프로파일에서
   "프로바이더가 `EGRESS_POLICY` 를 광고하지 않는다" 는 엉뚱한 오류로 드러난다. `kind` 가 필수인 이유도 이것이다 — 프로바이더는
   class 이름만으로 그것이 고르는 런타임을 알 수 없다. Kata 는 허용한다.
 - **`dns+nft` 없는 `credentials`.** 서버가 그때 credential proxy 를 거부한다. 그래서 `CREDENTIAL_INJECTION` 은 `dns+nft` 를 요구한다.
-- **`network-isolation` 선언과 빈 `control-plane-probes`.** 탐침할 곳이 없으면 seed 의 자가 점검이 아무것도 확인하지 않는다.
-- 필수 값의 누락, 60초 미만의 `max-expiry`, 1 미만의 `retry` · `max-concurrent-calls`, 빈 `entrypoint`, 반쪽짜리
-  `default-resources`.
+- **`networkIsolation` 선언과 빈 `controlPlaneProbes`.** 탐침할 곳이 없으면 seed 의 자가 점검이 아무것도 확인하지 않는다.
+- 필수 값의 누락, 60초 미만의 `maxExpiry`, 1 미만의 `retry` · `maxConcurrentCalls`, 빈 `entrypoint`, 반쪽짜리
+  `defaultResources`.
 
-`network-isolation` 을 Kubernetes 에서 선언하면서 `control-plane-probes` 를 유도된 기본값으로 두면 경고를 남긴다. AIMON 이 서버에
+`networkIsolation` 을 Kubernetes 에서 선언하면서 `controlPlaneProbes` 를 유도된 기본값으로 두면 경고를 남긴다. AIMON 이 서버에
 NAT 나 port-forward 로 닿으면 JVM 이 보는 주소가 샌드박스가 보는 주소와 다르므로, 서버의 클러스터 안 주소를 직접 적어야 한다.
 
-`default-resources` 가 있는 이유: K8s 는 `resourceLimits` 가 없는 생성을 거부한다(§3.1, 1.1.x 에서 잼, 1.2.0 미확인).
+`defaultResources` 가 있는 이유: K8s 는 `resourceLimits` 가 없는 생성을 거부한다(§3.1, 1.1.x 에서 잼, 1.2.0 미확인).
 
 운영자가 서버 쪽에서 준비할 것(egress 모드, `network_mode`, NetworkPolicy, 강화 템플릿, `execd_run_as_init`)은
 [설정 §5](workspace-sandbox-configuration.md)와 [가이드](../guide/opensandbox-kubernetes.md).
