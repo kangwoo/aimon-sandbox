@@ -211,7 +211,7 @@ destroy 한다. 라벨 대조를 통과한 이 generation 의 자기 샌드박�
 - 거절 · 시간 초과 · 이름 해석 실패는 모두 통과다. **연결이 맺어질 때만** 실패다.
 - 대상 주소는 다른 선언값처럼 작은따옴표로 넣은 데이터다.
 - 샌드박스가 풀 수 없는 이름은 늘 통과하므로, AIMON 이 NAT 나 port-forward 뒤에 있으면 운영자가 샌드박스가 보는 주소를 적어야
-  한다(OpenSandbox 의 `control-plane-probes`, [OpenSandbox §5](workspace-sandbox-opensandbox.md)).
+  한다(OpenSandbox 의 `controlPlaneProbes`, [OpenSandbox §5](workspace-sandbox-opensandbox.md)).
 - 탐침은 들어오는 방향(옆 샌드박스 → 나)을 보지 못한다. 그래서 `NETWORK_ISOLATION` 은 여전히 운영자의 선언이 필요하다
   ([보안 §2](workspace-sandbox-security.md)).
 

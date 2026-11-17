@@ -48,7 +48,7 @@ class WorkspaceLifecycleIT {
     }
 
     @Test
-    @DisplayName("§16: connect on a CLOSED workspace answers 'closed'; after reopen a new generation works")
+    @DisplayName("connect on a CLOSED workspace answers 'closed'; after reopen a new generation works")
     void closedWorkspaceIsUnavailableUntilReopenedWithNewGeneration() throws Exception {
         final SessionId session = SessionId.generate();
         final ExecutionEnvironment env = harness.mainTurn(session, ALICE);
@@ -93,7 +93,7 @@ class WorkspaceLifecycleIT {
     }
 
     @Test
-    @DisplayName("§16: connect during close leaves no slot behind once CLOSED")
+    @DisplayName("connect during close leaves no slot behind once CLOSED")
     void connectDuringCloseLeavesNoSlotAfterClosed() throws Exception {
         final SessionId session = SessionId.generate();
         final ExecutionEnvironment env = harness.mainTurn(session, ALICE);
@@ -137,7 +137,7 @@ class WorkspaceLifecycleIT {
     }
 
     @Test
-    @DisplayName("§16: the node dies during close; the janitor resumes it to CLOSED")
+    @DisplayName("the node dies during close; the janitor resumes it to CLOSED")
     void janitorResumesStuckClosing() throws Exception {
         final SessionId session = SessionId.generate();
         bash(harness.mainTurn(session, ALICE), "true");
@@ -293,7 +293,7 @@ class WorkspaceLifecycleIT {
     }
 
     @Test
-    @DisplayName("§16: after an idle close the next turn gets a fresh workspace and a reset notice")
+    @DisplayName("after an idle close the next turn gets a fresh workspace and a reset notice")
     void idleCloseThenNextTurnGetsFreshWorkspaceAndResetNotice() throws Exception {
         final SessionId session = SessionId.generate();
         bash(harness.mainTurn(session, ALICE), "echo old > /workspace/repo/f");
@@ -444,7 +444,7 @@ class WorkspaceLifecycleIT {
     }
 
     @Test
-    @DisplayName("§16: a redeploy with a new default-profile keeps the existing primary slot's profile")
+    @DisplayName("a redeploy with a new default-profile keeps the existing primary slot's profile")
     void redeployWithNewDefaultProfileKeepsExistingPrimaryProfile() throws Exception {
         harness.close();
         harness = SandboxHarness.builder().profile(SandboxTestProfiles.local("standard").build())
@@ -498,7 +498,7 @@ class WorkspaceLifecycleIT {
     }
 
     @Test
-    @DisplayName("core-033 §6.3: a session deleted after reopen's first read — OPEN, now CLOSING — is \"being removed\"")
+    @DisplayName("a session deleted after reopen's first read — OPEN, now CLOSING — is \"being removed\"")
     void aReopenRacingASessionDeletionOfAnOpenWorkspaceIsBeingRemoved() throws Exception {
         final SessionId session = raceSessionDeletionAfterFirstRead(false);
 
@@ -509,7 +509,7 @@ class WorkspaceLifecycleIT {
     }
 
     @Test
-    @DisplayName("core-033 §6.3: a session deleted after reopen's first read — CLOSED — keeps its cause and incarnation")
+    @DisplayName("a session deleted after reopen's first read — CLOSED — keeps its cause and incarnation")
     void aReopenRacingASessionDeletionOfAClosedWorkspaceKeepsItInTheDeletion() throws Exception {
         final SessionId session = raceSessionDeletionAfterFirstRead(true);
         final String incarnation = incarnationBeforeRace;

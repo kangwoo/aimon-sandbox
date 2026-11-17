@@ -133,7 +133,7 @@ class OpenSandboxK8sIT {
     }
 
     @Test
-    @DisplayName("§6.3: the labels land on the sandbox and list finds it by them")
+    @DisplayName("the labels land on the sandbox and list finds it by them")
     void labelsAreAcceptedAndListed() {
         final ProviderSandboxRef ref = create(List.of());
 
@@ -141,7 +141,7 @@ class OpenSandboxK8sIT {
     }
 
     @Test
-    @DisplayName("§13.3: the hardened template is what the sandbox runs under")
+    @DisplayName("the hardened template is what the sandbox runs under")
     void theSandboxRunsHardened() throws Exception {
         try (SandboxConnection connection = provider.connect(create(List.of()))) {
             assertThat(run(connection, "id -u")).isNotEqualTo("0");
@@ -153,7 +153,7 @@ class OpenSandboxK8sIT {
     }
 
     @Test
-    @DisplayName("§11.3: a profile without waivers seeds: not root, no token, the control plane unreachable")
+    @DisplayName("a profile without waivers seeds: not root, no token, the control plane unreachable")
     void aProfileWithoutWaiversSeeds() throws Exception {
         final SandboxProfile profile = SandboxProfile.builder().name("k8s").image(image()).platform("linux")
                 .resources(ResourceSpec.of("250m", "256Mi", null, null)).egress(egress(List.of()))
@@ -173,7 +173,7 @@ class OpenSandboxK8sIT {
     }
 
     @Test
-    @DisplayName("§12.1: east-west is blocked — a sandbox cannot reach a peer's execd")
+    @DisplayName("east-west is blocked — a sandbox cannot reach a peer's execd")
     void aPeerIsUnreachable() throws Exception {
         final ProviderSandboxRef peer = create(null);
         final String peerIp;
@@ -188,7 +188,7 @@ class OpenSandboxK8sIT {
     }
 
     @Test
-    @DisplayName("§6.4: the runtime class is the one the server declares (needs kubectl on PATH)")
+    @DisplayName("the runtime class is the one the server declares (needs kubectl on PATH)")
     void theDeclaredRuntimeClassIsUsed() throws Exception {
         assumeTemplateMode("a pool's pods are created from the Pool resource, without the server's runtime class");
         final String declared = env("OPENSANDBOX_K8S_RUNTIME_CLASS");
@@ -208,7 +208,7 @@ class OpenSandboxK8sIT {
     }
 
     @Test
-    @DisplayName("§6.4: dns+nft is what the server enforces")
+    @DisplayName("dns+nft is what the server enforces")
     void egressIsEnforcedWithDnsNft() {
         assumeTemplateMode("the server refuses a network policy on a pool sandbox, so there is no egress to verify");
         final ProviderSandboxRef ref = create(List.of());
@@ -217,7 +217,7 @@ class OpenSandboxK8sIT {
     }
 
     @Test
-    @DisplayName("§12.1: the vault injects only within its scope, and TLS verification stays on (Q4)")
+    @DisplayName("the vault injects only within its scope, and TLS verification stays on")
     void credentialsAreInjectedOnlyWithinTheirScope() throws Exception {
         assumeTemplateMode("credential injection needs the egress sidecar, which a pool sandbox does not get");
         assumeTrue("1".equals(env("OPENSANDBOX_K8S_INTERNET")), "OPENSANDBOX_K8S_INTERNET=1 is not set");
@@ -247,7 +247,7 @@ class OpenSandboxK8sIT {
     }
 
     @Test
-    @DisplayName("§12.1: a model's git over HTTPS works where a credential is injected, under the hardened template")
+    @DisplayName("a model's git over HTTPS works where a credential is injected, under the hardened template")
     void gitOverHttpsWorksUnderInjection() throws Exception {
         assumeTemplateMode("credential injection needs the egress sidecar, which a pool sandbox does not get");
         assumeTrue("1".equals(env("OPENSANDBOX_K8S_INTERNET")), "OPENSANDBOX_K8S_INTERNET=1 is not set");

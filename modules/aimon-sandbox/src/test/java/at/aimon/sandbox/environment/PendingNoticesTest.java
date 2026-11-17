@@ -65,7 +65,7 @@ class PendingNoticesTest {
     }
 
     @Test
-    @DisplayName("core-033 §6.4: the announced switch is queued at the first connect only and recorded by its drain")
+    @DisplayName("the announced switch is queued at the first connect only and recorded by its drain")
     void theAnnouncedSwitchIsRecordedByTheDrainThatReturnsIt() {
         final PendingNotices pending = announcing();
 
@@ -107,7 +107,7 @@ class PendingNoticesTest {
     }
 
     @Test
-    @DisplayName("core-033 §6.5: a newer slot the connect did not reset itself is announced; a first connect is not")
+    @DisplayName("a newer slot the connect did not reset itself is announced; a first connect is not")
     void aChangedSlotIsAnnouncedOnce() {
         final PendingNotices pending = new PendingNotices();
 
@@ -185,7 +185,7 @@ class PendingNoticesTest {
     }
 
     @Test
-    @DisplayName("§6.1: a reset is durable before its notice can be drained, and the drain acknowledges the stored value")
+    @DisplayName("a reset is durable before its notice can be drained, and the drain acknowledges the stored value")
     void aResetIsMarkedBeforeItIsDrainableAndAcknowledgedByItsDrain() {
         final FakeLedger ledger = new FakeLedger();
         final PendingNotices pending = new PendingNotices(null, SessionBookkeeping.of(SESSION, Optional.empty()),
@@ -203,7 +203,7 @@ class PendingNoticesTest {
     }
 
     @Test
-    @DisplayName("§6.1: an earlier execution's reset is replayed once, at the first connect of its slot, and acknowledged")
+    @DisplayName("an earlier execution's reset is replayed once, at the first connect of its slot, and acknowledged")
     void anUndeliveredResetIsReplayedOnceAtTheFirstConnect() {
         final FakeLedger ledger = new FakeLedger();
         final PendingNotices pending = new PendingNotices(null, bookkeeping(4, EARLIER), ledger);
@@ -233,7 +233,7 @@ class PendingNoticesTest {
     }
 
     @Test
-    @DisplayName("§6.1: a first connect that resets again tells its own notice only, and acknowledges the newer value")
+    @DisplayName("a first connect that resets again tells its own notice only, and acknowledges the newer value")
     void aFirstConnectThatResetsAgainIsNotReplayed() {
         final FakeLedger ledger = new FakeLedger();
         final PendingNotices pending = new PendingNotices(null, bookkeeping(4, EARLIER), ledger);
@@ -245,7 +245,7 @@ class PendingNoticesTest {
     }
 
     @Test
-    @DisplayName("§7: a mark that fails leaves the older field of the same slot to this delivery")
+    @DisplayName("a mark that fails leaves the older field of the same slot to this delivery")
     void aFailedMarkAcknowledgesTheOlderValue() {
         final FakeLedger ledger = new FakeLedger();
         ledger.failMarks = true;
@@ -258,7 +258,7 @@ class PendingNoticesTest {
     }
 
     @Test
-    @DisplayName("§7: two resets before a drain — both notices, one acknowledgement of the newer value")
+    @DisplayName("two resets before a drain — both notices, one acknowledgement of the newer value")
     void twoResetsBeforeADrainAcknowledgeTheNewer() {
         final FakeLedger ledger = new FakeLedger();
         final PendingNotices pending = new PendingNotices(null, SessionBookkeeping.of(SESSION, Optional.empty()),
@@ -272,7 +272,7 @@ class PendingNoticesTest {
     }
 
     @Test
-    @DisplayName("§5.2: switch and reset in one drain — one acknowledgement, with the version of the instance's own mark")
+    @DisplayName("switch and reset in one drain — one acknowledgement, with the version of the instance's own mark")
     void aSwitchAndAResetAreAcknowledgedTogetherAtTheMarkedVersion() {
         final FakeLedger ledger = new FakeLedger();
         final PendingNotices pending = new PendingNotices(
@@ -285,7 +285,7 @@ class PendingNoticesTest {
     }
 
     @Test
-    @DisplayName("§12: a reset after the drain that delivered the switch writes the switch along, once")
+    @DisplayName("a reset after the drain that delivered the switch writes the switch along, once")
     void aResetAfterADeliveredSwitchWritesItAlong() {
         final FakeLedger ledger = new FakeLedger();
         final PendingNotices pending = new PendingNotices(
@@ -304,7 +304,7 @@ class PendingNoticesTest {
     }
 
     @Test
-    @DisplayName("§12: a drain that delivers the switch during a parallel mark is acknowledged again at the mark's version")
+    @DisplayName("a drain that delivers the switch during a parallel mark is acknowledged again at the mark's version")
     void aSwitchDeliveredDuringAMarkIsAcknowledgedAgain() {
         final FakeLedger ledger = new FakeLedger();
         final PendingNotices pending = new PendingNotices(
@@ -320,7 +320,7 @@ class PendingNoticesTest {
     }
 
     @Test
-    @DisplayName("§12: a silent switch recorded at the first connect is written along by a later mark")
+    @DisplayName("a silent switch recorded at the first connect is written along by a later mark")
     void aSilentSwitchIsWrittenAlongByALaterMark() {
         final FakeLedger ledger = new FakeLedger();
         final PendingNotices pending = new PendingNotices(WorkspaceSwitch.silent(SESSION, TO, OptionalLong.empty()),
@@ -334,7 +334,7 @@ class PendingNoticesTest {
     }
 
     @Test
-    @DisplayName("§5.2: a mark before the switch is delivered carries no switch: the drain's acknowledgement does")
+    @DisplayName("a mark before the switch is delivered carries no switch: the drain's acknowledgement does")
     void aMarkBeforeTheDrainCarriesNoSwitch() {
         final FakeLedger ledger = new FakeLedger();
         final PendingNotices pending = new PendingNotices(
@@ -346,7 +346,7 @@ class PendingNoticesTest {
     }
 
     @Test
-    @DisplayName("§3.3: a queue without bookkeeping — a fork, a routine — never writes the session's record")
+    @DisplayName("a queue without bookkeeping — a fork, a routine — never writes the session's record")
     void withoutBookkeepingNothingIsWritten() {
         final FakeLedger ledger = new FakeLedger();
         final PendingNotices pending = new PendingNotices(null, null, ledger);
@@ -360,7 +360,7 @@ class PendingNoticesTest {
     }
 
     @Test
-    @DisplayName("§6.3: a failed connect after a reset marks and queues it, and sets no baseline")
+    @DisplayName("a failed connect after a reset marks and queues it, and sets no baseline")
     void aFailedConnectAfterAResetIsKeptAndQueued() {
         final FakeLedger ledger = new FakeLedger();
         final PendingNotices pending = new PendingNotices(
@@ -392,7 +392,7 @@ class PendingNoticesTest {
     }
 
     @Test
-    @DisplayName("§9: parallel connects, one of which resets — the reset is told once and nothing is replayed")
+    @DisplayName("parallel connects, one of which resets — the reset is told once and nothing is replayed")
     void parallelConnectsWithOneResetTellItOnce() throws Exception {
         for (int round = 0; round < 20; round++) {
             final FakeLedger ledger = new FakeLedger();

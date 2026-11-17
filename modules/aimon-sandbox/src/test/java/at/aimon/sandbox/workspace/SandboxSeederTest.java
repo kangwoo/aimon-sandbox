@@ -122,7 +122,7 @@ class SandboxSeederTest {
     }
 
     @Test
-    @DisplayName("§13.3: a /workspace that is not writable is a permanent failure, not lock contention")
+    @DisplayName("a /workspace that is not writable is a permanent failure, not lock contention")
     void aWorkspaceThatIsNotWritableIsAPermanentFailure() throws Exception {
         final Optional<SandboxSeeder.Failure> failure = seedLocal(
                 workspace -> Files.setPosixFilePermissions(workspace, PosixFilePermissions.fromString("r-xr-xr-x")));
@@ -134,7 +134,7 @@ class SandboxSeederTest {
     }
 
     @Test
-    @DisplayName("§13.3: a missing /workspace reaches the seed's own check and is a permanent failure")
+    @DisplayName("a missing /workspace reaches the seed's own check and is a permanent failure")
     void aMissingWorkspaceIsAPermanentFailureNotAProviderError() throws Exception {
         // The local provider refuses a missing working directory, as a real exec server may: the seed must not run
         // in /workspace, or this would be a transient provider error.
@@ -147,7 +147,7 @@ class SandboxSeederTest {
     }
 
     @Test
-    @DisplayName("§13.3: a seed lock that cannot be opened is a permanent failure, not lock contention")
+    @DisplayName("a seed lock that cannot be opened is a permanent failure, not lock contention")
     void aSeedLockThatCannotBeOpenedIsAPermanentFailure() throws Exception {
         final Optional<SandboxSeeder.Failure> failure = seedLocal(
                 workspace -> Files.createDirectory(workspace.resolve(".aimon-seed.lock")));
@@ -159,7 +159,7 @@ class SandboxSeederTest {
     }
 
     @Test
-    @DisplayName("§13.3: the image contract names base64, which a hook's inline run files are decoded with")
+    @DisplayName("the image contract names base64, which a hook's inline run files are decoded with")
     void theImageContractNamesBase64() {
         assertThat(seeder.script(profile, "/workspace/repo"))
                 .contains("for t in git rg flock sha256sum base64; do command -v \"$t\"")
@@ -167,7 +167,7 @@ class SandboxSeederTest {
     }
 
     @Test
-    @DisplayName("§13.3: the image contract wants sha256sum and base64 executable in /usr/bin, where hooks call them")
+    @DisplayName("the image contract wants sha256sum and base64 executable in /usr/bin, where hooks call them")
     void theImageContractChecksTheAbsolutePaths() {
         assertThat(seeder.script(profile, "/workspace/repo"))
                 .contains("for t in /usr/bin/sha256sum /usr/bin/base64; do [ -x \"$t\" ]")
@@ -175,7 +175,7 @@ class SandboxSeederTest {
     }
 
     @Test
-    @DisplayName("§13.3: a sha256sum that refuses -c --strict - (BusyBox) fails the image contract; GNU's passes")
+    @DisplayName("a sha256sum that refuses -c --strict - (BusyBox) fails the image contract; GNU's passes")
     void aSha256sumWithoutStrictFailsTheImageContract(@TempDir Path dir) throws Exception {
         final String script = seeder.script(profile, "/workspace/repo");
         final String failLine = script.lines().filter(l -> l.startsWith("fail() ")).findFirst().orElseThrow();
@@ -223,7 +223,7 @@ class SandboxSeederTest {
             .insecureAllow(Set.of(Capability.HARDENED_SECURITY_CONTEXT)).build();
 
     @Test
-    @DisplayName("§11.3: the control-plane probe runs only when NETWORK_ISOLATION is required, with quoted targets")
+    @DisplayName("the control-plane probe runs only when NETWORK_ISOLATION is required, with quoted targets")
     void theNetworkProbeRunsOnlyWhenIsolationIsRequired() {
         final SandboxSeeder probing = new SandboxSeeder(Duration.ofSeconds(30),
                 List.of(HostPort.of("opensandbox-server.opensandbox-system.svc", 80), HostPort.of("it's", 443)));
@@ -248,7 +248,7 @@ class SandboxSeederTest {
     }
 
     @Test
-    @DisplayName("§11.3: a control plane the sandbox can connect to fails the slot; an unreachable one passes")
+    @DisplayName("a control plane the sandbox can connect to fails the slot; an unreachable one passes")
     void aReachableControlPlaneIsAPermanentFailure() throws Exception {
         final int closedPort;
         try (ServerSocket listening = new ServerSocket(0, 50, InetAddress.getLoopbackAddress())) {
@@ -265,7 +265,7 @@ class SandboxSeederTest {
     }
 
     @Test
-    @DisplayName("S3: the python3 check is in the script exactly when the profile declares python3")
+    @DisplayName("the python3 check is in the script exactly when the profile declares python3")
     void thePython3CheckIsThereOnlyWhenDeclared() {
         final SandboxProfile declaring = SandboxTestProfiles.local("py").runtimes(Set.of("python3")).build();
 
@@ -298,7 +298,7 @@ class SandboxSeederTest {
     }
 
     @Test
-    @DisplayName("S3: the python3 check fails permanently for a missing, old or stripped python3 and passes otherwise")
+    @DisplayName("the python3 check fails permanently for a missing, old or stripped python3 and passes otherwise")
     void thePython3CheckOnTheHost(@TempDir Path bin) throws Exception {
         ExecOutcome outcome = runRuntimeCheck(bin);
         assertThat(outcome.exitCode()).isEqualTo(SandboxSeeder.FAIL_EXIT);
@@ -324,7 +324,7 @@ class SandboxSeederTest {
     }
 
     @Test
-    @DisplayName("S3: a real python3 of 3.8 or later passes the check: every listed module imports")
+    @DisplayName("a real python3 of 3.8 or later passes the check: every listed module imports")
     void aRealPython3PassesTheCheck(@TempDir Path bin) throws Exception {
         final Optional<Path> python = Stream
                 .of("/usr/local/bin/python3", "/opt/homebrew/bin/python3", "/usr/bin/python3", "/bin/python3")

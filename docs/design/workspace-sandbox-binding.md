@@ -45,7 +45,7 @@ public interface SandboxBindingPolicy {
 닿을 경로가 없다. 설정된 정책을 감싸는 `SessionOptionsBindingPolicy`(§2)도 정책이라 이 규칙은 그대로다.
 
 **`caller` 는 정책이 무엇을 넣었든 환경 제공자가 요청의 principal 로 덮어쓴다**(루트·포크 모두, 주체 검사 §4 를 거친 값). 정책이 `caller` 에
-owner 를 넣을 수 있으면 owner 검사와 `require-principal` 을 우회하기 때문이다.
+owner 를 넣을 수 있으면 owner 검사와 `requirePrincipal` 을 우회하기 때문이다.
 
 **`mustExist`** 는 파생하지 않은 워크스페이스를 가리키는 바인딩(§2 의 ⓪①②)의 표지다. 이 바인딩의 `connect` 는 레코드가 없으면 만들지 않고
 "does not exist" 로 답한다([수명 §2.1](workspace-sandbox-lifecycle.md)). 만들게 두면 purge 된 관리형 id 가 바인딩한 호출자의 소유로 되살아나기
@@ -142,7 +142,7 @@ rule = strictest(배포 설정 unattached, 정의 sandbox.unattached, 세션 옵
 [§5](workspace-sandbox-notices.md)).
 
 **포크의 `caller` 는 포크 요청의 principal 을 루트 요청과 같은 주체 검사(§4)에 통과시킨 값이다.** 요청에 principal 이 없어도 부모의 `caller` 를
-물려받지 않는다 — `require-principal` 이면 거부되고, 아니면 principal 없는 루트처럼 익명으로 돈다. 어느 쪽이든 owner 검사가 그 `caller` 로 부모의
+물려받지 않는다 — `requirePrincipal` 이면 거부되고, 아니면 principal 없는 루트처럼 익명으로 돈다. 어느 쪽이든 owner 검사가 그 `caller` 로 부모의
 워크스페이스를 쓸 수 있는지 다시 본다. 그래서 포크는 부모 워크스페이스가 허락하는 것과 다른 주체로 돌 수 없다. principal 없는 포크를 위한
 대체 경로를 두지 않는다. 코어의 포크 경로는 모두 루트 환경을 만든 요청 principal 을 그대로 싣고(루틴이면 작업 소유자), principal 이 없는 환경은
 부모 환경도 없는 에이전트 범위 워크플로 러너 하나뿐이라 주체 검사 전에 거부된다.
@@ -153,7 +153,7 @@ rule = strictest(배포 설정 unattached, 정의 sandbox.unattached, 세션 옵
 ## 4. 주체와 테넌트
 
 **테넌트는 주입받는다.** 코어 `Principal` 은 `type` 과 `id` 만 갖고 테넌트 필드가 없다. 그래서 애플리케이션이
-`SandboxTenantResolver.resolve(Principal) → TenantId` 를 주입한다. 멀티 테넌트 배포(`require-principal: true`)에서는 필수이고, 없으면 기동을
+`SandboxTenantResolver.resolve(Principal) → TenantId` 를 주입한다. 멀티 테넌트 배포(`requirePrincipal: true`)에서는 필수이고, 없으면 기동을
 거부한다([설정 §3](workspace-sandbox-configuration.md)). 단일 테넌트 배포의 기본 구현은 모든 주체를 한 테넌트로 본다.
 
 **owner · caller · actor.** owner 는 워크스페이스의 소유자, caller 는 그 실행(또는 API 호출)의 주체다. 둘 다 `WorkspaceOwner(tenantId, principal)`
@@ -182,31 +182,31 @@ owner(session) = recorded(sessionRecords).orElse(hostLookup)      // 배선된 �
 | 둘 다 없음(단일 테넌트만) | — | 요청 주체가 `ws:{sid}` 의 owner. 세션 옵션 쓰기는 거부 |
 | 코어 기록 · 호스트 lookup 중 하나 이상 | 그 소유자 | **바인딩 거부**("set `SubmitRequest.owner(...)` …"). 세션 옵션 쓰기도 거부 |
 
-**어느 출처도 소유자를 모르는 세션은 `require-principal` 과 상관없이 바인딩을 거부한다 — 요청 주체로 물러서지 않는다.** 그것이 이 규칙이 막으려는
+**어느 출처도 소유자를 모르는 세션은 `requirePrincipal` 과 상관없이 바인딩을 거부한다 — 요청 주체로 물러서지 않는다.** 그것이 이 규칙이 막으려는
 "먼저 부른 쪽이 owner" 이기 때문이다. 그러면 레코드가 없을 때(`InMemory` 재시작, CLOSED 레코드 삭제 뒤) 세션 id 를 아는 다른 주체가 먼저 불러도
 owner 는 세션 소유자로 정해지고, 그 주체는 검사에서 막힌다. 같은 id 의 재생성은 명시적 close 의 툼스톤이 `closedRetention` 동안 막는다
-([수명 §7.2](workspace-sandbox-lifecycle.md)). `require-principal: true` 이면 두 출처 중 하나가 기동 시 필수다. 단일 테넌트 배포에서 둘 다 없으면 요청
+([수명 §7.2](workspace-sandbox-lifecycle.md)). `requirePrincipal: true` 이면 두 출처 중 하나가 기동 시 필수다. 단일 테넌트 배포에서 둘 다 없으면 요청
 주체를 owner 로 쓴다 — 먼저 부른 쪽이 owner 가 되는 약점을 받아들이는 구성이다. 출처의 저장소가 예외를 던지면 바인딩이 실패하고(사용 불가 환경),
 세션 옵션 호출에는 그 예외가 간다.
 
 코어가 기록한 소유자를 기본 출처로 쓰되 `SessionOwnerLookup` SPI 는 대체 출처로 남긴다. 신원 공급자를 가진 호스트가 이미 쓰고 있고, 호스트가
 `SubmitRequest.owner` 를 넣기 전에 만들어진 세션은 기록된 소유자가 없기 때문이다. `SessionOwnerLookup` 은 런타임이 제시하는 그대로의 principal 을
-돌려줘야 한다 — owner 를 type + id 로 비교하므로, GROUP 이나 SERVICE 주체로 도는 세션에 `Principal.user(id)` 를 답하면 `workspace-access: principal`
+돌려줘야 한다 — owner 를 type + id 로 비교하므로, GROUP 이나 SERVICE 주체로 도는 세션에 `Principal.user(id)` 를 답하면 `workspaceAccess: PRINCIPAL`
 에서 모든 턴이 "not permitted" 가 된다.
 
 **노드 로컬 소유자 캐시는 두지 않는다.** 소유자는 한 세션 레코드의 수명 동안만 불변이라, 같은 id 의 삭제·재생성(다른 노드는 듣지 못한다) 뒤 낡은
 소유자가 새 세션의 `ws:{sid}` 레코드에 굳어 끈질긴 거부가 된다.
 
 **주체가 없거나 시스템 주체인 실행.** 코어에서 `Principal` 은 선택값이고, Spring 스타터의 기본 진입점은 요청을 `Principal.system()` 으로 제출한다.
-그래서 `require-principal: true` 는 "주체가 있다" 가 아니라 **"`USER` 또는 `GROUP` 주체다"** 를 뜻한다. 주체가 없거나 `SYSTEM` · `SERVICE` 인 실행은
-바인딩 단계에서 거부한다. 시스템 작업에 샌드박스가 필요한 애플리케이션은 `allowed-system-principals` 에 그 주체 id 를 명시하고,
-`SandboxTenantResolver` 가 그 주체의 테넌트를 돌려줘야 한다(돌려주지 못하면 거부). `require-principal` 을 끈 배포는 주체 없는 실행을 기본 테넌트의
+그래서 `requirePrincipal: true` 는 "주체가 있다" 가 아니라 **"`USER` 또는 `GROUP` 주체다"** 를 뜻한다. 주체가 없거나 `SYSTEM` · `SERVICE` 인 실행은
+바인딩 단계에서 거부한다. 시스템 작업에 샌드박스가 필요한 애플리케이션은 `allowedSystemPrincipals` 에 그 주체 id 를 명시하고,
+`SandboxTenantResolver` 가 그 주체의 테넌트를 돌려줘야 한다(돌려주지 못하면 거부). `requirePrincipal` 을 끈 배포는 주체 없는 실행을 기본 테넌트의
 `anonymous` 로 취급한다. 이 주체 검사(`CallerResolver`)는 바인딩만이 아니라 `Principal` 을 받는 매니저 진입점(`close` · `reopen`)에도 같은 규칙으로
 걸린다.
 
 **루틴.** 루틴에는 세션이 없다 — 옵션을 읽지 않고, 전환도 없으며, shellKey 는 `exec:{executionId}` 다. 코어는 루틴 요청의 principal 로 작업 소유자
 (`task.getOwner()`, 보통 작업을 만든 사용자)를 싣는다. 그 주체는 다른 호출자처럼 주체 검사를 통과해야 하고(`SYSTEM` · `SERVICE` 소유자는
-`require-principal` 아래에서 `allowed-system-principals` 로만), ⓪ · ② 로 관리형 워크스페이스에 묶이면 그 워크스페이스를 쓸 수 있어야 한다 — 그
+`requirePrincipal` 아래에서 `allowedSystemPrincipals` 로만), ⓪ · ② 로 관리형 워크스페이스에 묶이면 그 워크스페이스를 쓸 수 있어야 한다 — 그
 주체가 소유했거나, 같은 테넌트의 `access: tenant` 워크스페이스다.
 
 ## 5. 권한
@@ -221,14 +221,14 @@ owner 는 세션 소유자로 정해지고, 그 주체는 검사에서 막힌다
 
 | 권한 | 규칙 | 진입점 |
 |---|---|---|
-| 사용 | 같은 테넌트이고, 레코드의 `access` — 없으면 배포 설정 `workspace-access` — 가 `tenant` 이거나 principal 이 owner 와 같다 | `connect`, `provision`, `describe`, 세션 옵션의 대상이 되는 것, 파일 API |
+| 사용 | 같은 테넌트이고, 레코드의 `access` — 없으면 배포 설정 `workspaceAccess` — 가 `tenant` 이거나 principal 이 owner 와 같다 | `connect`, `provision`, `describe`, 세션 옵션의 대상이 되는 것, 파일 API |
 | 관리 | `MANAGED` 레코드: 접근 모드와 상관없이 owner 의 테넌트와 principal 이어야 한다. `DERIVED` 레코드: 사용 규칙 그대로 | `close`, `reopen`, `purge` |
 
-- **테넌트는 항상 같아야 한다.** `workspace-access: principal`(기본)이면 principal 도 owner 와 같아야 한다. 같은 테넌트의 다른 사용자가 남의 세션
+- **테넌트는 항상 같아야 한다.** `workspaceAccess: PRINCIPAL`(기본)이면 principal 도 owner 와 같아야 한다. 같은 테넌트의 다른 사용자가 남의 세션
   워크스페이스에 닿지 못하게 하려는 것이다. 팀이 한 워크스페이스를 같이 쓰는 애플리케이션은 `tenant` 로 낮추고, 그 공유를 자기 정책(여러 세션에
   걸치는 워크스페이스 id)으로 표현한다
 - 여러 사용자가 메시지를 넣는 세션에서 `principal` 은 소유자가 아닌 참여자의 턴을 모두 거부한다. 그런 애플리케이션은 `tenant` 로 낮춘다
-- **레코드의 `access: tenant` 는 공유 결정이다.** `principal` 배포에서는 `allow-shared-workspaces: true` 가 있어야 만들 수 있다. `tenant` 배포에서는
+- **레코드의 `access: tenant` 는 공유 결정이다.** `principal` 배포에서는 `allowSharedWorkspaces: true` 가 있어야 만들 수 있다. `tenant` 배포에서는
   이미 테넌트 안에서 공유이므로 그 설정이 더하는 것이 없다. `principal` 로 좁히는 것은 언제나 된다. `access` 가 없는 `DERIVED` 레코드는 배포 설정을
   따른다
 - **세션 옵션을 바꾸는 것은 워크스페이스가 아니라 세션에 대한 권한이다.** 소유자 출처(§4)가 답한 세션 소유자만 바꾸고, 출처가 없거나 소유자를
@@ -238,7 +238,7 @@ owner 는 세션 소유자로 정해지고, 그 주체는 검사에서 막힌다
   속성은 자기 턴만, 이미 쓸 수 있는 워크스페이스로 옮긴다. 세션 소유를 요구하면 세션이 없는 루틴과 여러 사람이 쓰는 세션에서 쓸모가 없어진다.
   `connect` 는 프로비저닝 전에 이 검사를 한다
 - **정의에 `sandbox.workspace` 를 쓰는 것은 그 에이전트의 모든 세션을 그 워크스페이스로 보내는 권한이다.** 다른 주체의 세션은 공유된 워크스페이스에만
-  닿는다 — `principal` 배포에서는 owner 가 `allow-shared-workspaces` 아래에서 공유를 골랐어야 한다. 그래도 테넌트가 정의를 쓰는 호스트는 이 권한을
+  닿는다 — `principal` 배포에서는 owner 가 `allowSharedWorkspaces` 아래에서 공유를 골랐어야 한다. 그래도 테넌트가 정의를 쓰는 호스트는 이 권한을
   가볍게 다루지 않는다
 
 **운영자 경로는 owner · 테넌트 검사를 하지 않는다.** `SandboxAdministration.of(WorkspaceSandbox)` 는 모든 워크스페이스와 붙은 세션을 보이고, 대신
@@ -277,7 +277,7 @@ execd 의 uid 소유라, 같은 샌드박스의 실행끼리 서로의 파일과
 **공유 워크스페이스도 하나의 신뢰 도메인이다.** 여러 주체가 한 `access: tenant` 워크스페이스에 붙거나, 많은 사용자의 세션이 한 에이전트 기본
 워크스페이스(정의의 `sandbox.workspace`)를 쓰면, 모든 세션이 모든 파일 — 셸 래퍼가 명령마다 읽어 들이는 다른 세션의 `/workspace/.aimon-shell/` 셸
 상태까지 — 을 읽고 바꾸며 같은 프로파일 자격 증명을 쓴다. 그래서 주체를 넘는 공유는 운영자가 고르는 것이다(`principal` 배포에서는
-`allow-shared-workspaces`, `tenant` 배포에서는 이미 그렇다). **공유 워크스페이스를 격리 경계로 쓰지 않는다.**
+`allowSharedWorkspaces`, `tenant` 배포에서는 이미 그렇다). **공유 워크스페이스를 격리 경계로 쓰지 않는다.**
 
 **(계획 — 구현 단계 5)** **슬롯을 가르는 것만으로 신뢰 도메인이 갈리지는 않는다.** `/shared` 를 쓰기로 마운트한 슬롯들은 bare 저장소의 훅 · ref 와
 공유 문서를 통해 서로의 실행에 영향을 준다([파일 시스템 §8](workspace-sandbox-filesystem.md)). 신뢰 도메인을 가르려면 슬롯을 가르고, 신뢰가 낮은 쪽의
@@ -317,7 +317,7 @@ execd 의 uid 소유라, 같은 샌드박스의 실행끼리 서로의 파일과
 |------|------|
 | 세션도 실행 id 도 없는 루트 요청 | 사용 불가 — 워크스페이스를 정할 수 없다(§3) |
 | 포크의 부모 환경이 없음 · 사용 불가 · 다른 제공자의 것 | 포크도 사용 불가. 부모가 있으면 그 원인을 그대로 싣는다(§3) |
-| 주체 없음 · 시스템 주체 + `require-principal`(허용 목록 밖) | 바인딩 거부, 사용 불가 환경이 이유를 담는다(§4) |
+| 주체 없음 · 시스템 주체 + `requirePrincipal`(허용 목록 밖) | 바인딩 거부, 사용 불가 환경이 이유를 담는다(§4) |
 | 어느 출처도 세션 소유자를 모름(출처가 배선됨) | 바인딩 거부 — `SubmitRequest.owner(...)` 를 싣거나 `SessionOwnerLookup` 으로 답하라고 적는다(§4) |
 | 소유자 출처의 저장소 장애 | 바인딩 실패 → 사용 불가(§4) |
 | 세션 옵션 저장소를 읽을 수 없음 | 그 세션의 루트 바인딩이 사용 불가. ⓪ 이 적용되어도 같다. `per-session` 으로 넘어가지 않는다(§2) |
@@ -343,7 +343,7 @@ execd 의 uid 소유라, 같은 샌드박스의 실행끼리 서로의 파일과
   `agent({..., attributes: { sandbox: { slot: 'exp-a' } }})` 는 이미 쓸 수 있지만(등록된 정의가 슬롯을 정했으면 스크립트가 바꾸지 못한다), `Task` 도구
   인자로 여는 것은 모델에게 슬롯 선택권을 주는 일이다. 허용 목록으로 좁혀 열지, 워크플로에만 둘지 정해야 한다. 다중 슬롯(계획 — 구현 단계 5)과 함께
   닫는다
-- **소유자 없는 세션과 `require-principal`** — 어느 출처도 소유자를 모르는 세션은 샌드박스를 받지 못한다(§4). `SubmitRequest.owner` 를 싣기 전에 만든
+- **소유자 없는 세션과 `requirePrincipal`** — 어느 출처도 소유자를 모르는 세션은 샌드박스를 받지 못한다(§4). `SubmitRequest.owner` 를 싣기 전에 만든
   세션이 남은 호스트는 그 세션이 사라질 때까지 `SessionOwnerLookup` 을 대체 출처로 둔다. 이 엄격함을 유지할지 확인이 필요하다. 같은 이유로
   `sessionRecords(...)` 만 배선한 배포는 첫 submit 전에 세션 옵션을 정할 수 없다(세션 레코드와 소유자가 아직 없다). 우회는 셋이다 — 첫 턴을 요청
   속성으로 옮기거나, 세션 레코드를 `SessionRecordStore.provision(id, agentRef, owner)` 로 먼저 만들거나, 호스트 lookup 을 대체 출처로 둔다

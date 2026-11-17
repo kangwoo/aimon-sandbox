@@ -115,7 +115,7 @@ class WorkspaceSandboxTest {
     // ----------------------------------------------------------------------------------------------------------------
 
     @Test
-    @DisplayName("core-033 §3.5: the default background executor is the assembly's and close() shuts it down")
+    @DisplayName("the default background executor is the assembly's and close() shuts it down")
     void theDefaultBackgroundExecutorIsOwned() {
         final LocalProcessSandboxProvider provider = LocalProcessSandboxProvider.builder().build();
         try {
@@ -149,7 +149,7 @@ class WorkspaceSandboxTest {
     }
 
     @Test
-    @DisplayName("core-033 §7: a refused background task is logged; the deletion stays marked for the janitor")
+    @DisplayName("a refused background task is logged; the deletion stays marked for the janitor")
     void aRefusedBackgroundTaskIsDropped() throws Exception {
         final QueueingExecutor refusing = new QueueingExecutor();
         refusing.refuse();
@@ -166,7 +166,7 @@ class WorkspaceSandboxTest {
     }
 
     @Test
-    @DisplayName("core-033 §5.2: require-principal is satisfied by sessionRecords(...) alone, and refused with neither")
+    @DisplayName("require-principal is satisfied by sessionRecords(...) alone, and refused with neither")
     void requirePrincipalAcceptsCoresStoreAsTheOwnerSource() {
         final LocalProcessSandboxProvider provider = LocalProcessSandboxProvider.builder().build();
         try {
@@ -184,7 +184,7 @@ class WorkspaceSandboxTest {
     }
 
     @Test
-    @DisplayName("core-033 §5.2: ws:{sid} is owned by the owner core recorded, whoever binds first (WS §8.3)")
+    @DisplayName("ws:{sid} is owned by the owner core recorded, whoever binds first")
     void theRecordedOwnerOwnsTheSessionsWorkspace() throws Exception {
         final InMemorySessionRecordStore records = new InMemorySessionRecordStore();
         final Principal bob = Principal.user("bob");
@@ -221,7 +221,7 @@ class WorkspaceSandboxTest {
     }
 
     @Test
-    @DisplayName("core-033 §6.2: session options follow core's owner — set by it, refused to another principal")
+    @DisplayName("session options follow core's owner — set by it, refused to another principal")
     void sessionOptionsUseTheRecordedOwner() {
         final InMemorySessionRecordStore records = new InMemorySessionRecordStore();
         try (SandboxHarness harness = SandboxHarness.builder().sessionRecords(records).build()) {

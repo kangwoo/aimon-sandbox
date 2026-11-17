@@ -206,7 +206,7 @@ docker 계층은 실행마다 OpenSandbox 서버를 Testcontainers 컨테이너�
 "host.docker.internal"` 과 `extra_hosts: host.docker.internal:host-gateway`, `[proxy] resolve_internal = false`,
 `network_mode = "bridge"`. 샌드박스는 execd 를 호스트의 모든 인터페이스에 publish 하고, 서버는 `host.docker.internal:{port}`
 로 닿는다. 루프백에만 바인드하면 Linux 에서 서버 컨테이너의 네트워크 네임스페이스가 host gateway 로 그 포트에 닿지 못하기
-때문이다. 테스트 JVM 은 서버의 매핑된 포트에만 닿고 execd 는 서버 프록시(`use-server-proxy`)로 부른다. 실행 동안 테스트
+때문이다. 테스트 JVM 은 서버의 매핑된 포트에만 닿고 execd 는 서버 프록시(`useServerProxy`)로 부른다. 실행 동안 테스트
 호스트의 인터페이스에 execd 포트가 열리는 것은 개발 · CI 머신에서 받아들인다.
 
 **샌드박스 이미지.** `src/test/docker/Dockerfile` 로 만든 계약 이미지다. 이미지 계약([설정 §4](workspace-sandbox-configuration.md))
@@ -279,8 +279,8 @@ Docker 호스트의 컨테이너다.
 | Kubernetes 에서만 드러나는 것(강화 템플릿, east-west, runtime class, root 이미지, 자격 증명 주입) | k8s 계층 |
 
 조정과 janitor 시나리오는 기본 계층에서 돌고, 노드 재시작 뒤의 고아 회수는 docker 계층에서 실서버로 한 번 더 돈다. 라벨 인코딩
-(`ws:{sessionId}` 처럼 `:` · `/` 가 든 id)은 계약 스위트와 docker 계층이 확인한다. `network-isolation` 미선언 배포의 기동 거부와
-제어면에 닿는 샌드박스의 FAILED(`network-isolation`)는 기본 계층이, 선언한 `dns+nft` 와 서버의 `dns` 불일치는 기본 계층과 docker
+(`ws:{sessionId}` 처럼 `:` · `/` 가 든 id)은 계약 스위트와 docker 계층이 확인한다. `networkIsolation` 미선언 배포의 기동 거부와
+제어면에 닿는 샌드박스의 FAILED(seed 단계 `network-isolation`)는 기본 계층이, 선언한 `dns+nft` 와 서버의 `dns` 불일치는 기본 계층과 docker
 계층이 함께 확인한다.
 
 ## 4. 멀티 노드 검증
@@ -388,7 +388,7 @@ Docker 호스트의 컨테이너다.
 | 세션 삭제(`onDeleted`) → 같은 id 의 새 세션 | 옵션이 지워지고 `ws:{sid}` 는 즉시 CLOSING. 호출 스레드에서는 프로바이더 호출이 없다. 새 세션은 "being removed", 배경 작업 뒤 새 incarnation | [수명 §7.4](workspace-sandbox-lifecycle.md) |
 | 세션 삭제의 배경 작업이 유실됨 | janitor 의 재개와 `CLOSED(SESSION_DELETED)` 레코드 삭제가 같은 끝 상태에 이른다 | [수명 §7.4](workspace-sandbox-lifecycle.md) |
 | 세션 삭제 뒤 큐에 남은 ack · mark 쓰기 | 아무 레코드도 만들지 않는다 | [notice §5.2](workspace-sandbox-notices.md) |
-| `default-profile` 을 바꿔 재배포 → 진행 중인 워크스페이스 | 기존 `primary` 슬롯을 계속 쓴다 | [도메인 §2](workspace-sandbox-domain.md) |
+| `defaultProfile` 을 바꿔 재배포 → 진행 중인 워크스페이스 | 기존 `primary` 슬롯을 계속 쓴다 | [도메인 §2](workspace-sandbox-domain.md) |
 
 ### 5.7 테넌트 · 주체 · 권한 · admission
 
@@ -396,9 +396,9 @@ Docker 호스트의 컨테이너다.
 |---|---|---|
 | 다른 테넌트 principal 로 같은 workspaceId (`connect` · `close` · `reopen`) | 모두 거부 | [바인딩 §5](workspace-sandbox-binding.md) |
 | **(계획 — 구현 단계 5)** 다른 테넌트 워크스페이스에 대한 `SandboxStop` · `SandboxList` | 거부 | [바인딩 §7](workspace-sandbox-binding.md) |
-| 한 테넌트가 세션을 대량으로 열어 `max-running-per-tenant` 초과 | admission 거부 | [보안 §8](workspace-sandbox-security.md) |
-| 같은 테넌트 다른 사용자, `workspace-access: principal` | 거부 | [바인딩 §5](workspace-sandbox-binding.md) |
-| `Principal.system()` 요청 + `require-principal` | 거부 | [바인딩 §4](workspace-sandbox-binding.md) |
+| 한 테넌트가 세션을 대량으로 열어 `maxRunningPerTenant` 초과 | admission 거부 | [보안 §8](workspace-sandbox-security.md) |
+| 같은 테넌트 다른 사용자, `workspaceAccess: PRINCIPAL` | 거부 | [바인딩 §5](workspace-sandbox-binding.md) |
+| `Principal.system()` 요청 + `requirePrincipal` | 거부 | [바인딩 §4](workspace-sandbox-binding.md) |
 | 레코드 유실 뒤 세션 소유자가 아닌 주체가 먼저 `connect` | owner 는 세션 소유자, 그 주체는 거부 | [바인딩 §4](workspace-sandbox-binding.md) |
 | 관리 연산(옵션 set · clear · 조회, describe, close, reopen, purge, 요청 속성 바인딩) × 주체(owner · 같은 테넌트 · 다른 테넌트 · 익명) × 배포 접근 모드 × 레코드 접근 모드 | 사용 권한 · 관리 권한 규칙대로 허용 · 거부한다. 요청 속성 바인딩의 거부는 `connect` 의 "not permitted" 이고 아무것도 만들지 않는다 | [바인딩 §5](workspace-sandbox-binding.md) |
 | 직렬화한 `WorkspaceView` · `SandboxView` | 프로바이더 id 가 없다 | [관리 §5](workspace-sandbox-management.md) |
@@ -435,7 +435,7 @@ Docker 호스트의 컨테이너다.
 | 보안: 호스트 | 호스트 파일 · Docker 소켓 · K8s API · 서비스 계정 토큰 · 실제 자격 증명 조회 불가, uid ≠ 0 | [보안 §2](workspace-sandbox-security.md) |
 | 보안: egress | 허용 목록 밖 도메인 · `169.254.169.254` · 허용 목록 밖 DNS 해석 · OpenSandbox 서버 API 불가 | [보안 §4](workspace-sandbox-security.md) |
 | 보안: east-west | 다른 워크스페이스 샌드박스의 IP · execd 포트 접근 불가 | [보안 §2](workspace-sandbox-security.md) |
-| `network-isolation` 을 선언하지 않은 배포 | 기동 거부 | [설정 §3](workspace-sandbox-configuration.md) |
+| `networkIsolation` 을 선언하지 않은 배포 | 기동 거부 | [설정 §3](workspace-sandbox-configuration.md) |
 | 보안: 자격 증명 범위 | 허용한 저장소 경로 밖으로의 push 에 토큰이 주입되지 않음 | [보안 §5](workspace-sandbox-security.md) |
 
 ### 5.10 셸 엔진

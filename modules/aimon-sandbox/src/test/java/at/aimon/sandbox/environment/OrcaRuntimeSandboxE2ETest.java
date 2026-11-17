@@ -164,7 +164,7 @@ class OrcaRuntimeSandboxE2ETest {
     }
 
     @Test
-    @DisplayName("§16: a turn without commands provisions nothing; the prompt shows the profile's declared values")
+    @DisplayName("a turn without commands provisions nothing; the prompt shows the profile's declared values")
     void textOnlyTurnProvisionsNothingAndPromptShowsDeclaredValues() {
         llm.respond(LlmResponse.text("Hello."));
 
@@ -181,7 +181,7 @@ class OrcaRuntimeSandboxE2ETest {
     }
 
     @Test
-    @DisplayName("§16: a slash-command skill's Bash runs in the sandbox, not on the host")
+    @DisplayName("a slash-command skill's Bash runs in the sandbox, not on the host")
     void slashCommandSkillBashRunsInSandbox() throws Exception {
         skills.add(Skill.builder().name("mark")
                 .metadata(SkillMetadata.builder().name("mark").description("writes a marker")
@@ -206,7 +206,7 @@ class OrcaRuntimeSandboxE2ETest {
     }
 
     @Test
-    @DisplayName("§16: a slash-command skill run in a forked subagent also runs its Bash in the sandbox")
+    @DisplayName("a slash-command skill run in a forked subagent also runs its Bash in the sandbox")
     void forkedSlashCommandSkillBashRunsInTheSameSandbox() throws Exception {
         subagentRegistry.add(
                 Subagent.of("worker", SubagentMetadata.builder().description("does the work").maxIterations(3).build(),
@@ -238,7 +238,7 @@ class OrcaRuntimeSandboxE2ETest {
     }
 
     @Test
-    @DisplayName("§8.2: a Task subagent's Bash runs in the session's sandbox as the caller, with no fallback")
+    @DisplayName("a Task subagent's Bash runs in the session's sandbox as the caller, with no fallback")
     void taskSubagentBashRunsInTheSameSandboxAsTheCaller() throws Exception {
         subagentRegistry.add(
                 Subagent.of("worker", SubagentMetadata.builder().description("does the work").maxIterations(3).build(),
@@ -281,7 +281,7 @@ class OrcaRuntimeSandboxE2ETest {
     }
 
     @Test
-    @DisplayName("§12.1: a skill's preTool shell hook runs in the sandbox, not on the host")
+    @DisplayName("a skill's preTool shell hook runs in the sandbox, not on the host")
     void skillShellHookRunsInTheSandbox() throws Exception {
         guardWith("    - action: { type: shell, command: \"printf '%s' \\\"$AIMON_TOOL_NAME\\\" > hook-ran.txt\" }\n");
         llm.respond(LlmResponse.tools(List.of(ToolUse.of("t1", "Bash", Map.of("command", "echo tool > tool.txt")))));
@@ -299,7 +299,7 @@ class OrcaRuntimeSandboxE2ETest {
     }
 
     @Test
-    @DisplayName("§12.1: a skill's preTool shell hook runs outside the model's shell session: no shell lock, no state")
+    @DisplayName("a skill's preTool shell hook runs outside the model's shell session: no shell lock, no state")
     void skillShellHookRunsOutsideTheModelsShellSession() throws Exception {
         guardWith("    - action: { type: shell, command: \"cd /tmp; export FROM_HOOK=1; echo hook-marker\" }\n");
         llm.respond(LlmResponse.tools(List.of(ToolUse.of("t1", "Bash", Map.of("command", "mkdir -p src; cd src")))));
@@ -321,7 +321,7 @@ class OrcaRuntimeSandboxE2ETest {
     }
 
     @Test
-    @DisplayName("§12.1: a hooks.json guard (core's isolated executor) runs in the sandbox without the model's state")
+    @DisplayName("a hooks.json guard (core's isolated executor) runs in the sandbox without the model's state")
     void isolatedShellHookRunsWithoutTheModelsShellState() throws Exception {
         // The executor core's hooks.json path (HookRegistryApplier) gives an environment-placed command.
         guardWith("    - action: { type: shell, command: \"echo \\\"[$FROM_MODEL]\\\" >> hook-saw.txt\" }\n",
@@ -347,7 +347,7 @@ class OrcaRuntimeSandboxE2ETest {
     }
 
     @Test
-    @DisplayName("#33: a hooks.json guard running \"$AIMON_HOOK_DIR/guard.sh\" runs in the sandbox and blocks with exit 2")
+    @DisplayName("a hooks.json guard running \"$AIMON_HOOK_DIR/guard.sh\" runs in the sandbox and blocks with exit 2")
     void hooksJsonGuardFromItsHookDirectoryRunsAndBlocks() throws Exception {
         // Before RUN_DIRECTORY this handler was not run on the sandbox (RUN_DIRECTORY_UNSUPPORTED): blocked unread.
         final Path layer = Files.createDirectories(tempDir.resolve("project/.aimon/hooks")).getParent();
@@ -373,7 +373,7 @@ class OrcaRuntimeSandboxE2ETest {
     }
 
     @Test
-    @DisplayName("#33: a skill hook's AIMON_SKILL_DIR is a private run directory, not a staged copy")
+    @DisplayName("a skill hook's AIMON_SKILL_DIR is a private run directory, not a staged copy")
     void aSkillHooksDirectoryIsAPrivateRunDirectory() throws Exception {
         final Path source = Files.createDirectories(tempDir.resolve("skills/demo/scripts"));
         Files.writeString(source.resolve("check.sh"), "echo skill-script\n");
@@ -396,7 +396,7 @@ class OrcaRuntimeSandboxE2ETest {
     }
 
     @Test
-    @DisplayName("§12.1: a skill's preTool shell guard that exits 2 in the sandbox blocks the tool")
+    @DisplayName("a skill's preTool shell guard that exits 2 in the sandbox blocks the tool")
     void skillShellGuardVetoBlocksTheTool() throws Exception {
         guardWith("    - action: { type: shell, command: \"echo 'no writes here' >&2; exit 2\" }\n");
         llm.respond(LlmResponse.tools(List.of(ToolUse.of("t1", "Bash", Map.of("command", "echo x > blocked.txt")))));
@@ -412,7 +412,7 @@ class OrcaRuntimeSandboxE2ETest {
     }
 
     @Test
-    @DisplayName("§12.1: a skill's preTool shell guard blocks the tool when the sandbox is unavailable (fail-closed)")
+    @DisplayName("a skill's preTool shell guard blocks the tool when the sandbox is unavailable (fail-closed)")
     void skillShellGuardBlocksWhenTheSandboxIsUnavailable() {
         guardWith("    - action: { type: shell, command: \"exit 0\" }\n");
         harness.faults.inject(Operation.CREATE, Fault.fail(SandboxProviderException.Kind.PERMANENT));
@@ -430,7 +430,7 @@ class OrcaRuntimeSandboxE2ETest {
     }
 
     @Test
-    @DisplayName("§12.1: a failOpen observer lets the tool through when the sandbox is unavailable")
+    @DisplayName("a failOpen observer lets the tool through when the sandbox is unavailable")
     void failOpenObserverDoesNotBlockWhenTheSandboxIsUnavailable() {
         guardWith("    - action: { type: shell, command: \"exit 0\" }\n      failOpen: true\n");
         harness.faults.inject(Operation.CREATE, Fault.fail(SandboxProviderException.Kind.PERMANENT));
@@ -453,7 +453,7 @@ class OrcaRuntimeSandboxE2ETest {
     }
 
     @Test
-    @DisplayName("management §9.3: an agent's sandbox.workspace runs its Bash in the pre-created sandbox")
+    @DisplayName("an agent's sandbox.workspace runs its Bash in the pre-created sandbox")
     void anAgentDefaultRunsBashInThePreCreatedSandbox() throws Exception {
         final WorkspaceView created = harness.sandbox.workspaces().create(CreateWorkspace.named("pre-created"),
                 SandboxHarness.ALICE);
@@ -472,7 +472,7 @@ class OrcaRuntimeSandboxE2ETest {
     }
 
     @Test
-    @DisplayName("management §9.3: a session's options attach it elsewhere, over the agent default")
+    @DisplayName("a session's options attach it elsewhere, over the agent default")
     void sessionOptionsOverrideTheAgentDefault() throws Exception {
         final WorkspaceView agentDefault = harness.sandbox.workspaces().create(CreateWorkspace.named("default"),
                 SandboxHarness.ALICE);
@@ -492,7 +492,7 @@ class OrcaRuntimeSandboxE2ETest {
     }
 
     @Test
-    @DisplayName("management §9.3: sandbox.unattached reject — an unattached session's tool call reports it")
+    @DisplayName("sandbox.unattached reject — an unattached session's tool call reports it")
     void anUnattachedSessionUnderRejectReportsTheRejection() {
         final SessionId session = SessionId.generate();
 
@@ -505,7 +505,7 @@ class OrcaRuntimeSandboxE2ETest {
     }
 
     @Test
-    @DisplayName("management §6.3: a session option can tighten the rule, and per-session runs where nothing tightens")
+    @DisplayName("a session option can tighten the rule, and per-session runs where nothing tightens")
     void theSessionOptionDecidesWithinTheFloorAndTheAgent() throws Exception {
         final SessionId strict = SessionId.generate();
         final SessionId relaxed = SessionId.generate();
@@ -532,7 +532,7 @@ class OrcaRuntimeSandboxE2ETest {
     // ----------------------------------------------------------------------------------------------------------------
 
     @Test
-    @DisplayName("core-033 #252: a turn's request attribute runs its Bash, and its Task fork's, in the named workspace")
+    @DisplayName("a turn's request attribute runs its Bash, and its Task fork's, in the named workspace")
     void aRequestAttributeTurnAndItsForkRunInTheNamedWorkspace() throws Exception {
         subagentRegistry.add(
                 Subagent.of("worker", SubagentMetadata.builder().description("does the work").maxIterations(3).build(),
@@ -585,7 +585,7 @@ class OrcaRuntimeSandboxE2ETest {
     }
 
     @Test
-    @DisplayName("core-033 #254: a Read-only turn hears an idle reset on its first tool result, exactly once")
+    @DisplayName("a Read-only turn hears an idle reset on its first tool result, exactly once")
     void aReadOnlyTurnHearsTheResetExactlyOnce() throws Exception {
         final SessionId session = SessionId.generate();
         runBash(runtime(), session, "echo before > kept.txt");
@@ -600,7 +600,7 @@ class OrcaRuntimeSandboxE2ETest {
     }
 
     @Test
-    @DisplayName("core-033 #254: an attached session's switch reaches its first Read only, and is recorded")
+    @DisplayName("an attached session's switch reaches its first Read only, and is recorded")
     void aReadOnlyTurnHearsTheSwitchOnceAndRecordsIt() throws Exception {
         final WorkspaceView attached = harness.sandbox.workspaces().create(CreateWorkspace.named("moved"),
                 SandboxHarness.ALICE);
@@ -618,7 +618,7 @@ class OrcaRuntimeSandboxE2ETest {
     }
 
     @Test
-    @DisplayName("core-033 #254: a Bash result carries the drained line once, and not among the command's own")
+    @DisplayName("a Bash result carries the drained line once, and not among the command's own")
     void aBashResultCarriesTheResetOnce() throws Exception {
         final SessionId session = SessionId.generate();
         runBash(runtime(), session, "true");
@@ -645,7 +645,7 @@ class OrcaRuntimeSandboxE2ETest {
     }
 
     @Test
-    @DisplayName("#28: a text-only turn whose onStop hook resets the sandbox — the next turn's first Read hears it once")
+    @DisplayName("a text-only turn whose onStop hook resets the sandbox — the next turn's first Read hears it once")
     void aStopHooksResetReachesTheNextTurnOnce() throws Exception {
         final SessionId session = SessionId.generate();
         runBash(runtime(), session, "echo before > kept.txt");

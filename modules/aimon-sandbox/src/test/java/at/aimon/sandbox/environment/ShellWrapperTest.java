@@ -127,7 +127,7 @@ class ShellWrapperTest {
     }
 
     @Test
-    @DisplayName("#33: a hook's or an isolated command's script keeps nothing in the shell directory")
+    @DisplayName("a hook's or an isolated command's script keeps nothing in the shell directory")
     void aStreamScriptHasNoRunFiles() {
         for (String script : List.of(ShellWrapper.hook(stream("echo 'x'").stdinInline("aGk=")),
                 ShellWrapper.isolated(stream("echo 'x'").redirectErrorStream(true)))) {
@@ -149,7 +149,7 @@ class ShellWrapperTest {
     }
 
     @Test
-    @DisplayName("#33: the private directory is made exclusively, after the shell root, with placement under umask 077")
+    @DisplayName("the private directory is made exclusively, after the shell root, with placement under umask 077")
     void thePrivateDirectoryIsExclusiveAndPlacementIsScoped() {
         final String script = ShellWrapper.isolated(stream("true"));
 

@@ -84,7 +84,7 @@ class SandboxSessionCleanupTest {
     }
 
     @Test
-    @DisplayName("core-033 §6.3: under the lease only store writes — options gone, ws:{sid} CLOSING; the rest deferred")
+    @DisplayName("under the lease only store writes — options gone, ws:{sid} CLOSING; the rest deferred")
     void theListenerMarksAndDefers() throws Exception {
         aliveWithOptions();
         harness.faults.resetCounts();
@@ -134,7 +134,7 @@ class SandboxSessionCleanupTest {
     }
 
     @Test
-    @DisplayName("core-033 §6.3: a dropped deferred task — the janitor resumes the close and deletes the record")
+    @DisplayName("a dropped deferred task — the janitor resumes the close and deletes the record")
     void theJanitorFinishesADroppedDeletion() throws Exception {
         aliveWithOptions();
         delete();
@@ -185,7 +185,7 @@ class SandboxSessionCleanupTest {
     }
 
     @Test
-    @DisplayName("core-033 §6.3: a deleted session's ws:{sid} cannot be reopened out of its deletion")
+    @DisplayName("a deleted session's ws:{sid} cannot be reopened out of its deletion")
     void aDeletedSessionsWorkspaceIsNotReopened() throws Exception {
         aliveWithOptions();
         harness.sandbox.manager().close(derived(), ALICE);
@@ -201,7 +201,7 @@ class SandboxSessionCleanupTest {
     }
 
     @Test
-    @DisplayName("core-033 §6.3: reopening a deleted session's workspace gets one answer — while CLOSING, and for another owner")
+    @DisplayName("reopening a deleted session's workspace gets one answer — while CLOSING, and for another owner")
     void aDeletedSessionsWorkspaceGetsOneReopenAnswer() throws Exception {
         aliveWithOptions();
         delete();
@@ -218,7 +218,7 @@ class SandboxSessionCleanupTest {
     }
 
     @Test
-    @DisplayName("core-033 §6.3: an attached managed workspace is shared — it stays OPEN with its sandbox")
+    @DisplayName("an attached managed workspace is shared — it stays OPEN with its sandbox")
     void anAttachedManagedWorkspaceIsKept() throws Exception {
         records.provision(session, "agent", ALICE);
         final SandboxWorkspaceId managed = harness.sandbox.workspaces().create(CreateWorkspace.named("team"), ALICE)
@@ -250,7 +250,7 @@ class SandboxSessionCleanupTest {
     }
 
     @Test
-    @DisplayName("core-033 §7: a failing store never escapes the listener")
+    @DisplayName("a failing store never escapes the listener")
     void storeFailuresAreContained() {
         harness.close();
         harness = SandboxHarness.builder().sessionRecords(records).background(background)
@@ -303,7 +303,7 @@ class SandboxSessionCleanupTest {
     }
 
     @Test
-    @DisplayName("unannounced-reset §6.4: the listener deletes a record holding only an unannounced reset")
+    @DisplayName("the listener deletes a record holding only an unannounced reset")
     void theListenerDeletesARecordHoldingOnlyAnUnannouncedReset() throws Exception {
         idleClosed();
         bash(harness.mainTurn(session, ALICE), "true",
@@ -317,7 +317,7 @@ class SandboxSessionCleanupTest {
     }
 
     @Test
-    @DisplayName("unannounced-reset §6.4: an acknowledgement queued behind the deletion creates nothing")
+    @DisplayName("an acknowledgement queued behind the deletion creates nothing")
     void aQueuedAcknowledgementAfterTheDeletionCreatesNothing() throws Exception {
         idleClosed();
         final ExecutionEnvironment turn = harness.mainTurn(session, ALICE);
@@ -332,7 +332,7 @@ class SandboxSessionCleanupTest {
     }
 
     @Test
-    @DisplayName("unannounced-reset §6.4: a mark for a session core no longer has creates no record")
+    @DisplayName("a mark for a session core no longer has creates no record")
     void aMarkForADeletedSessionCreatesNothing() {
         assertThat(harness.sandbox.manager().markResetUnannounced(session, derived(), "primary", OptionalLong.empty(),
                 Optional.empty(), WorkspaceOwner.of(TenantId.DEFAULT, ALICE))).isEmpty();
@@ -344,7 +344,7 @@ class SandboxSessionCleanupTest {
     }
 
     @Test
-    @DisplayName("core-033 §6.3: the janitor sweeps the options of sessions core no longer has, after closed-retention")
+    @DisplayName("the janitor sweeps the options of sessions core no longer has, after closed-retention")
     void theJanitorSweepsOptionsOfDeletedSessions() {
         final SessionId gone = SessionId.generate();
         final SessionId young = SessionId.generate();

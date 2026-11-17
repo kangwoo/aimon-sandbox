@@ -88,7 +88,7 @@ class ManagedSessionsIT {
     }
 
     @Test
-    @DisplayName("§6.3: an attached session's turns and forks run in the managed workspace; no ws:{sid} is made")
+    @DisplayName("an attached session's turns and forks run in the managed workspace; no ws:{sid} is made")
     void anAttachedSessionRunsInTheManagedWorkspace() throws Exception {
         final SandboxWorkspaceId id = create("shared");
         attach(id);
@@ -105,14 +105,14 @@ class ManagedSessionsIT {
     }
 
     @Test
-    @DisplayName("§6.4: attach → one notice, repeated turns → none, clear → a notice on the fallback")
+    @DisplayName("attach → one notice, repeated turns → none, clear → a notice on the fallback")
     void theSwitchNoticeIsGivenOncePerMove() throws Exception {
         final SandboxWorkspaceId id = create("noticed");
         assertThat(drained(harness.mainTurn(session, ALICE), "true")).as("no options: never redirected").isEmpty();
 
         attach(id);
         final ExecutionEnvironment attached = harness.mainTurn(session, ALICE);
-        assertThat(bash(attached, "true").notices()).as("core-033 §6.5: never on the command's own result").isEmpty();
+        assertThat(bash(attached, "true").notices()).as("never on the command's own result").isEmpty();
         assertThat(attached.drainNotices()).singleElement().asString().contains("now runs in sandbox workspace " + id)
                 .doesNotContain("noticed");
         assertThat(attached.drainNotices()).as("one-shot").isEmpty();
@@ -126,7 +126,7 @@ class ManagedSessionsIT {
     }
 
     @Test
-    @DisplayName("core-033 §6.4: a turn of file tools only hears the switch on its first call, and it is recorded")
+    @DisplayName("a turn of file tools only hears the switch on its first call, and it is recorded")
     void aFileOnlyTurnHearsTheSwitch() throws Exception {
         final SandboxWorkspaceId id = create("files");
         attach(id);
@@ -153,7 +153,7 @@ class ManagedSessionsIT {
     }
 
     @Test
-    @DisplayName("§7: explicit close → 'closed' until reopen; purge → 'does not exist' until the options are cleared")
+    @DisplayName("explicit close → 'closed' until reopen; purge → 'does not exist' until the options are cleared")
     void closedAndPurgedTargets() throws Exception {
         final SandboxWorkspaceId id = create("ending");
         attach(id);
@@ -175,7 +175,7 @@ class ManagedSessionsIT {
     }
 
     @Test
-    @DisplayName("§6.2: a non-owner participant's turn into the attached workspace passes only if it may use it")
+    @DisplayName("a non-owner participant's turn into the attached workspace passes only if it may use it")
     void aNonOwnerParticipantIsCheckedAtConnect() throws Exception {
         final SandboxWorkspaceId id = create("private");
         attach(id);
@@ -193,7 +193,7 @@ class ManagedSessionsIT {
     }
 
     @Test
-    @DisplayName("§6.3: a SYSTEM routine reaches an agent default only when allowed and owner or shared")
+    @DisplayName("a SYSTEM routine reaches an agent default only when allowed and owner or shared")
     void aSystemRoutineWithAnAgentDefault() throws Exception {
         harness.close();
         harness = harness(
@@ -216,7 +216,7 @@ class ManagedSessionsIT {
     }
 
     @Test
-    @DisplayName("core-033 §6.4: ws:{sid}, then a request attribute, then neither — announced on turns 2 and 3")
+    @DisplayName("ws:{sid}, then a request attribute, then neither — announced on turns 2 and 3")
     void aRequestAttributeRedirectIsAnnouncedBothWays() throws Exception {
         harness.close();
         harness = harness(s -> s.allowSharedWorkspaces(true));
@@ -249,7 +249,7 @@ class ManagedSessionsIT {
     }
 
     @Test
-    @DisplayName("core-033 §6.1: a routine placed by request attribute runs as its task owner, through the same gate")
+    @DisplayName("a routine placed by request attribute runs as its task owner, through the same gate")
     void aRoutinePlacedByRequestAttribute() throws Exception {
         final SandboxWorkspaceId alices = create("alice's");
         final Map<String, String> request = Map.of(SlotChoice.WORKSPACE_ATTRIBUTE, alices.value());
@@ -278,7 +278,7 @@ class ManagedSessionsIT {
     }
 
     @Test
-    @DisplayName("§7: setSessionOptions racing a close — the attachment lands; the next turn hears 'closed'")
+    @DisplayName("setSessionOptions racing a close — the attachment lands; the next turn hears 'closed'")
     void setSessionOptionsRacingAClose() throws Exception {
         final SandboxWorkspaceId[] target = new SandboxWorkspaceId[1];
         final SandboxWorkspaces[] facade = new SandboxWorkspaces[1];
@@ -308,7 +308,7 @@ class ManagedSessionsIT {
     }
 
     @Test
-    @DisplayName("§6.4: a re-attach between two turns flips the notice to the new target, once")
+    @DisplayName("a re-attach between two turns flips the notice to the new target, once")
     void aReattachFlipsTheNotice() throws Exception {
         final SandboxWorkspaceId first = create("first");
         final SandboxWorkspaceId second = create("second");
@@ -326,7 +326,7 @@ class ManagedSessionsIT {
     }
 
     @Test
-    @DisplayName("core-033 §6.5: a hook's command leaves the switch in the queue for core's drain")
+    @DisplayName("a hook's command leaves the switch in the queue for core's drain")
     void aHookDoesNotConsumeTheSwitchNotice() throws Exception {
         final SandboxWorkspaceId id = create("hooked");
         attach(id);
@@ -361,7 +361,7 @@ class ManagedSessionsIT {
     }
 
     @Test
-    @DisplayName("core-033 §6.4: a clear that beats the drained switch's record write still announces the move back")
+    @DisplayName("a clear that beats the drained switch's record write still announces the move back")
     void aClearBeforeTheRecordWriteStillAnnouncesTheMove() throws Exception {
         final QueueingExecutor background = new QueueingExecutor();
         harness.close();

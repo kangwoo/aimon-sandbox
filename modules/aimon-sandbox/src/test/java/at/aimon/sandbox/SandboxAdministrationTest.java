@@ -80,7 +80,7 @@ class SandboxAdministrationTest {
     }
 
     @Test
-    @DisplayName("§5.5: the listing filters by state, origin, name, tenant and owner, and pages by id")
+    @DisplayName("the listing filters by state, origin, name, tenant and owner, and pages by id")
     void listingFiltersAndPages() throws Exception {
         final List<SandboxWorkspaceId> alices = new ArrayList<>();
         for (int i = 0; i < 5; i++) {
@@ -118,7 +118,7 @@ class SandboxAdministrationTest {
     }
 
     @Test
-    @DisplayName("§5.5: a store that ignores the tenant, owner and origin filters cannot mislead the listing")
+    @DisplayName("a store that ignores the tenant, owner and origin filters cannot mislead the listing")
     void theListingReChecksWhatTheStoreReturns() {
         harness.close();
         harness = harness(new DelegatingStore(new InMemorySandboxWorkspaceStore()) {
@@ -140,7 +140,7 @@ class SandboxAdministrationTest {
     }
 
     @Test
-    @DisplayName("§5.5: a workspace's detail lists its attached sessions, which page by session id")
+    @DisplayName("a workspace's detail lists its attached sessions, which page by session id")
     void detailAndSessions() {
         final SandboxWorkspaceId id = create("shared", ALICE);
         final List<SessionId> sessions = new ArrayList<>();
@@ -165,7 +165,7 @@ class SandboxAdministrationTest {
     }
 
     @Test
-    @DisplayName("§5.5: create on behalf of runs the owner's gate and limits, and records the actor")
+    @DisplayName("create on behalf of runs the owner's gate and limits, and records the actor")
     void createOnBehalfOf() {
         harness.close();
         harness = SandboxHarness.builder().tenantResolver(BY_PREFIX).settings(s -> s.maxManagedPerOwner(1)).build();
@@ -183,7 +183,7 @@ class SandboxAdministrationTest {
     }
 
     @Test
-    @DisplayName("§6.2: the operator sets any session's options, but the lookup and the consistency check hold")
+    @DisplayName("the operator sets any session's options, but the lookup and the consistency check hold")
     void theAdministratorsSessionOptions() throws Exception {
         final SandboxWorkspaceId alices = create("alice's", ALICE);
         final SandboxWorkspaceId bobs = create("bob's", BOB);
@@ -214,7 +214,7 @@ class SandboxAdministrationTest {
     }
 
     @Test
-    @DisplayName("§6.7: terminate ends the slot's sandbox; the workspace stays OPEN and the next use re-provisions")
+    @DisplayName("terminate ends the slot's sandbox; the workspace stays OPEN and the next use re-provisions")
     void terminateSlot() throws Exception {
         final SandboxWorkspaceId id = create("terminated", ALICE);
         final SessionId session = SessionId.generate();
@@ -239,7 +239,7 @@ class SandboxAdministrationTest {
     }
 
     @Test
-    @DisplayName("§5.5: close, reopen and purge need no owner right, and their events carry the actor")
+    @DisplayName("close, reopen and purge need no owner right, and their events carry the actor")
     void closeReopenAndPurgeAsTheOperator() {
         final SandboxWorkspaceId id = create("operated", ALICE);
 
@@ -271,7 +271,7 @@ class SandboxAdministrationTest {
     }
 
     @Test
-    @DisplayName("§6.6: the janitor's own transitions carry no actor")
+    @DisplayName("the janitor's own transitions carry no actor")
     void theJanitorRecordsNoActor() throws Exception {
         bash(harness.mainTurn(SessionId.generate(), ALICE), "true");
         harness.clock.advance(java.time.Duration.ofHours(3));
@@ -383,7 +383,7 @@ class SandboxAdministrationTest {
     }
 
     @Test
-    @DisplayName("PR #27 review: without any owner source the operator still deletes a request attribute's record")
+    @DisplayName("without any owner source the operator still deletes a request attribute's record")
     void theOperatorDeletesABookkeepingRecordWithoutAnOwnerSource() {
         final SessionId session = SessionId.generate();
         final WorkspaceOwner caller = WorkspaceOwner.of(TenantId.of("t1"), ALICE);

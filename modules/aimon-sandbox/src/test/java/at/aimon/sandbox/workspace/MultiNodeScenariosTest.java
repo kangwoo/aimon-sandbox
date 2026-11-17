@@ -53,7 +53,7 @@ class MultiNodeScenariosTest {
     }
 
     @Test
-    @DisplayName("§16: two nodes connect the same slot at once — the record holds one sandbox")
+    @DisplayName("two nodes connect the same slot at once — the record holds one sandbox")
     void twoNodesConnectingOneSlotShareOneSandbox() throws Exception {
         final SessionId session = SessionId.generate();
 
@@ -67,7 +67,7 @@ class MultiNodeScenariosTest {
     }
 
     @Test
-    @DisplayName("§16: a node dies during the seed; another node's next call cleans up and completes it")
+    @DisplayName("a node dies during the seed; another node's next call cleans up and completes it")
     void aSeedInterruptedByACrashIsCompletedByTheNextNode() throws Exception {
         final SessionId session = SessionId.generate();
         // The first exec of a new sandbox is its seed.
@@ -87,7 +87,7 @@ class MultiNodeScenariosTest {
     }
 
     @Test
-    @DisplayName("§16: two nodes seed one slot at once — the seed lock runs them in turn and both succeed")
+    @DisplayName("two nodes seed one slot at once — the seed lock runs them in turn and both succeed")
     void twoNodesSeedingOneSlotBothSucceed() throws Exception {
         final SessionId session = SessionId.generate();
         nodeA.faults.injectOnce(Operation.RUN, Fault.crash());
@@ -139,7 +139,7 @@ class MultiNodeScenariosTest {
             .build();
 
     @Test
-    @DisplayName("unannounced-reset §6.5: node A's hook-only turn resets; node B's next turn tells it once")
+    @DisplayName("node A's hook-only turn resets; node B's next turn tells it once")
     void aResetKeptOnOneNodeIsToldOnAnother() throws Exception {
         try (Shared nodes = new Shared()) {
             final SessionId session = SessionId.generate();
@@ -159,7 +159,7 @@ class MultiNodeScenariosTest {
     }
 
     @Test
-    @DisplayName("unannounced-reset §6.5: node A's late acknowledgement leaves the newer reset node B kept since")
+    @DisplayName("node A's late acknowledgement leaves the newer reset node B kept since")
     void aLateAcknowledgementLeavesANewerReset() throws Exception {
         try (Shared nodes = new Shared()) {
             final SessionId session = SessionId.generate();

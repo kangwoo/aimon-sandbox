@@ -67,7 +67,7 @@ class SandboxEnvironmentProviderTest {
     }
 
     @Test
-    @DisplayName("§16: session-less routine → fork → grandchild fork share one workspace and slot")
+    @DisplayName("session-less routine → fork → grandchild fork share one workspace and slot")
     void routineForkChainStaysInOneWorkspaceAndSlot() throws Exception {
         final ExecutionEnvironment routine = harness.routine(ExecutionId.generate(), ALICE);
         final ExecutionEnvironment fork = harness.fork(routine, ALICE);
@@ -87,7 +87,7 @@ class SandboxEnvironmentProviderTest {
     }
 
     @Test
-    @DisplayName("§16: fork → grandchild of an unavailable parent are unavailable with the parent's cause")
+    @DisplayName("fork → grandchild of an unavailable parent are unavailable with the parent's cause")
     void forksOfUnavailableParentCarryParentCause() {
         final ExecutionEnvironment parent = harness
                 .resolve(EnvironmentRequest.builder().agentRuntimeId(SandboxHarness.RUNTIME).principal(ALICE).build());
@@ -102,7 +102,7 @@ class SandboxEnvironmentProviderTest {
     }
 
     @Test
-    @DisplayName("§16: a parent-less fork (workflow runner step) is unavailable and creates no workspace")
+    @DisplayName("a parent-less fork (workflow runner step) is unavailable and creates no workspace")
     void parentlessForkIsUnavailableAndCreatesNoWorkspace() {
         final ExecutionEnvironment step = harness.resolve(
                 EnvironmentRequest.builder().agentRuntimeId(SandboxHarness.RUNTIME).executionId(ExecutionId.generate())
@@ -191,7 +191,7 @@ class SandboxEnvironmentProviderTest {
     }
 
     @Test
-    @DisplayName("§16: the environment states its profile's background ceiling — the heartbeat limit by default")
+    @DisplayName("the environment states its profile's background ceiling — the heartbeat limit by default")
     void theBackgroundCeilingIsTheDeclaredProfiles() {
         final ExecutionEnvironment main = harness.mainTurn(SessionId.generate(), ALICE);
         final ExecutionEnvironment configured = harness.resolve(
@@ -208,7 +208,7 @@ class SandboxEnvironmentProviderTest {
     }
 
     @Test
-    @DisplayName("§7: the provider keeps nothing per runtime — a binding closes to nothing and resolve needs none")
+    @DisplayName("the provider keeps nothing per runtime — a binding closes to nothing and resolve needs none")
     void runtimeBindingsHoldNothingAndResolveNeedsNone() throws Exception {
         final SandboxExecutionEnvironmentProvider provider = harness.sandbox.environmentProvider();
         final AgentRuntimeId bound = AgentRuntimeId.fromName("bound");
@@ -312,7 +312,7 @@ class SandboxEnvironmentProviderTest {
     }
 
     @Test
-    @DisplayName("§16: Principal.system() or no principal + require-principal is refused under a custom policy too")
+    @DisplayName("Principal.system() or no principal + require-principal is refused under a custom policy too")
     void requirePrincipalHoldsWhateverCallerACustomPolicyNames() throws Exception {
         final at.aimon.sandbox.workspace.WorkspaceOwner owner = at.aimon.sandbox.workspace.WorkspaceOwner
                 .of(at.aimon.sandbox.workspace.TenantId.of("acme"), ALICE);
@@ -342,7 +342,7 @@ class SandboxEnvironmentProviderTest {
     }
 
     @Test
-    @DisplayName("§8.2: a fork without a principal never inherits its parent's caller — it is checked like a root")
+    @DisplayName("a fork without a principal never inherits its parent's caller — it is checked like a root")
     void aForkWithoutAPrincipalIsCheckedLikeARootAndNeverActsForItsParent() throws Exception {
         final ExecutionEnvironment main = harness.mainTurn(SessionId.generate(), ALICE);
         bash(main, "true");
@@ -362,7 +362,7 @@ class SandboxEnvironmentProviderTest {
     }
 
     @Test
-    @DisplayName("§8.2, §8.3: with require-principal a fork without a principal is refused, as a root would be")
+    @DisplayName("with require-principal a fork without a principal is refused, as a root would be")
     void aForkWithoutAPrincipalIsRefusedUnderRequirePrincipal() throws Exception {
         try (SandboxHarness strict = SandboxHarness.builder().settings(s -> s.requirePrincipal(true))
                 .tenantResolver(principal -> at.aimon.sandbox.workspace.TenantId.DEFAULT)
@@ -379,7 +379,7 @@ class SandboxEnvironmentProviderTest {
     }
 
     @Test
-    @DisplayName("§8.2: without require-principal a principal-less parent's principal-less fork shares its sandbox")
+    @DisplayName("without require-principal a principal-less parent's principal-less fork shares its sandbox")
     void aPrincipalLessDeploymentKeepsItsForksInTheParentsWorkspace() throws Exception {
         final ExecutionEnvironment main = harness.mainTurn(SessionId.generate(), null);
         bash(main, "echo from-main > /workspace/repo/shared.txt");
@@ -418,7 +418,7 @@ class SandboxEnvironmentProviderTest {
     }
 
     @Test
-    @DisplayName("management §5.3: bindRoot's rebuild through toBuilder keeps mustExist")
+    @DisplayName("bindRoot's rebuild through toBuilder keeps mustExist")
     void bindRootKeepsMustExist() {
         try (SandboxHarness custom = attachedTo("wsm:attached")) {
             assertThat(binding(custom.mainTurn(SessionId.generate(), ALICE)).mustExist()).isTrue();
@@ -426,7 +426,7 @@ class SandboxEnvironmentProviderTest {
     }
 
     @Test
-    @DisplayName("management §5.3: a fork of an attached session inherits mustExist")
+    @DisplayName("a fork of an attached session inherits mustExist")
     void forkOfAttachedSessionKeepsMustExist() {
         try (SandboxHarness custom = attachedTo("wsm:attached")) {
             final ExecutionEnvironment parent = custom.mainTurn(SessionId.generate(), ALICE);
@@ -444,7 +444,7 @@ class SandboxEnvironmentProviderTest {
     // ----------------------------------------------------------------------------------------------------------------
 
     @Test
-    @DisplayName("core-033 §6.1: a fork never reads request attributes — it stays in its row-0 parent's workspace")
+    @DisplayName("a fork never reads request attributes — it stays in its row-0 parent's workspace")
     void aForkIgnoresRequestAttributesAndInheritsARowZeroParent() throws Exception {
         final SandboxWorkspaceId a = harness.sandbox.workspaces().create(CreateWorkspace.named("a"), ALICE).id();
         final SandboxWorkspaceId b = harness.sandbox.workspaces().create(CreateWorkspace.named("b"), ALICE).id();
@@ -475,7 +475,7 @@ class SandboxEnvironmentProviderTest {
     }
 
     @Test
-    @DisplayName("core-033 §6.5: a fork's re-creation reaches its own queue now and its parent's at the next connect")
+    @DisplayName("a fork's re-creation reaches its own queue now and its parent's at the next connect")
     void aForksRecreationIsToldToTheParentByGeneration() throws Exception {
         final SessionId session = SessionId.generate();
         final ExecutionEnvironment parent = harness.mainTurn(session, ALICE);
@@ -497,7 +497,7 @@ class SandboxEnvironmentProviderTest {
     }
 
     @Test
-    @DisplayName("S6: the descriptor declares SANDBOXED and the profile's runtimes, for a fork too; unavailable none")
+    @DisplayName("the descriptor declares SANDBOXED and the profile's runtimes, for a fork too; unavailable none")
     void theDescriptorDeclaresIsolationAndRuntimes() {
         try (SandboxHarness python = SandboxHarness.builder()
                 .profile(SandboxTestProfiles.local("py").runtimes(Set.of("python3")).build()).build()) {

@@ -89,7 +89,7 @@ class CoreToolsSandboxIT {
     }
 
     @Test
-    @DisplayName("§16: a background Bash in a sandbox says how to stop it and when it ends; KillShell stops it")
+    @DisplayName("a background Bash in a sandbox says how to stop it and when it ends; KillShell stops it")
     void killShellStopsASandboxBackgroundCommand() throws Exception {
         final SessionId session = SessionId.generate();
         final ExecutionEnvironment env = harness.mainTurn(session, ALICE);

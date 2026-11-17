@@ -6,9 +6,9 @@
 
 ## 현재 상태
 
-**3단계(도메인과 로컬 경로)의 코드가 있다 — 그러나 아직 운영에 쓸 수 없다.** 운영용 프로바이더
-(`aimon-sandbox-opensandbox`)는 4단계에서 들어오고, 두 단계는 한 릴리스로 낸다. 지금 이 모듈과 함께 돌 수 있는
-프로바이더는 테스트 전용인 `aimon-sandbox-testkit` 의 `LocalProcessSandboxProvider` 뿐이다.
+**0.1.0 부터 릴리스되었다.** 운영에는 `aimon-sandbox-opensandbox` 의 `OpenSandboxProvider` 와 함께 쓴다(OpenSandbox
+1.2.0 필요). `aimon-sandbox-testkit` 의 `LocalProcessSandboxProvider` 는 격리가 없는 테스트 전용 프로바이더다. 저장소는
+기본이 메모리 구현이라 한 노드 전용이다.
 
 들어 있는 것:
 

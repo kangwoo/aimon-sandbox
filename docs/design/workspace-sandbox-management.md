@@ -20,7 +20,7 @@
 ```java
 WorkspaceSandbox sandbox = WorkspaceSandbox.builder()
         .settings(settings).provider(provider)          // 프로바이더는 빌린다. ownProvider(true) 면 close() 가 함께 닫는다
-        .tenantResolver(...)                             // require-principal 이면 필수
+        .tenantResolver(...)                             // requirePrincipal 이면 필수
         .sessionRecords(() -> stack.sessionRecordStore()) // 코어가 기록한 세션 소유자. 필요하면 .sessionOwnerLookup(...) 도
         .build();                                        // 기동 검사 위반을 모두 모아 SandboxConfigurationException
 sandbox.janitor().start();
@@ -30,7 +30,7 @@ sandbox.janitor().start();
 |---|---|---|
 | `settings` · `provider` | 필수 | 배포 설정([설정 §2](workspace-sandbox-configuration.md))과 프로바이더. 프로바이더는 빌린 것으로 보고 닫지 않는다. `ownProvider(true)` 면 `close()` 와 실패한 `build()` 가 닫는다 |
 | `store` · `sessionOptionsStore` | 메모리 저장소 | 둘 다 한 노드 전용이다([도메인 §4.4](workspace-sandbox-domain.md)) |
-| `tenantResolver` | 모두 한 테넌트 | `require-principal` 이면 필수 |
+| `tenantResolver` | 모두 한 테넌트 | `requirePrincipal` 이면 필수 |
 | `sessionRecords(...)` · `sessionOwnerLookup(...)` | 없음 | 세션 소유자의 출처. 의미와 우선순위는 [바인딩 §4](workspace-sandbox-binding.md) |
 | `bindingPolicy` | `DefaultSandboxBindingPolicy` | 무엇을 주든 `SessionOptionsBindingPolicy` 가 감싼다([바인딩 §1](workspace-sandbox-binding.md)) |
 | `admission` | `DefaultSandboxAdmission` | [보안 §8](workspace-sandbox-security.md) |
@@ -142,8 +142,8 @@ id 형식은 [도메인 §1](workspace-sandbox-domain.md)에 있다.
 | 필드 | 규칙 |
 |---|---|
 | `name` | 필수. 출력 가능한 문자 1–80자. 유일하지 않아도 된다 |
-| `profile` | 없으면 `default-profile`. 설정에 없는 프로파일이면 `IllegalArgumentException` |
-| `access` | 없으면 배포의 `workspace-access`. `principal` 배포에서 `tenant` 는 `allow-shared-workspaces` 가 필요하다(공유는 opt-in, [바인딩 §6](workspace-sandbox-binding.md)). `principal` 로 좁히는 것은 늘 허용한다 |
+| `profile` | 없으면 `defaultProfile`. 설정에 없는 프로파일이면 `IllegalArgumentException` |
+| `access` | 없으면 배포의 `workspaceAccess`. `principal` 배포에서 `tenant` 는 `allowSharedWorkspaces` 가 필요하다(공유는 opt-in, [바인딩 §6](workspace-sandbox-binding.md)). `principal` 로 좁히는 것은 늘 허용한다 |
 
 사용자가 준 `name` 은 모델이 보는 문자열(notice, 도구 오류)에 넣지 않는다. 모델에게는 id 만 보인다.
 
@@ -153,7 +153,7 @@ id 형식은 [도메인 §1](workspace-sandbox-domain.md)에 있다.
 create(request, owner, actor):
 1. who = 주체 게이트(owner)
 2. profile 이 설정에 있는가, access tenant 가 허용되는가        -- 실패하면 아무것도 쓰지 않는다
-3. who 의 관리형 워크스페이스 수 < max-managed-per-owner        -- 최선 노력(admission 처럼)
+3. who 의 관리형 워크스페이스 수 < maxManagedPerOwner        -- 최선 노력(admission 처럼)
 4. 레코드 생성: wsm:{UUID}, OPEN, origin MANAGED, name · profile · access · quota
    WORKSPACE_CREATED(actor)
 5. provision(id, who)
@@ -163,7 +163,7 @@ create(request, owner, actor):
 5단계는 connect 상태 기계를 명령 없이 돌린다(즉시 프로비저닝, [수명 §2.3](workspace-sandbox-lifecycle.md)). 기다림의 상한은 `provisionTimeout` 이다([설정 §2](workspace-sandbox-configuration.md)).
 5단계가 실패하면 레코드는 남고(슬롯은 FAILED, admission 이 거절했으면 슬롯 없음) `WorkspaceProvisioningException` 이 새 워크스페이스의 id 를 싣고
 던져진다. 호출자는 `provision(id)` 로 다시 시도하거나(기록된 실패의 backoff 를 따른다) `purge` 한다. admission 이 거절한 레코드도 지울 때까지
-`max-managed-per-owner` 에 센다. 개수는 모든 상태를 세고, 저장소의 scan 결과를 필터로 다시 검사한다 — 필터를 무시하는 저장소도 있기 때문이다.
+`maxManagedPerOwner` 에 센다. 개수는 모든 상태를 세고, 저장소의 scan 결과를 필터로 다시 검사한다 — 필터를 무시하는 저장소도 있기 때문이다.
 
 호스트의 HTTP 호출이 `create` 도중에 시간이 끝나도 프로비저닝은 계속된다. `create` 는 언제나 새 id 를 만들므로 같은 호출을 되풀이하면 워크스페이스가
 둘 생긴다. 응답을 잃은 호출자는 `list`(이름, 생성 시각)로 찾는다. 비동기 · 멱등 `create` 는 [수명 §9](workspace-sandbox-lifecycle.md)의 열린 질문이다.
@@ -278,7 +278,7 @@ actor 주체를 받아 이벤트에 기록한다(§7).
 ### 4.2 대신 만들기와 다시 열기
 
 `create` 는 owner 를 주체 게이트에 통과시킨다. 배포가 거부하는 주체가 owner 인 워크스페이스가 생기지 않게 하기 위해서다. admission · 쿼터 ·
-`max-managed-per-owner` 는 owner 에게 적용한다. `GROUP` owner 도 받지만 `principal` 접근에서는 어떤 USER 호출자도 그것과 같지 않으므로 그런 워크스페이스는
+`maxManagedPerOwner` 는 owner 에게 적용한다. `GROUP` owner 도 받지만 `principal` 접근에서는 어떤 USER 호출자도 그것과 같지 않으므로 그런 워크스페이스는
 `access: tenant` 가 필요하다.
 
 `reopen` 은 레코드 owner 를 먼저 지금의 주체 게이트에 통과시키고(거부되면 아무것도 바뀌지 않는다), 다시 연 뒤 owner 로서 프로비저닝한다. 운영자에게는
@@ -308,7 +308,7 @@ actor 주체를 받아 이벤트에 기록한다(§7).
 - 판정은 공개 enum `SandboxVerdict`(`SKIP` · `OK` · `IN_FLIGHT` · `ORPHAN` · `STALE` · `FAILED_LEFTOVER` · `DUPLICATE`)로 보인다. 조정기의 내부 타입을
   드러내지 않는다. 드러내면 뒤에 판정을 더할 때 운영자 API 가 깨지기 때문이다.
 - 유예 전 판정을 보인다. 조정기의 `firstSeen` 은 노드 로컬이라 겉면에서 볼 수 없고, 순수한 판정만 재현할 수 있기 때문이다. 그래서 레코드보다 앞선
-  generation 의 샌드박스는 janitor 가 `orphan-grace` 뒤 고아로 올리더라도 여기서는 `IN_FLIGHT` 로 읽힌다.
+  generation 의 샌드박스는 janitor 가 `orphanGrace` 뒤 고아로 올리더라도 여기서는 `IN_FLIGHT` 로 읽힌다.
 - `pastGrace` 는 janitor 가 유예를 기다리는 것 — `ORPHAN`, `DUPLICATE`, 레코드보다 앞선 `IN_FLIGHT` — 에만 붙고, 프로바이더가 `createdAt` 을 줄 때만
   있다. `STALE` · `FAILED_LEFTOVER` 는 유예 없이 다음 회차에 없어지므로 붙지 않는다.
 - 운영자 목록은 따로 분류를 만들지 않고 조정기의 판정을 그대로 보인다. 따로 분류하면 조정기와 어긋나고, 만들어지는 중인 샌드박스를 낡은 것으로
@@ -476,7 +476,7 @@ void delete(id, path, recursive, caller);
 
 ### 6.6 권한
 
-owner 면은 호출자를 `SandboxWorkspaces` 처럼 풀고(`require-principal` 이 적용된다) **사용** 권한을 검사한다
+owner 면은 호출자를 `SandboxWorkspaces` 처럼 풀고(`requirePrincipal` 이 적용된다) **사용** 권한을 검사한다
 ([바인딩 §5](workspace-sandbox-binding.md)). 파일을 바꾸는 것은 관리가 아니라 사용이다. 그 워크스페이스에서 세션을 돌릴 수 있는 자는 이미 셸로
 모든 파일을 바꿀 수 있기 때문이다. 세션에서 파생된 `ws:{sessionId}` 는 세션 owner 가 소유하므로 같은 규칙이 "내 세션의 샌드박스 보기" 를 덮는다.
 없는 워크스페이스와 쓸 수 없는 워크스페이스는 같게 `NOT_FOUND` 로 답한다([바인딩 §8](workspace-sandbox-binding.md)).
@@ -571,9 +571,9 @@ janitor 의 지운 세션 스윕과 purge 된 attachment 스윕은 이벤트를 
 | 경우 | 결과 |
 |---|---|
 | `create` 의 이름이 틀림 · 프로파일이 설정에 없음 | `IllegalArgumentException`. 아무것도 쓰지 않는다 |
-| `principal` 배포에서 `allow-shared-workspaces` 없이 `access: tenant` 로 `create` | `SandboxConfigurationException`. 아무것도 쓰지 않는다 |
+| `principal` 배포에서 `allowSharedWorkspaces` 없이 `access: tenant` 로 `create` | `SandboxConfigurationException`. 아무것도 쓰지 않는다 |
 | 주체 게이트가 owner 를 거부 | `BindingRejectedException`. 아무것도 쓰지 않는다 |
-| `max-managed-per-owner` 초과 | `SandboxUnavailableException`(상한을 밝힘). 아무것도 쓰지 않는다 |
+| `maxManagedPerOwner` 초과 | `SandboxUnavailableException`(상한을 밝힘). 아무것도 쓰지 않는다 |
 | admission · 쿼터가 첫 프로비저닝을 거부 | `WorkspaceProvisioningException(id)`. 레코드는 남고 슬롯은 없다 |
 | 프로비저닝 실패 | `WorkspaceProvisioningException(id)`. 슬롯은 FAILED 와 기록된 실패. `provision(id)` 가 다시 시도한다 |
 | 호스트의 HTTP 호출이 `create` 도중 시간 초과 | 프로비저닝은 계속된다. 호출자는 `list` 로 찾는다 |

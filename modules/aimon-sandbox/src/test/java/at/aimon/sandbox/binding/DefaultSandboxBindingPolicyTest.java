@@ -108,7 +108,7 @@ class DefaultSandboxBindingPolicyTest {
     }
 
     @Test
-    @DisplayName("§16: Principal.system() with require-principal is rejected")
+    @DisplayName("Principal.system() with require-principal is rejected")
     void systemPrincipalIsRejectedWhenPrincipalRequired() {
         final DefaultSandboxBindingPolicy policy = policy(SandboxSettings.builder().requirePrincipal(true),
                 session -> Optional.of(Principal.user("owner")));

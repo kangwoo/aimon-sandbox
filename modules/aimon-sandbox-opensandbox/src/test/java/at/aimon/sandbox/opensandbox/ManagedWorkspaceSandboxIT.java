@@ -125,7 +125,7 @@ class ManagedWorkspaceSandboxIT {
     }
 
     @Test
-    @DisplayName("§9.2: create provisions a real sandbox before returning, and the owner's listing shows it")
+    @DisplayName("create provisions a real sandbox before returning, and the owner's listing shows it")
     void createProvisionsARealSandboxAndListsIt() {
         final WorkspaceView created = workspaces().create(CreateWorkspace.named("it workspace"), ALICE);
 
@@ -138,7 +138,7 @@ class ManagedWorkspaceSandboxIT {
     }
 
     @Test
-    @DisplayName("§9.2: two sessions of one owner attached — shared files, separate cwd")
+    @DisplayName("two sessions of one owner attached — shared files, separate cwd")
     void twoAttachedSessionsShareFilesNotTheirCwd() throws Exception {
         final SandboxWorkspaceId id = workspaces().create(CreateWorkspace.named("pair"), ALICE).id();
         final SessionId first = attached(id);
@@ -153,7 +153,7 @@ class ManagedWorkspaceSandboxIT {
     }
 
     @Test
-    @DisplayName("§6.5, documented behaviour: in a shared workspace one session can read another's shell state")
+    @DisplayName("documented behaviour: in a shared workspace one session can read another's shell state")
     void aSessionCanReadAnotherSessionsShellStateInASharedWorkspace() throws Exception {
         final SandboxWorkspaceId id = workspaces().create(CreateWorkspace.named("one trust domain"), ALICE).id();
         final SessionId first = attached(id);
@@ -165,7 +165,7 @@ class ManagedWorkspaceSandboxIT {
     }
 
     @Test
-    @DisplayName("§9.2: close → 'workspace closed' for attached sessions; purge → 'does not exist'")
+    @DisplayName("close → 'workspace closed' for attached sessions; purge → 'does not exist'")
     void closeThenPurge() throws Exception {
         final SandboxWorkspaceId id = workspaces().create(CreateWorkspace.named("ending"), ALICE).id();
         final SessionId session = attached(id);
@@ -189,7 +189,7 @@ class ManagedWorkspaceSandboxIT {
     }
 
     @Test
-    @DisplayName("§9.2: the administration lists the created sandbox with verdict OK, and nothing raw")
+    @DisplayName("the administration lists the created sandbox with verdict OK, and nothing raw")
     void theAdministrationListsTheSandboxAsOk() {
         final WorkspaceView created = workspaces().create(CreateWorkspace.named("listed"), ALICE);
         final ProviderSandboxRef ref = assembly.store().find(created.id()).orElseThrow().slot("primary").orElseThrow()
@@ -207,7 +207,7 @@ class ManagedWorkspaceSandboxIT {
     }
 
     @Test
-    @DisplayName("§9.2: an admin terminate ends the real sandbox; the next command re-provisions a new generation")
+    @DisplayName("an admin terminate ends the real sandbox; the next command re-provisions a new generation")
     void anAdminTerminateIsFollowedByANewGeneration() throws Exception {
         final SandboxWorkspaceId id = workspaces().create(CreateWorkspace.named("terminated"), ALICE).id();
         final SessionId session = attached(id);
@@ -226,7 +226,7 @@ class ManagedWorkspaceSandboxIT {
     }
 
     @Test
-    @DisplayName("core-033 #252: a turn placed by request attribute runs in the named workspace, announced once")
+    @DisplayName("a turn placed by request attribute runs in the named workspace, announced once")
     void aRequestAttributePlacesATurn() throws Exception {
         final SandboxWorkspaceId id = workspaces().create(CreateWorkspace.named("placed"), ALICE).id();
         final SessionId session = SessionId.generate();
@@ -242,7 +242,7 @@ class ManagedWorkspaceSandboxIT {
     }
 
     @Test
-    @DisplayName("core-033 #253: the lifecycle listener closes a deleted session's ws:{sid} on the server")
+    @DisplayName("the lifecycle listener closes a deleted session's ws:{sid} on the server")
     void theLifecycleListenerClosesADeletedSessionsWorkspace() throws Exception {
         final SessionId session = SessionId.generate();
         bash(mainTurn(session), "true");
@@ -262,7 +262,7 @@ class ManagedWorkspaceSandboxIT {
     }
 
     @Test
-    @DisplayName("#31: an isolated command (a hooks.json guard) sees none of the session's cd/export and saves none")
+    @DisplayName("an isolated command (a hooks.json guard) sees none of the session's cd/export and saves none")
     void anIsolatedCommandStartsAsANewShellInARealSandbox() throws Exception {
         final ExecutionEnvironment turn = mainTurn(SessionId.generate());
         bash(turn, "mkdir -p /workspace/repo/src && cd /workspace/repo/src && export SEEN=yes BASH_ENV=/tmp/evil");
@@ -278,7 +278,7 @@ class ManagedWorkspaceSandboxIT {
     }
 
     @Test
-    @DisplayName("#28: a hook-only turn resets the real sandbox after an idle close; the next turn hears it once")
+    @DisplayName("a hook-only turn resets the real sandbox after an idle close; the next turn hears it once")
     void aHookOnlyTurnsResetIsToldOnTheNextTurn() throws Exception {
         final SessionId session = SessionId.generate();
         final SandboxWorkspaceId derived = SandboxWorkspaceId.of("ws:" + session.value());

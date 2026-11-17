@@ -157,7 +157,7 @@ class OpenSandboxWorkspaceIT {
     }
 
     @Test
-    @DisplayName("§16: a ws:{uuid} workspace provisions on the real server; Write then Bash sees the file")
+    @DisplayName("a ws:{uuid} workspace provisions on the real server; Write then Bash sees the file")
     void writeThenBashOnARealSandbox() throws Exception {
         final WorkspaceSandbox assembly = assembly(profile().build(), new InMemorySandboxWorkspaceStore());
         final SessionId session = SessionId.generate();
@@ -175,7 +175,7 @@ class OpenSandboxWorkspaceIT {
     }
 
     @Test
-    @DisplayName("§16: cd/export persist across calls, and a timeout kill keeps the state from before")
+    @DisplayName("cd/export persist across calls, and a timeout kill keeps the state from before")
     void shellStatePersistsAndATimeoutKillKeepsIt() throws Exception {
         final WorkspaceSandbox assembly = assembly(profile().build(), new InMemorySandboxWorkspaceStore());
         final ExecutionEnvironment env = mainTurn(assembly, SessionId.generate());
@@ -189,7 +189,7 @@ class OpenSandboxWorkspaceIT {
     }
 
     @Test
-    @DisplayName("§16: cancelling a running background command ends it in the real sandbox (DELETE /command)")
+    @DisplayName("cancelling a running background command ends it in the real sandbox (DELETE /command)")
     void cancellingABackgroundCommandEndsItInTheSandbox() throws Exception {
         final WorkspaceSandbox assembly = assembly(profile().build(), new InMemorySandboxWorkspaceStore());
         final ExecutionEnvironment env = mainTurn(assembly, SessionId.generate());
@@ -224,7 +224,7 @@ class OpenSandboxWorkspaceIT {
     }
 
     @Test
-    @DisplayName("§10.4: a node restarted with an empty InMemory store reclaims its old sandbox after orphan-grace")
+    @DisplayName("a node restarted with an empty InMemory store reclaims its old sandbox after orphan-grace")
     void reconciliationReclaimsTheOrphanOfARestartedNode() throws Exception {
         final WorkspaceSandbox before = assembly(profile().build(), new InMemorySandboxWorkspaceStore());
         final SessionId session = SessionId.generate();
@@ -263,7 +263,7 @@ class OpenSandboxWorkspaceIT {
      * saying so, once everything else has passed (see {@link #lacksOomKillCount}); on v2 a missing count fails.
      */
     @Test
-    @DisplayName("§12.2: an out-of-memory command dies inside its sandbox; the sandbox and its neighbours answer")
+    @DisplayName("an out-of-memory command dies inside its sandbox; the sandbox and its neighbours answer")
     void resourceLimitsHoldInsideTheSandbox() throws Exception {
         final WorkspaceSandbox assembly = assembly(
                 profile().resources(ResourceSpec.of("1", "256Mi", null, null)).build(),
@@ -291,8 +291,8 @@ class OpenSandboxWorkspaceIT {
             swap = "kept: a server started elsewhere";
         } else if (lacksSwapAccounting(before)) {
             swap = "not accounted: this host's kernel limits no cgroup's swap, so Docker's memory-swap has no effect";
-            System.out.printf("[§12.2] swap was not taken away: %s; only the %s margin is left. Memory before:%n%s",
-                    swap, OOM_COMMAND, before);
+            System.out.printf("swap was not taken away: %s; only the %s margin is left. Memory before:%n%s", swap,
+                    OOM_COMMAND, before);
         } else {
             assertThat(swapAllowance(before))
                     .as("the swap the cgroup allows once it was taken away, before:%n%s", before).isZero();
@@ -329,8 +329,7 @@ class OpenSandboxWorkspaceIT {
             throw e.getCause() instanceof Exception cause ? cause : e;
         }
         final String after = memory(env);
-        System.out.printf(
-                "[§12.2] the out-of-memory command ended in %d ms (swap %s); memory before:%n%s" + "after:%n%s",
+        System.out.printf("the out-of-memory command ended in %d ms (swap %s); memory before:%n%s" + "after:%n%s",
                 TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started), swap, before, after);
 
         assertThat(pids.stdout().strip()).as("the server's pids_limit").isEqualTo("4096");
@@ -458,7 +457,7 @@ class OpenSandboxWorkspaceIT {
     }
 
     @Test
-    @DisplayName("§6.1: output arrives exact (execd 1.1.1+) — CRs kept, no final newline added; invalid UTF-8 replaced")
+    @DisplayName("output arrives exact (execd 1.1.1+) — CRs kept, no final newline added; invalid UTF-8 replaced")
     void outputArrivesExact() throws Exception {
         final WorkspaceSandbox assembly = assembly(profile().build(), new InMemorySandboxWorkspaceStore());
         final SessionId session = SessionId.generate();
@@ -478,7 +477,7 @@ class OpenSandboxWorkspaceIT {
     }
 
     @Test
-    @DisplayName("#33: RUN_DIRECTORY inline, uploaded, tampered; a hook's & job killed at its trailer; timeout")
+    @DisplayName("RUN_DIRECTORY inline, uploaded, tampered; a hook's & job killed at its trailer; timeout")
     void hookAndIsolatedRunsOnARealServer() throws Exception {
         // One sandbox for every row: provisioning it is the expensive part, and its seed checks base64 too. Faults
         // are injected only for the tamper row.
@@ -561,7 +560,7 @@ class OpenSandboxWorkspaceIT {
     }
 
     @Test
-    @DisplayName("S1/S2: stream runs leave no execd spool behind; an output line over the SSE limit kills the run")
+    @DisplayName("stream runs leave no execd spool behind; an output line over the SSE limit kills the run")
     void streamRunsLeaveNoSpoolAndAHugeLineIsRefused() throws Exception {
         final WorkspaceSandbox assembly = assembly(profile().build(), new InMemorySandboxWorkspaceStore());
         final SessionId session = SessionId.generate();
@@ -584,8 +583,8 @@ class OpenSandboxWorkspaceIT {
         // itself, right after the terminal event, so a run that is not transient leaves none either and cannot be the
         // negative control. The control is a file holding the marker where execd spools: finding it shows the check
         // reaches that directory, so finding no run's output there means none was left. What this no longer shows is
-        // that the provider removed them, as execd would have anyway; that the provider asks (S1) is checked in the
-        // default tier (OpenSandboxProviderTest, "S1: …").
+        // that the provider removed them, as execd would have anyway; that the provider asks is checked in the default
+        // tier (OpenSandboxProviderTest; docs/design/workspace-sandbox-opensandbox.md §4.5).
         // ${m}, not $m: the id goes right after it, and "$m<id>" names one unset variable — an empty pattern that
         // every non-empty file matches.
         assertThat(bash(env, "m=SPOOLMARK; grep -rlF -- \"${m}" + id + "\" \"${TMPDIR:-/tmp}\" 2>/dev/null | wc -l")
@@ -604,7 +603,7 @@ class OpenSandboxWorkspaceIT {
                 .hasMessageContaining("line limit");
         assertThat(Duration.ofNanos(System.nanoTime() - started)).isLessThan(Duration.ofSeconds(20));
 
-        // S8: the same line from an isolated run that is not a hook's — the shell engine's call shape — is a result
+        // The same line from an isolated run that is not a hook's — the shell engine's call shape — is a result
         // that says the provider ended it, which core's engine reads as a protocol violation.
         final long isolatedStarted = System.nanoTime();
         final ShellCommandResult ended = env.shell().execute(
@@ -617,7 +616,7 @@ class OpenSandboxWorkspaceIT {
     }
 
     @Test
-    @DisplayName("S4: a secret run file is on no process's command line while its run is going; a plain one is")
+    @DisplayName("a secret run file is on no process's command line while its run is going; a plain one is")
     void aSecretRunFileIsOnNoCommandLine() throws Exception {
         final WorkspaceSandbox assembly = assembly(profile().build(), new InMemorySandboxWorkspaceStore());
         final ExecutionEnvironment env = mainTurn(assembly, SessionId.generate());
@@ -632,7 +631,8 @@ class OpenSandboxWorkspaceIT {
         assertThat(cmdlineHits(env, RunDirectory.builder().variable("AIMON_RUN_DIR").secretFile("key", key).build(),
                 List.of(Base64.getEncoder().encodeToString(key), HexFormat.of().formatHex(key))))
                 .as("hits of the secret").isZero();
-        // Control, a run of its own: under S4 a plain file next to the key would be uploaded with it.
+        // Control, a run of its own: a plain file next to the key would be uploaded with it
+        // (docs/design/workspace-sandbox-shell-engine.md §4).
         assertThat(cmdlineHits(env, RunDirectory.builder().variable("AIMON_RUN_DIR").file("plain", plain).build(),
                 List.of(Base64.getEncoder().encodeToString(plain)))).as("hits of the inlined control").isPositive();
     }

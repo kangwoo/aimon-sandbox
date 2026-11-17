@@ -110,7 +110,7 @@ class SandboxWorkspaceFilesTest {
     // ----------------------------------------------------------------------------------------------------------------
 
     @Test
-    @DisplayName("§6.2: list shows one level, directories first then by name, with paths relative to /workspace")
+    @DisplayName("list shows one level, directories first then by name, with paths relative to /workspace")
     void listsOneLevelDirectoriesFirst() throws IOException {
         hostWrite("/workspace/repo/b.txt", "b");
         hostWrite("/workspace/repo/a.txt", "aa");
@@ -127,7 +127,7 @@ class SandboxWorkspaceFilesTest {
     }
 
     @Test
-    @DisplayName("§6.2: the root lists the sandbox's own .aimon-* entries as read-only")
+    @DisplayName("the root lists the sandbox's own .aimon-* entries as read-only")
     void rootListsReservedEntriesReadOnly() {
         final WorkspaceFileListing root = files().list(ws, "", 100, ALICE);
 
@@ -164,7 +164,7 @@ class SandboxWorkspaceFilesTest {
     }
 
     @Test
-    @DisplayName("§6.2: read takes a range; a preview asks for its cap and compares the size")
+    @DisplayName("read takes a range; a preview asks for its cap and compares the size")
     void readsARange() throws IOException {
         hostWrite("/workspace/repo/text.txt", "0123456789");
 
@@ -183,7 +183,7 @@ class SandboxWorkspaceFilesTest {
     }
 
     @Test
-    @DisplayName("§6.2: search walks the tree; a plain pattern is a case-insensitive substring, a glob is a glob")
+    @DisplayName("search walks the tree; a plain pattern is a case-insensitive substring, a glob is a glob")
     void searchesByName() throws IOException {
         hostWrite("/workspace/repo/src/Main.java", "class Main {}");
         hostWrite("/workspace/repo/src/util/MainHelper.java", "class MainHelper {}");
@@ -205,7 +205,7 @@ class SandboxWorkspaceFilesTest {
     // ----------------------------------------------------------------------------------------------------------------
 
     @Test
-    @DisplayName("§6.3: write creates parents, refuses an existing file without overwrite, and publishes FILES_CHANGED")
+    @DisplayName("write creates parents, refuses an existing file without overwrite, and publishes FILES_CHANGED")
     void writesAndPublishes() throws IOException {
         final WorkspaceFile written = files().write(ws, "repo/in/data.csv", bytes("a,b\n"), 4, false, ALICE);
 
@@ -261,7 +261,7 @@ class SandboxWorkspaceFilesTest {
     }
 
     @Test
-    @DisplayName("§6.3: /workspace itself and the .aimon-* entries can be read, never changed")
+    @DisplayName("/workspace itself and the .aimon-* entries can be read, never changed")
     void reservedEntriesAreReadOnly() throws IOException {
         hostWrite("/workspace/repo/a.txt", "a");
         assertThat(files().list(ws, ".aimon-shell", 10, ALICE).directory().readOnly()).isTrue();
@@ -282,7 +282,7 @@ class SandboxWorkspaceFilesTest {
     }
 
     @Test
-    @DisplayName("§6.3: a path is relative to /workspace and never escapes it")
+    @DisplayName("a path is relative to /workspace and never escapes it")
     void pathsStayUnderWorkspace() {
         assertThatThrownBy(() -> files().stat(ws, "../etc/passwd", ALICE)).isInstanceOf(InvalidPathException.class);
         assertThatThrownBy(() -> files().stat(ws, "repo/../../etc", ALICE)).isInstanceOf(InvalidPathException.class);
@@ -294,7 +294,7 @@ class SandboxWorkspaceFilesTest {
     }
 
     @Test
-    @DisplayName("§6.4: a change counts as activity and pushes the expiry; a read does not")
+    @DisplayName("a change counts as activity and pushes the expiry; a read does not")
     void changesRecordActivityReadsDoNot() {
         final Instant before = harness.store.find(ws).orElseThrow().slot("primary").orElseThrow().lastActivityAt();
         harness.clock.advance(Duration.ofMinutes(5));
@@ -314,7 +314,7 @@ class SandboxWorkspaceFilesTest {
     // ----------------------------------------------------------------------------------------------------------------
 
     @Test
-    @DisplayName("§6.1: a terminated slot is NOT_RUNNING, and looking does not provision it")
+    @DisplayName("a terminated slot is NOT_RUNNING, and looking does not provision it")
     void aTerminatedSlotIsNotRunningAndStaysSo() {
         SandboxAdministration.of(harness.sandbox).terminateSlot(ws, "primary", OPERATOR);
         final int sandboxes = harness.local.sandboxCount();
@@ -328,7 +328,7 @@ class SandboxWorkspaceFilesTest {
     }
 
     @Test
-    @DisplayName("§6.1: a closed workspace is CLOSED and stays closed")
+    @DisplayName("a closed workspace is CLOSED and stays closed")
     void aClosedWorkspaceIsClosedAndStaysSo() {
         harness.sandbox.workspaces().close(ws, ALICE);
 
@@ -337,7 +337,7 @@ class SandboxWorkspaceFilesTest {
     }
 
     @Test
-    @DisplayName("§6.1: a session's workspace is reachable once its first command ran, never created by looking")
+    @DisplayName("a session's workspace is reachable once its first command ran, never created by looking")
     void aSessionWorkspaceIsReachableOnceItRuns() throws Exception {
         final SessionId session = SessionId.generate();
         final SandboxWorkspaceId derived = SandboxWorkspaceId.of("ws:" + session.value());
@@ -351,7 +351,7 @@ class SandboxWorkspaceFilesTest {
     }
 
     @Test
-    @DisplayName("§6.1: a sandbox found gone is marked lost and answers NOT_RUNNING")
+    @DisplayName("a sandbox found gone is marked lost and answers NOT_RUNNING")
     void aLostSandboxIsMarkedLost() {
         harness.faults.injectOnce(Operation.FILES_STAT, Fault.notFound());
 
@@ -374,7 +374,7 @@ class SandboxWorkspaceFilesTest {
     // ----------------------------------------------------------------------------------------------------------------
 
     @Test
-    @DisplayName("§6.5: another principal is answered as for a workspace that does not exist")
+    @DisplayName("another principal is answered as for a workspace that does not exist")
     void anotherPrincipalIsNotFound() {
         assertThat(reasonOf(() -> files().list(ws, "", 10, BOB))).isEqualTo(Reason.NOT_FOUND);
         assertThat(reasonOf(() -> files().list(SandboxWorkspaceId.of("wsm:missing"), "", 10, ALICE)))
@@ -382,7 +382,7 @@ class SandboxWorkspaceFilesTest {
     }
 
     @Test
-    @DisplayName("§6.5: tenant access lets the tenant use the files; changes record who made them")
+    @DisplayName("tenant access lets the tenant use the files; changes record who made them")
     void tenantAccessLetsTheTenantIn() {
         final SandboxWorkspaceId shared = harness.sandbox.workspaces()
                 .create(CreateWorkspace.builder().name("shared").access(SandboxSettings.WorkspaceAccess.TENANT).build(),
@@ -395,7 +395,7 @@ class SandboxWorkspaceFilesTest {
     }
 
     @Test
-    @DisplayName("§6.5: the operator's files check no owner, need an actor and record it")
+    @DisplayName("the operator's files check no owner, need an actor and record it")
     void theOperatorChecksNoOwnerAndIsRecorded() {
         adminFiles().write(ws, "repo/fix.txt", bytes("fix"), 3, false, OPERATOR);
 
@@ -412,7 +412,7 @@ class SandboxWorkspaceFilesTest {
     // ----------------------------------------------------------------------------------------------------------------
 
     @Test
-    @DisplayName("PR #40 review: only top-level .aimon-* is read-only, however the path is spelled")
+    @DisplayName("only top-level .aimon-* is read-only, however the path is spelled")
     void onlyTopLevelReservedEntriesAreReadOnly() {
         assertThatThrownBy(() -> files().write(ws, "repo/../.aimon-shell/x", bytes("x"), 1, true, ALICE))
                 .isInstanceOf(FileAccessDeniedException.class);
@@ -425,7 +425,7 @@ class SandboxWorkspaceFilesTest {
     }
 
     @Test
-    @DisplayName("PR #40 review: a read larger than one chunk streams across chunks, ranges included")
+    @DisplayName("a read larger than one chunk streams across chunks, ranges included")
     void readsAcrossChunks() throws IOException {
         final int size = SandboxWorkspaceFiles.READ_CHUNK * 2 + 123;
         final byte[] content = new byte[size];
@@ -452,7 +452,7 @@ class SandboxWorkspaceFilesTest {
     }
 
     @Test
-    @DisplayName("PR #40 review: a fetch that fails mid-stream is UNREACHABLE, not a raw provider exception")
+    @DisplayName("a fetch that fails mid-stream is UNREACHABLE, not a raw provider exception")
     void aFailedChunkFetchIsMapped() throws IOException {
         hostWrite("/workspace/repo/a.txt", "abc");
         harness.faults.injectOnce(Operation.FILES_READ, Fault.fail(SandboxProviderException.Kind.TRANSIENT));
@@ -469,7 +469,7 @@ class SandboxWorkspaceFilesTest {
     }
 
     @Test
-    @DisplayName("PR #40 review: a write that landed publishes FILES_CHANGED even when the stat after it fails")
+    @DisplayName("a write that landed publishes FILES_CHANGED even when the stat after it fails")
     void aWriteThatLandedIsPublishedEvenIfTheStatAfterFails() throws IOException {
         harness.faults.resetCounts();
         // The first stat is the precondition check; the second is the one after the write.
@@ -482,7 +482,7 @@ class SandboxWorkspaceFilesTest {
     }
 
     @Test
-    @DisplayName("PR #40 review: move creates the destination's missing parents")
+    @DisplayName("move creates the destination's missing parents")
     void moveCreatesMissingParents() throws IOException {
         hostWrite("/workspace/repo/d/inner.txt", "i");
 
@@ -493,7 +493,7 @@ class SandboxWorkspaceFilesTest {
     }
 
     @Test
-    @DisplayName("PR #40 review: bracket characters core strips do not turn a search into an exact glob")
+    @DisplayName("bracket characters core strips do not turn a search into an exact glob")
     void bracketsInAPatternStayASubstring() throws IOException {
         hostWrite("/workspace/repo/report[1].txt", "r");
 
@@ -504,7 +504,7 @@ class SandboxWorkspaceFilesTest {
     }
 
     @Test
-    @DisplayName("PR #40 review: a CLOSING workspace and a slot not yet seeded answer without waiting or provisioning")
+    @DisplayName("a CLOSING workspace and a slot not yet seeded answer without waiting or provisioning")
     void closingAndNotSeeded() {
         final var record = harness.store.find(ws).orElseThrow();
         final var slot = record.slot("primary").orElseThrow();
@@ -521,7 +521,7 @@ class SandboxWorkspaceFilesTest {
     }
 
     @Test
-    @DisplayName("PR #40 review: a change that finds the sandbox gone on the expiry push changes nothing")
+    @DisplayName("a change that finds the sandbox gone on the expiry push changes nothing")
     void aChangeFindingTheSandboxGoneChangesNothing() {
         harness.clock.advance(Duration.ofMinutes(5));
         harness.faults.injectOnce(Operation.EXTEND_EXPIRY, Fault.notFound());

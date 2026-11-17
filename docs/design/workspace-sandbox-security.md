@@ -60,7 +60,7 @@ seed 의 검사는 [수명 §3](workspace-sandbox-lifecycle.md) 이 소유한다
 **격리를 요구한 프로파일은 격리 없는 프로바이더 위에서 돌지 않는다.** 프로파일이 요구하는 capability 를 프로바이더가 광고하지 않으면
 기동 시점에 거부한다. egress 를 막으라는 프로파일이 egress 정책 없는 프로바이더 위에서 열린 채로 돌면 안 되기 때문이다. 요구를
 설정에서 유도하는 규칙은 [프로바이더 §6](workspace-sandbox-provider.md), 기동 검사 목록은 [설정 §3](workspace-sandbox-configuration.md)
-이 소유한다. 격리를 일부러 풀려면 프로파일에 `insecure-allow` 를 적어야 하고 기동 로그에 경고가 남는다.
+이 소유한다. 격리를 일부러 풀려면 프로파일에 `insecureAllow` 를 적어야 하고 기동 로그에 경고가 남는다.
 
 ## 4. egress
 
@@ -172,7 +172,7 @@ execd 도 토큰을 검사하지 않는다([OpenSandbox §3](workspace-sandbox-o
 - 기록하는 실패 이유에서도 서버 메시지가 인용한 id 를 해시로 바꾼다
 
 **Docker 런타임은 로컬 개발 전용이다.** 이 경계를 세울 수 없다 — execd 가 토큰 없이 열려 있어 옆 샌드박스가 root 명령을 실행할 수
-있고, egress 정책은 들어오는 쪽을 막지 않는다. 그래서 Docker 런타임의 프로파일은 `insecure-allow: [NETWORK_ISOLATION,
+있고, egress 정책은 들어오는 쪽을 막지 않는다. 그래서 Docker 런타임의 프로파일은 `insecureAllow: [NETWORK_ISOLATION,
 HARDENED_SECURITY_CONTEXT]` 를 적어야 돈다.
 
 **API 키가 신뢰 경계다.** API 키를 가진 누구든 샌드박스의 라벨(`aimon.at/*`)을 고칠 수 있으므로, 생성 때의 라벨 대조는 인코딩 버그와
@@ -193,7 +193,7 @@ HARDENED_SECURITY_CONTEXT]` 를 적어야 돈다.
   CLOSED 는 슬롯이 없어 프로바이더 자원을 쥐지 않기 때문이다
 - **최선 노력의 상한이다.** 셈이 CAS 로 보호되지 않아 경합 시 조금 넘칠 수 있다. 정확한 상한이 필요한 애플리케이션은 자기 저장소로
   `SandboxAdmission` 을 구현해 어셈블리에 넣는다
-- **끄려면 명시한다.** 전부 허용은 `maxRunningPerTenant` 를 `unlimited` 로 적었을 때만이다. `require-principal` 이 켜진 다중 테넌트
+- **끄려면 명시한다.** 전부 허용은 `maxRunningPerTenant` 를 `unlimited` 로 적었을 때만이다. `requirePrincipal` 이 켜진 다중 테넌트
   배치에서 그렇게 하면 기동 로그에 경고가 남는다. 설정 이름과 기본값은 [설정 §2](workspace-sandbox-configuration.md) 가 소유한다
 
 **워크스페이스 쿼터 (계획 — 구현 단계 5).** `WorkspaceQuota` — `maxSlots`(기본 6) · `maxRunning`(기본 3) · `maxCpu` · `maxMemory`. 레코드를

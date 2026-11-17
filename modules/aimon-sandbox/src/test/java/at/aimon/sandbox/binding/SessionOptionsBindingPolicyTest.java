@@ -101,7 +101,7 @@ class SessionOptionsBindingPolicyTest {
     }
 
     @Test
-    @DisplayName("§6.3 row 1: the session's attachment wins over the agent default")
+    @DisplayName("the session's attachment wins over the agent default")
     void sessionOptionsComeFirst() {
         options(ATTACHED, null, null);
 
@@ -115,7 +115,7 @@ class SessionOptionsBindingPolicyTest {
     }
 
     @Test
-    @DisplayName("§6.3 row 2: the agent default, with session or exec shell, slot and profile kept")
+    @DisplayName("the agent default, with session or exec shell, slot and profile kept")
     void theAgentDefaultIsNext() {
         final Map<String, String> attributes = attributes(SlotChoice.WORKSPACE_ATTRIBUTE, DEFAULT.value(),
                 SlotChoice.PROFILE_ATTRIBUTE, "review");
@@ -135,7 +135,7 @@ class SessionOptionsBindingPolicyTest {
     }
 
     @Test
-    @DisplayName("§6.3 row 3: unattached under per-session goes to the delegate's own binding")
+    @DisplayName("unattached under per-session goes to the delegate's own binding")
     void unattachedPerSessionIsTheDelegatesBinding() {
         final SandboxBinding binding = policy(UnattachedRule.PER_SESSION).bind(turn(Map.of()));
 
@@ -145,7 +145,7 @@ class SessionOptionsBindingPolicyTest {
     }
 
     @Test
-    @DisplayName("§6.3: strictest(floor, agent, session, request) — every layer only tightens the one above it")
+    @DisplayName("strictest(floor, agent, session, request) — every layer only tightens the one above it")
     void theUnattachedRuleOnlyTightens() {
         final UnattachedRule p = UnattachedRule.PER_SESSION;
         final UnattachedRule r = UnattachedRule.REJECT;
@@ -159,7 +159,7 @@ class SessionOptionsBindingPolicyTest {
         assertThat(open.effectiveRule(r, p, null)).as("the session cannot loosen the agent").isEqualTo(r);
         assertThat(closed.effectiveRule(p, null, null)).as("the agent cannot loosen the floor").isEqualTo(r);
         assertThat(closed.effectiveRule(p, p, null)).as("nor the session").isEqualTo(r);
-        assertThat(open.effectiveRule(null, null, r)).as("core-033 §5.1: the request tightens").isEqualTo(r);
+        assertThat(open.effectiveRule(null, null, r)).as("the request tightens").isEqualTo(r);
         assertThat(open.effectiveRule(null, r, p)).as("the request cannot loosen the session").isEqualTo(r);
         assertThat(open.effectiveRule(r, null, p)).as("nor the agent").isEqualTo(r);
         assertThat(closed.effectiveRule(null, null, p)).as("nor the floor").isEqualTo(r);
@@ -180,7 +180,7 @@ class SessionOptionsBindingPolicyTest {
     }
 
     @Test
-    @DisplayName("§6.3: sandbox.workspace must be a wsm: id — a derived or malformed one names the definition")
+    @DisplayName("sandbox.workspace must be a wsm: id — a derived or malformed one names the definition")
     void malformedAndDerivedDefaultsAreRejected() {
         for (String value : List.of("ws:" + session.value(), "wsm:not-a-uuid", "")) {
             assertThatThrownBy(() -> policy(UnattachedRule.PER_SESSION)
@@ -196,7 +196,7 @@ class SessionOptionsBindingPolicyTest {
     }
 
     @Test
-    @DisplayName("§6.3: a failing options store fails the bind — no silent fallback to per-session")
+    @DisplayName("a failing options store fails the bind — no silent fallback to per-session")
     void aFailingOptionsStoreFailsTheBind() {
         final SessionOptionsBindingPolicy failing = new SessionOptionsBindingPolicy(
                 new DefaultSandboxBindingPolicy(CALLERS, PROFILES, null), CALLERS, PROFILES,
@@ -226,7 +226,7 @@ class SessionOptionsBindingPolicyTest {
     }
 
     @Test
-    @DisplayName("§6.4: a switch is carried when the bound workspace differs from the last one, silent for a first rule")
+    @DisplayName("a switch is carried when the bound workspace differs from the last one, silent for a first rule")
     void theSwitchFollowsLastWorkspaceId() {
         final SessionSandboxOptions attached = options(ATTACHED, null, null);
         final SandboxBinding first = policy(UnattachedRule.PER_SESSION).bind(turn(Map.of()));
@@ -264,7 +264,7 @@ class SessionOptionsBindingPolicyTest {
     // ----------------------------------------------------------------------------------------------------------------
 
     @Test
-    @DisplayName("core-033 row 0: a main turn's request attribute wins over the session option and the agent default")
+    @DisplayName("a main turn's request attribute wins over the session option and the agent default")
     void aRequestAttributeComesFirstOnAMainTurn() {
         final SessionSandboxOptions record = options(ATTACHED, null, ATTACHED);
         final Map<String, String> definition = attributes(SlotChoice.WORKSPACE_ATTRIBUTE, DEFAULT.value(),
@@ -289,7 +289,7 @@ class SessionOptionsBindingPolicyTest {
     }
 
     @Test
-    @DisplayName("core-033 row 0: a routine's request attribute binds exec:{id}, reads no options, carries no switch")
+    @DisplayName("a routine's request attribute binds exec:{id}, reads no options, carries no switch")
     void aRequestAttributeOnARoutine() {
         final ExecutionId execution = ExecutionId.generate();
         final SessionOptionsBindingPolicy failingStore = new SessionOptionsBindingPolicy(
@@ -311,7 +311,7 @@ class SessionOptionsBindingPolicyTest {
     }
 
     @Test
-    @DisplayName("core-033 row 0: a redirect of a session without a record is announced, from-absent, for creation")
+    @DisplayName("a redirect of a session without a record is announced, from-absent, for creation")
     void aRequestAttributeOnASessionWithoutARecordIsAnnounced() {
         final SandboxBinding binding = policy(UnattachedRule.PER_SESSION).bind(
                 requested(session, null, Map.of(), attributes(SlotChoice.WORKSPACE_ATTRIBUTE, REQUESTED.value())));
@@ -325,7 +325,7 @@ class SessionOptionsBindingPolicyTest {
     }
 
     @Test
-    @DisplayName("core-033 §6.4: a redirect on a rule-only record is announced, not recorded silently (review 1 n3)")
+    @DisplayName("a redirect on a rule-only record is announced, not recorded silently")
     void aRequestAttributeOnARuleOnlyRecordIsAnnounced() {
         options(null, UnattachedRule.PER_SESSION, null);
 
@@ -335,7 +335,7 @@ class SessionOptionsBindingPolicyTest {
     }
 
     @Test
-    @DisplayName("core-033 §5.1: a request reject refuses an unattached session and routine; per-session never loosens")
+    @DisplayName("a request reject refuses an unattached session and routine; per-session never loosens")
     void theRequestRuleOnlyTightens() {
         final Map<String, String> reject = attributes(SlotChoice.UNATTACHED_ATTRIBUTE, "reject");
         final Map<String, String> perSession = attributes(SlotChoice.UNATTACHED_ATTRIBUTE, "per-session");
@@ -359,7 +359,7 @@ class SessionOptionsBindingPolicyTest {
     }
 
     @Test
-    @DisplayName("core-033 §6.1: malformed, derived, unknown sandbox.* keys and bad rules are refused; others ignored")
+    @DisplayName("malformed, derived, unknown sandbox.* keys and bad rules are refused; others ignored")
     void badRequestAttributesAreRefused() {
         for (String value : List.of("ws:" + session.value(), "wsm:not-a-uuid", "")) {
             assertThatThrownBy(() -> policy(UnattachedRule.PER_SESSION)
@@ -402,7 +402,7 @@ class SessionOptionsBindingPolicyTest {
     // ----------------------------------------------------------------------------------------------------------------
 
     @Test
-    @DisplayName("unannounced-reset §3.2: every session bind carries what the record held; a routine's carries none")
+    @DisplayName("every session bind carries what the record held; a routine's carries none")
     void aSessionBindCarriesItsBookkeeping() {
         final UnannouncedReset reset = UnannouncedReset.of(ATTACHED, "primary", Instant.EPOCH);
         final SessionSandboxOptions record = store
@@ -423,7 +423,7 @@ class SessionOptionsBindingPolicyTest {
     }
 
     @Test
-    @DisplayName("unannounced-reset §3.2: a record holding only an unannounced reset is no move — no switch, silent or not")
+    @DisplayName("a record holding only an unannounced reset is no move — no switch, silent or not")
     void aRecordHoldingOnlyAResetIsNoSwitch() {
         store.put(SessionSandboxOptions.builder().session(session).setBy(WorkspaceOwner.of(TenantId.DEFAULT, ALICE))
                 .unannouncedReset(

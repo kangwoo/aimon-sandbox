@@ -684,7 +684,7 @@ class OpenSandboxProviderTest {
         }
 
         @Test
-        @DisplayName("S1: a transient command's spool is gone when await reports it")
+        @DisplayName("a transient command's spool is gone when await reports it")
         void aTransientCommandsSpoolIsRemovedBeforeAwaitReturns() throws Exception {
             final String id = "0123456789abcdef0123456789abcdef";
             final List<String> paths = spool(id);
@@ -700,7 +700,7 @@ class OpenSandboxProviderTest {
         }
 
         @Test
-        @DisplayName("S1: a command that is not transient leaves execd's spool alone")
+        @DisplayName("a command that is not transient leaves execd's spool alone")
         void aCommandThatIsNotTransientRemovesNothing() throws Exception {
             final List<String> paths = spool("c1");
 
@@ -711,7 +711,7 @@ class OpenSandboxProviderTest {
         }
 
         @Test
-        @DisplayName("S1: a transient command killed past its timeout has its spool removed too")
+        @DisplayName("a transient command killed past its timeout has its spool removed too")
         void aKilledTransientCommandsSpoolIsRemoved() throws Exception {
             final List<String> paths = spool("c9");
             final CountDownLatch hold = new CountDownLatch(1);
@@ -728,7 +728,7 @@ class OpenSandboxProviderTest {
         }
 
         @Test
-        @DisplayName("S1: a transient command whose stream dropped has its spool removed once the status settles it")
+        @DisplayName("a transient command whose stream dropped has its spool removed once the status settles it")
         void aDroppedTransientCommandsSpoolIsRemovedAfterTheStatus() throws Exception {
             final List<String> paths = spool("c2");
             server.commands = body -> Reply.events(List.of(init("c2"), out("partial\n")), null);
@@ -743,7 +743,7 @@ class OpenSandboxProviderTest {
         }
 
         @Test
-        @DisplayName("S1: a transient command given up on (the kill unanswered) has its spool removed afterwards")
+        @DisplayName("a transient command given up on (the kill unanswered) has its spool removed afterwards")
         void aGivenUpTransientCommandsSpoolIsRemoved() throws Exception {
             final List<String> paths = spool("c8");
             final CountDownLatch never = new CountDownLatch(1);
@@ -760,7 +760,7 @@ class OpenSandboxProviderTest {
         }
 
         @Test
-        @DisplayName("S1: a command that ends inside the kill grace reports its own exit even if its removal outlasts it")
+        @DisplayName("a command that ends inside the kill grace reports its own exit even if its removal outlasts it")
         void aKilledCommandWhoseRemovalOutlastsTheGraceReportsItsRealExit() throws Exception {
             final List<String> paths = spool("c9");
             final CountDownLatch hold = new CountDownLatch(1);
@@ -803,7 +803,7 @@ class OpenSandboxProviderTest {
         }
 
         @Test
-        @DisplayName("S1: a failing removal is logged, never the command's failure")
+        @DisplayName("a failing removal is logged, never the command's failure")
         void aFailingSpoolRemovalDoesNotFailTheCommand() throws Exception {
             server.overrides.put("DELETE /v1/sandboxes/",
                     request -> request.path.endsWith("/files") ? Reply.error(500, "RUNTIME_ERROR", "boom") : null);
@@ -817,7 +817,7 @@ class OpenSandboxProviderTest {
         }
 
         @Test
-        @DisplayName("S1: a path execd cannot remove does not spare the others — each is then removed alone")
+        @DisplayName("a path execd cannot remove does not spare the others — each is then removed alone")
         void aSpoolPathThatCannotBeRemovedDoesNotSpareTheOthers() throws Exception {
             final String id = "0123456789abcdef0123456789abcdef";
             final List<String> paths = spool(id);
@@ -840,7 +840,7 @@ class OpenSandboxProviderTest {
         }
 
         @Test
-        @DisplayName("S1: a command that ended in time is not timed out while its spool removal is still going on")
+        @DisplayName("a command that ended in time is not timed out while its spool removal is still going on")
         void aSlowSpoolRemovalDoesNotMakeTheCommandTimeOut() throws Exception {
             final CountDownLatch removing = new CountDownLatch(1);
             server.overrides.put("DELETE /v1/sandboxes/", request -> {
@@ -867,7 +867,7 @@ class OpenSandboxProviderTest {
         }
 
         @Test
-        @DisplayName("S1: a spool removal that outlasts await's wait for it still reports the real exit, not a timeout")
+        @DisplayName("a spool removal that outlasts await's wait for it still reports the real exit, not a timeout")
         void aSpoolRemovalThatOutlastsItsWaitReportsTheRealExit() throws Exception {
             final List<String> paths = spool("c1");
             server.commands = body -> Reply.events(List.of(init("c1"), out("ok"), exit("3", "exit status 3")), null);
@@ -922,7 +922,7 @@ class OpenSandboxProviderTest {
         }
 
         @Test
-        @DisplayName("S1: a removal execd did not act on (timeout, the proxy's 502, a 503) is not retried path by path")
+        @DisplayName("a removal execd did not act on (timeout, the proxy's 502, a 503) is not retried path by path")
         void anUnansweredSpoolRemovalIsNotRetriedPerPath() throws Exception {
             server.commands = body -> Reply.events(List.of(init("c1"), complete()), null);
             try (OpenSandboxProvider impatient = new OpenSandboxProvider(
@@ -964,7 +964,7 @@ class OpenSandboxProviderTest {
         }
 
         @Test
-        @DisplayName("S1: only the first init names the command — a second one does not move the spool paths")
+        @DisplayName("only the first init names the command — a second one does not move the spool paths")
         void aSecondInitIsIgnored() throws Exception {
             final List<String> paths = spool("c1");
             final List<String> other = spool("c2");
@@ -979,7 +979,7 @@ class OpenSandboxProviderTest {
         }
 
         @Test
-        @DisplayName("S1: a command id unfit to name a file builds no spool path")
+        @DisplayName("a command id unfit to name a file builds no spool path")
         void anIdUnfitForAPathRemovesNothing() throws Exception {
             server.commands = body -> Reply.events(List.of(init("../etc/passwd"), out("ok"), complete()), null);
 
@@ -1015,7 +1015,7 @@ class OpenSandboxProviderTest {
         }
 
         @Test
-        @DisplayName("S2: an event line over the limit kills the command; both streams read as cut")
+        @DisplayName("an event line over the limit kills the command; both streams read as cut")
         void anOversizedEventLineKillsTheCommand() throws Exception {
             final CountDownLatch hold = new CountDownLatch(1);
             server.holds.put("c5", hold);
@@ -1038,12 +1038,12 @@ class OpenSandboxProviderTest {
             assertThat(outcome.stdoutTruncated()).isTrue();
             assertThat(outcome.stderrTruncated()).isTrue();
             assertThat(sunk).containsExactly("before\n");
-            assertThat(outcome.killCause()).as("S8").contains(ExecKillCause.LINE_LIMIT_EXCEEDED);
+            assertThat(outcome.killCause()).as("kill cause").contains(ExecKillCause.LINE_LIMIT_EXCEEDED);
             assertThat(outcome.timedOut()).isFalse();
         }
 
         @Test
-        @DisplayName("S8: a command that ends by itself carries no kill cause")
+        @DisplayName("a command that ends by itself carries no kill cause")
         void aNormalCommandHasNoKillCause() throws Exception {
             final ExecOutcome outcome = connection
                     .run(ExecSpec.builder().command("x").timeout(Duration.ofSeconds(10)).build(), OutputSink.DISCARD)
@@ -1053,7 +1053,7 @@ class OpenSandboxProviderTest {
         }
 
         @Test
-        @DisplayName("S8: a line kill whose exit lands past the spec's timeout is the line kill, not a timeout")
+        @DisplayName("a line kill whose exit lands past the spec's timeout is the line kill, not a timeout")
         void aLineKillPastTheTimeoutIsNotATimeout() throws Exception {
             final CountDownLatch hold = new CountDownLatch(1);
             server.holds.put("c7", hold);
@@ -1072,7 +1072,7 @@ class OpenSandboxProviderTest {
         }
 
         @Test
-        @DisplayName("S8: a long line after a timeout's kill was already requested leaves the timeout reported")
+        @DisplayName("a long line after a timeout's kill was already requested leaves the timeout reported")
         void aLongLineAfterTheTimeoutKillIsTheTimeout() throws Exception {
             final CountDownLatch gate = new CountDownLatch(1);
             final CountDownLatch hold = new CountDownLatch(1);

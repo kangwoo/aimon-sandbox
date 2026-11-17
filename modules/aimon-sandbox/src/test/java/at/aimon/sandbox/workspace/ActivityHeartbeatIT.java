@@ -100,7 +100,7 @@ class ActivityHeartbeatIT {
     }
 
     @Test
-    @DisplayName("§16: a command longer than terminateAfter, no tool calls, concurrent record writes — not "
+    @DisplayName("a command longer than terminateAfter, no tool calls, concurrent record writes — not "
             + "terminated, expiry pushed")
     void longCommandIsNotTerminatedAndExpiryIsPushed() throws Exception {
         bash(env, "true");
@@ -152,7 +152,7 @@ class ActivityHeartbeatIT {
     }
 
     @Test
-    @DisplayName("§16: a background command past backgroundHeartbeatLimit stops keeping the slot awake")
+    @DisplayName("a background command past backgroundHeartbeatLimit stops keeping the slot awake")
     void backgroundHeartbeatStopsAtLimitThenIdlePolicyApplies() throws Exception {
         bash(env, "true");
         final Instant started = harness.clock.instant();
@@ -176,7 +176,7 @@ class ActivityHeartbeatIT {
     }
 
     @Test
-    @DisplayName("§16: extendExpiry answers not-found mid-command — the command fails, the slot is lost, the next "
+    @DisplayName("extendExpiry answers not-found mid-command — the command fails, the slot is lost, the next "
             + "call recreates")
     void expiryNotFoundMidCommandMarksLostAndNextCallRecreates() throws Exception {
         bash(env, "true");
@@ -197,7 +197,7 @@ class ActivityHeartbeatIT {
 
         assertThat(next.stdout()).isEqualTo("again\n");
         assertThat(harness.primary(session).generation()).isEqualTo(2);
-        assertThat(env.drainNotices()).as("delivered by core's drain, not on the command (core-033 §6.5)")
+        assertThat(env.drainNotices()).as("delivered by core's drain, not on the command")
                 .anyMatch(notice -> notice.contains("recreated (generation 2)"));
         assertThat(next.notices()).isEmpty();
     }
